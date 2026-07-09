@@ -1,0 +1,23 @@
+# --- Core pipeline (needed for a live run) ---
+kg-gen>=0.1.6            # KGGen extractor (LiteLLM + DSPy under the hood)
+sentence-transformers    # S-BERT embeddings for fuzzy entity/relation matching
+scikit-learn             # ROC-AUC, PR curves
+scipy                    # Wilcoxon signed-rank
+numpy
+pandas
+tenacity                 # retries with backoff
+tqdm
+
+# --- Reporting ---
+matplotlib               # diagnostic plots (histograms, AUC-vs-length). Optional; guarded.
+tabulate                 # pandas DataFrame.to_markdown() for the report tables
+
+# --- Dev / tests ---
+pytest
+PyYAML
+
+# NOTE on Python versions:
+#   Light deps above (numpy/scipy/sklearn/pandas/pyyaml/tenacity/tqdm/pytest) install on
+#   Python 3.10-3.14. The heavy deps (torch via sentence-transformers, and kg-gen) have the
+#   most reliable wheels on Python 3.10-3.12. For a live extraction run, use 3.10-3.12.
+#   The unit test suite runs offline and does NOT require torch or kg-gen.

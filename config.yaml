@@ -1,0 +1,76 @@
+# HalluGraph-KGGen configuration.
+# The LLM model string is the ONLY place the backend model is defined.
+# Fill in `llm.model` with a real LiteLLM-style slug before a live run, e.g.:
+#   openrouter/openai/gpt-4o-mini      (env: OPENROUTER_API_KEY)
+#   openrouter/meta-llama/llama-3.1-8b-instruct
+#   nvidia_nim/meta/llama-3.1-8b-instruct   (env: NVIDIA_API_KEY)
+
+llm:
+  model: "openrouter/PLACEHOLDER"     # <-- fill in later; do NOT hardcode elsewhere
+  api_base: null                      # optional custom base_url (e.g. https://integrate.api.nvidia.com/v1)
+  api_key_env: "OPENROUTER_API_KEY"   # env var to read the API key from
+  temperature: 0.0
+  max_retries: 5
+  retry_backoff_base_s: 2
+  concurrency: 4                      # parallel API calls, respect rate limits
+
+extraction:
+  cluster: true                       # KGGen entity/edge resolution ON
+  context_chunk_chars: 6000           # chunk long contexts; KGGen aggregates chunks (maps to kg-gen chunk_size)
+
+matching:
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  entity_sim_threshold: 0.90          # tau_e
+  relation_sim_threshold: 0.75        # tau_r
+  allow_substring_match: true
+  direction_sensitive_edges: true
+  inverse_edge_match: false           # ablation: also accept match(s,o') AND match(o,s')
+  min_substring_chars: 2              # shorter side must have >= this many chars
+  stopwords:                          # blocked as trivial substring matches ("it", "the", ...)
+    - a
+    - an
+    - the
+    - it
+    - its
+    - is
+    - of
+    - to
+    - in
+    - on
+    - at
+    - and
+    - or
+    - this
+    - that
+    - these
+    - those
+    - he
+    - she
+    - they
+    - we
+    - you
+
+metrics:
+  alpha: null                         # tuned on train split; paper reports alpha ~= 0.7
+  empty_response_graph_policy: "report_both"   # see metrics.py / report; {report_both, exclude, impute}
+  empty_response_impute_h: 0.5
+
+data:
+  dir: "data"                         # holds source_info.jsonl and response.jsonl
+  exclude_implicit_true: false        # RAGTruth strict convention: implicit_true spans COUNT as hallucinations
+  # due_to_null spans always count as hallucinations (corpus standard) -- not configurable on purpose
+
+eval:
+  seed: 42
+  n_bootstrap: 1000
+  alpha_grid: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+  alpha_cv_folds: 5
+  tau_e_sweep: [0.85, 0.90, 0.95]
+  tau_r_sweep: [0.65, 0.75, 0.85]
+  sweep_limit: 300                   # cap #train responses re-scored per (tau_e,tau_r) combo
+  # context-length buckets (chars) for the AUC-vs-length diagnostic (RAGTruth CLB-style)
+  context_length_buckets: [0, 1000, 2000, 4000, 8000, 16000, 1000000]
+  make_plots: true
+
+cache_dir: ".cache/kg"
+output_dir: "results/"

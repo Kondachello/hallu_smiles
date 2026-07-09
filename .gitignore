@@ -1,0 +1,22 @@
+# virtualenv
+.venv/
+venv/
+
+# extraction cache (content-addressed; safe to delete, will re-fill)
+.cache/
+
+# run outputs (keep the results/ dir, ignore generated artifacts)
+results/*
+!results/.gitkeep
+
+# RAGTruth data (download with download_data.py)
+data/*.jsonl
+
+# synthetic smoke fixtures
+tests/fixture_data/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
