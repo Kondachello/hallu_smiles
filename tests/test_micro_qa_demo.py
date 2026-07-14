@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
-from src.extract import Graph
+from src.extract import Graph, KGExtractor
 from src.micro_qa_demo import graph_stats, mermaid_graph, write_obsidian_artifacts
 
 
@@ -63,3 +64,40 @@ def test_obsidian_artifacts_have_links_and_match_stats(tmp_path):
     sample = {"graphs": {name: graph.to_dict() for name, graph in graphs.items()}, "statistics": stats}
     round_trip = json.loads(json.dumps(sample))
     assert round_trip["graphs"]["G_A"]["relations"] == [["Paris", "governs", "France"]]
+
+
+def test_kg_extractor_keeps_kggen_clustering_and_native_chunking(tmp_path):
+    class Backend:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(
+                entities={"source", "target"},
+                relations={("source", "supports", "target")},
+            )
+
+    cfg = SimpleNamespace(
+        llm=SimpleNamespace(
+            model="openrouter/nvidia/nemotron-nano-9b-v2:free",
+            temperature=0.0,
+            max_retries=1,
+            retry_backoff_base_s=0.0,
+        ),
+        extraction=SimpleNamespace(cluster=True, context_chunk_chars=8),
+        cache_dir=str(tmp_path / "cache"),
+    )
+    backend = Backend()
+    extractor = KGExtractor(cfg, backend=backend)
+
+    graph = extractor._call_backend("a context that exceeds eight characters")
+
+    assert graph == Graph({"source", "target"}, {("source", "supports", "target")})
+    assert backend.calls == [
+        {
+            "input_data": "a context that exceeds eight characters",
+            "cluster": True,
+            "chunk_size": 8,
+        }
+    ]
