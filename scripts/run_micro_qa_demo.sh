@@ -12,13 +12,35 @@ if [[ -z "$MODEL" ]]; then
   exit 2
 fi
 if [[ ! -x "$PYTHON" ]]; then
-  echo "Missing $PYTHON. Create the demo environment first."
+  echo "Missing $PYTHON. Create the demo environment first:"
+  echo "  bash scripts/setup_micro_qa_demo.sh"
+  exit 2
+fi
+HOST_ARCH="$(uname -m)"
+VENV_ARCH="$("$PYTHON" -c 'import platform; print(platform.machine())' 2>/dev/null || true)"
+if [[ "$HOST_ARCH" == "arm64" && "$VENV_ARCH" != "arm64" ]]; then
+  cat >&2 <<EOF
+Refusing to run an x86_64/Rosetta .venv on this Apple-Silicon Mac.
+Preserve it if wanted (for example: mv .venv .venv.x86_64-backup), then run:
+  bash scripts/setup_micro_qa_demo.sh
+EOF
+  exit 2
+fi
+if ! "$PYTHON" -c 'from kg_gen import KGGen; assert KGGen' >/dev/null 2>&1; then
+  echo "The full KGGen runtime is missing or cannot import. Run:"
+  echo "  bash scripts/setup_micro_qa_demo.sh"
   exit 2
 fi
 if [[ ! -f "$ROOT/data/source_info.jsonl" || ! -f "$ROOT/data/response.jsonl" ]]; then
   echo "RAGTruth data is missing. Run: $PYTHON download_data.py --data-dir data"
   exit 2
 fi
+
+# Keep DSPy's optional cache writable and local to this project. This avoids a
+# warning when the caller's home cache is unavailable (for example in a
+# sandboxed terminal); KGGen extraction and clustering are unchanged.
+export DSPY_CACHEDIR="${DSPY_CACHEDIR:-$ROOT/.cache/dspy}"
+mkdir -p "$DSPY_CACHEDIR"
 
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
   read -r -s -p "OpenRouter API key (not saved): " OPENROUTER_API_KEY
