@@ -131,6 +131,14 @@ class KGExtractor:
         self.cfg = cfg
         self.model = cfg.llm.model
         self.temperature = cfg.llm.temperature
+        # KGGen 0.4 defaults to 16k output tokens for GPT-5-family models.
+        # Keep that upstream default for the main config unless a caller
+        # explicitly supplies a narrower cap (the micro demo does).
+        self.max_tokens = (
+            cfg.llm.get("max_tokens", None)
+            if hasattr(cfg.llm, "get")
+            else getattr(cfg.llm, "max_tokens", None)
+        )
         self.cluster = cfg.extraction.cluster
         self.chunk_chars = cfg.extraction.context_chunk_chars
         self.max_retries = cfg.llm.max_retries
@@ -147,6 +155,8 @@ class KGExtractor:
             from .config import resolve_api_key
 
             kwargs: dict[str, Any] = {"model": self.model, "temperature": self.temperature}
+            if self.max_tokens is not None:
+                kwargs["max_tokens"] = self.max_tokens
             api_key = resolve_api_key(self.cfg)
             if api_key:
                 kwargs["api_key"] = api_key
@@ -162,9 +172,10 @@ class KGExtractor:
         params = {
             "model": self.model,
             "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
             "cluster": self.cluster,
             "chunk_chars": self.chunk_chars,
-            "v": 1,  # bump to invalidate cache on prompt/logic changes
+            "v": 2,  # max_tokens is now part of the backend contract/cache key
         }
         payload = json.dumps(params, sort_keys=True) + "\x00" + text
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()

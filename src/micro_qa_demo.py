@@ -53,8 +53,11 @@ def graph_stats(graph: Graph) -> dict[str, float | int | None]:
 def select_qa_instance(instances: Iterable[Instance], max_context_chars: int) -> Instance:
     """Choose one compact, non-trivial QA record deterministically.
 
-    The target lengths favour a useful visual graph while staying below the
-    chunking threshold.  Source and response IDs make ties stable across runs.
+    The target lengths favour a compact but non-trivial visual graph. This is
+    still a complete C/Q/A extraction-and-clustering pass, but it avoids a
+    large source whose many entities make a free provider spend minutes in
+    KGGen's repeated cluster validation calls. Source and response IDs make
+    ties stable across runs.
     """
     candidates = [
         inst
@@ -72,8 +75,9 @@ def select_qa_instance(instances: Iterable[Instance], max_context_chars: int) ->
         )
 
     def preference(inst: Instance) -> tuple[int, str, str]:
-        # Avoid a one-sentence toy record, but keep the source compact.
-        score = abs(len(inst.context) - 1600) + abs(len(inst.response) - 600)
+        # A ~0.6k context plus a ~0.25k answer has enough relations to inspect
+        # while keeping the complete cluster stage practical for a free LLM.
+        score = abs(len(inst.context) - 600) + abs(len(inst.response) - 240)
         return score, inst.source_id, inst.response_id
 
     return min(candidates, key=preference)

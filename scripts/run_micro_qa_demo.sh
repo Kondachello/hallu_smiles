@@ -5,12 +5,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="$ROOT/.venv/bin/python"
 MODEL="${1:-}"
+MAX_TOKENS="${KGGEN_DEMO_MAX_TOKENS:-1024}"
 
 if [[ -z "$MODEL" ]]; then
   echo "Usage: $0 <LiteLLM-model-slug>"
   echo "Example: $0 openrouter/nvidia/nemotron-nano-9b-v2:free"
   exit 2
 fi
+if [[ ! "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "KGGEN_DEMO_MAX_TOKENS must be a positive integer (got: $MAX_TOKENS)" >&2
+  exit 2
+fi
+export KGGEN_DEMO_MAX_TOKENS="$MAX_TOKENS"
 if [[ ! -x "$PYTHON" ]]; then
   echo "Missing $PYTHON. Create the demo environment first:"
   echo "  bash scripts/setup_micro_qa_demo.sh"
@@ -64,6 +70,7 @@ trap 'rm -f "$DEMO_CONFIG"' EXIT
 
 "$PYTHON" - "$ROOT/config.yaml" "$DEMO_CONFIG" "$MODEL" <<'PY'
 import sys
+import os
 from pathlib import Path
 
 import yaml
@@ -75,6 +82,7 @@ with source.open(encoding="utf-8") as fh:
     config = yaml.safe_load(fh)
 config["llm"]["model"] = model
 config["llm"]["api_key_env"] = "OPENROUTER_API_KEY"
+config["llm"]["max_tokens"] = int(os.environ.get("KGGEN_DEMO_MAX_TOKENS", "1024"))
 with destination.open("w", encoding="utf-8") as fh:
     yaml.safe_dump(config, fh, allow_unicode=True, sort_keys=False)
 PY
