@@ -3,11 +3,10 @@
 # SentenceTransformers at module import time, so CPU PyTorch is required even
 # though this extraction-only demo does not construct the project's scorer.
 #
-# LiteLLM 1.80.13 is deliberately pinned: it ships an official universal
-# Python wheel for macOS ARM64. Newer releases currently may require an
-# unrelated Rust build on this platform.
+# LiteLLM 1.91.1 ships an official universal Python wheel for macOS ARM64 and
+# avoids the unrelated Rust build introduced in later releases.
 torch==2.13.0
-litellm==1.80.13
+litellm==1.91.1
 kg-gen==0.4.0
 PyYAML==6.0.3
 tenacity==9.1.4

@@ -42,6 +42,15 @@ fi
 export DSPY_CACHEDIR="${DSPY_CACHEDIR:-$ROOT/.cache/dspy}"
 mkdir -p "$DSPY_CACHEDIR"
 
+# A local credential file makes it possible to rerun the demo non-interactively
+# without putting the key in code, config.yaml, shell history, or Git. Parse
+# only the one expected assignment rather than sourcing arbitrary shell code.
+KEY_FILE="$ROOT/.env.micro_qa_demo"
+if [[ -z "${OPENROUTER_API_KEY:-}" && -f "$KEY_FILE" ]]; then
+  OPENROUTER_API_KEY="$(sed -n -E 's/^OPENROUTER_API_KEY=([^[:space:]]+)[[:space:]]*$/\1/p' "$KEY_FILE" | head -n 1)"
+  export OPENROUTER_API_KEY
+fi
+
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
   read -r -s -p "OpenRouter API key (not saved): " OPENROUTER_API_KEY
   echo
