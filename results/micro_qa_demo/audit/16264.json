@@ -1,0 +1,42 @@
+{
+  "response_id": "16264",
+  "source_id": "12202",
+  "task": "QA",
+  "gen_model": "llama-2-13b-chat",
+  "split": "train",
+  "alpha": 0.7,
+  "EG": 0.0,
+  "RP": 0.0,
+  "RP_defined": true,
+  "CFI": 0.0,
+  "H": 1.0,
+  "unscorable": false,
+  "ref_empty": false,
+  "graph_sizes": {
+    "Vc": 2,
+    "Ec": 1,
+    "Vq": 2,
+    "Eq": 1,
+    "Va": 2,
+    "Ea": 1
+  },
+  "ungrounded_entities": [
+    "par la mer",
+    "passage 1"
+  ],
+  "unsupported_relations": [
+    [
+      "par la mer",
+      "is found in",
+      "pass"
+    ]
+  ],
+  "matched_entities": [],
+  "supported_relations": [],
+  "gt_label": 1,
+  "gt_span_types": [
+    "Evident Baseless Info",
+    "Evident Baseless Info"
+  ],
+  "timings_s": {}
+}

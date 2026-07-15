@@ -1,0 +1,181 @@
+{
+  "response_id": "16185",
+  "source_id": "12189",
+  "task": "QA",
+  "gen_model": "llama-2-7b-chat",
+  "split": "train",
+  "alpha": 0.7,
+  "EG": 0.1,
+  "RP": 0.0,
+  "RP_defined": true,
+  "CFI": 0.07,
+  "H": 0.93,
+  "unscorable": false,
+  "ref_empty": false,
+  "graph_sizes": {
+    "Vc": 8,
+    "Ec": 7,
+    "Vq": 4,
+    "Eq": 4,
+    "Va": 20,
+    "Ea": 23
+  },
+  "ungrounded_entities": [
+    "diversity",
+    "experience",
+    "gender",
+    "grassroots efforts",
+    "honesty",
+    "ideology",
+    "integrity",
+    "intellectual ability",
+    "judicial approach",
+    "jurisprudence",
+    "legal knowledge",
+    "legal philosophy",
+    "media outlets",
+    "personal history",
+    "pragmatism",
+    "public opinion",
+    "race",
+    "senators"
+  ],
+  "unsupported_relations": [
+    [
+      "grassroots efforts",
+      "pressure",
+      "senators"
+    ],
+    [
+      "interest groups",
+      "identify",
+      "ideology"
+    ],
+    [
+      "interest groups",
+      "influence",
+      "senators"
+    ],
+    [
+      "interest groups",
+      "lobby",
+      "senators"
+    ],
+    [
+      "interest groups",
+      "organize",
+      "grassroots efforts"
+    ],
+    [
+      "interest groups",
+      "use",
+      "ideology"
+    ],
+    [
+      "interest groups",
+      "use",
+      "media outlets"
+    ],
+    [
+      "media outlets",
+      "shape",
+      "public opinion"
+    ],
+    [
+      "senators",
+      "scrutinize",
+      "experience"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "diversity"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "experience"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "gender"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "honesty"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "ideology"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "integrity"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "intellectual ability"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "judicial approach"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "jurisprudence"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "legal knowledge"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "legal philosophy"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "personal history"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "pragmatism"
+    ],
+    [
+      "supreme court nominees",
+      "possess",
+      "race"
+    ]
+  ],
+  "matched_entities": [
+    [
+      "interest groups",
+      "interest groups",
+      "exact"
+    ],
+    [
+      "supreme court nominees",
+      "supreme court nominees",
+      "exact"
+    ]
+  ],
+  "supported_relations": [],
+  "gt_label": 1,
+  "gt_span_types": [
+    "Evident Baseless Info",
+    "Evident Baseless Info",
+    "Evident Baseless Info",
+    "Evident Baseless Info"
+  ],
+  "timings_s": {}
+}

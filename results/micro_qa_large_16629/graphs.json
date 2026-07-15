@@ -1,0 +1,438 @@
+{
+  "generated_at_utc": "2026-07-14T22:43:09.855743+00:00",
+  "model": "gemini/gemini-3.1-flash-lite",
+  "selected_instance": {
+    "source_id": "12263",
+    "response_id": "16629",
+    "task": "QA",
+    "split": "train",
+    "label": 1
+  },
+  "input_lengths_chars": {
+    "context": 838,
+    "query": 114,
+    "response": 1161
+  },
+  "timings_seconds": {
+    "G_C": 30.4966,
+    "G_Q": 3.3422,
+    "G_A": 15.11
+  },
+  "inputs": {
+    "context": "passage 1:The Battle of Midway (June 4-7, 1942) was an important turning point in World War II. The Japanese sent a majority of their navy towards Midway island, which was being used by … the US as an airfield. It was fought by aircraft launched from aircraft carriers.\n\npassage 2:The Battle of Midway was the turning point in the Pacific War of WW2 in favor of the Allied Forces. The Japanese had lost their first big battle against anyone. They were used … to winning all the time. This battle made them lose face.\n\npassage 3:American Naval and Air forces participated in the Battle of the Coral Sea and the Battle of Midway. In both of the battles, the United States and Australian forces won over Ja … pan (defeated Japan). With these two victories over Japan, the American Navy forces began to turn the tide in the war against Japan.",
+    "query": "how does the battle of midway illustrate the importance of intelligence gathering and espionage in modern warfare?",
+    "response": "Based on the provided passages, the Battle of Midway illustrates the importance of intelligence gathering and espionage in modern warfare in several ways:\n\n1. Intelligence gathering: Passage 1 mentions that the US had been monitoring Japanese naval movements and knew that the Japanese navy was heading towards Midway Island. This intelligence allowed the US to prepare for the attack and deploy its own naval forces effectively.\n2. Codebreaking: Passage 2 mentions that the US had broken Japanese military codes, which provided valuable insight into Japanese plans and strategies. This allowed the US to anticipate Japanese moves and prepare accordingly.\n3. Surprise attack: Passage 3 mentions that the US and Australian forces were able to defeat Japan in the Battles of the Coral Sea and Midway by launching surprise attacks against the Japanese fleet. This highlights the importance of using intelligence gathered through espionage and codebreaking to gain a tactical advantage.\n\nOverall, the Battle of Midway demonstrates the critical role that intelligence gathering and codebreaking played in the outcome of the battle and the broader war in the Pacific."
+  },
+  "graphs": {
+    "G_C": {
+      "entities": [
+        "Allied Forces",
+        "American Naval and Air forces",
+        "American Navy forces",
+        "Australian forces",
+        "Battle of Midway",
+        "Battle of the Coral Sea",
+        "Japan",
+        "Japanese navy",
+        "Midway island",
+        "Pacific War",
+        "United States",
+        "World War II",
+        "aircraft",
+        "aircraft carriers"
+      ],
+      "relations": [
+        [
+          "American Naval and Air forces",
+          "participated in",
+          "Battle of Midway"
+        ],
+        [
+          "American Naval and Air forces",
+          "participated in",
+          "Battle of the Coral Sea"
+        ],
+        [
+          "American Navy forces",
+          "turned the tide in the war against",
+          "Japan"
+        ],
+        [
+          "Australian forces",
+          "won over",
+          "Japan"
+        ],
+        [
+          "Battle of Midway",
+          "is a turning point in",
+          "Pacific War"
+        ],
+        [
+          "Battle of Midway",
+          "is a turning point in",
+          "World War II"
+        ],
+        [
+          "Battle of Midway",
+          "resulted in victory for",
+          "Allied Forces"
+        ],
+        [
+          "Japanese navy",
+          "sent to",
+          "Midway island"
+        ],
+        [
+          "Midway island",
+          "used by",
+          "United States"
+        ],
+        [
+          "United States",
+          "won over",
+          "Japan"
+        ]
+      ]
+    },
+    "G_Q": {
+      "entities": [
+        "Battle of Midway",
+        "espionage",
+        "intelligence gathering",
+        "modern warfare"
+      ],
+      "relations": [
+        [
+          "Battle of Midway",
+          "illustrates the importance of",
+          "espionage"
+        ],
+        [
+          "Battle of Midway",
+          "illustrates the importance of",
+          "intelligence gathering"
+        ],
+        [
+          "espionage",
+          "is important in",
+          "modern warfare"
+        ],
+        [
+          "intelligence gathering",
+          "is important in",
+          "modern warfare"
+        ]
+      ]
+    },
+    "G_A": {
+      "entities": [
+        "Australian forces",
+        "Battle of Midway",
+        "Battles of the Coral Sea",
+        "Japanese military codes",
+        "Japanese navy",
+        "Midway Island",
+        "Pacific",
+        "US"
+      ],
+      "relations": [
+        [
+          "Australian forces",
+          "defeated",
+          "Japanese navy"
+        ],
+        [
+          "Australian forces",
+          "participated in",
+          "Battles of the Coral Sea"
+        ],
+        [
+          "Battle of Midway",
+          "took place in",
+          "Pacific"
+        ],
+        [
+          "Battles of the Coral Sea",
+          "took place in",
+          "Pacific"
+        ],
+        [
+          "Japanese navy",
+          "headed towards",
+          "Midway Island"
+        ],
+        [
+          "US",
+          "broke",
+          "Japanese military codes"
+        ],
+        [
+          "US",
+          "defeated",
+          "Japanese navy"
+        ],
+        [
+          "US",
+          "monitored",
+          "Japanese navy"
+        ],
+        [
+          "US",
+          "participated in",
+          "Battle of Midway"
+        ],
+        [
+          "US",
+          "participated in",
+          "Battles of the Coral Sea"
+        ]
+      ]
+    },
+    "G_ref": {
+      "entities": [
+        "Allied Forces",
+        "American Naval and Air forces",
+        "American Navy forces",
+        "Australian forces",
+        "Battle of Midway",
+        "Battle of the Coral Sea",
+        "Japan",
+        "Japanese navy",
+        "Midway island",
+        "Pacific War",
+        "United States",
+        "World War II",
+        "aircraft",
+        "aircraft carriers",
+        "espionage",
+        "intelligence gathering",
+        "modern warfare"
+      ],
+      "relations": [
+        [
+          "American Naval and Air forces",
+          "participated in",
+          "Battle of Midway"
+        ],
+        [
+          "American Naval and Air forces",
+          "participated in",
+          "Battle of the Coral Sea"
+        ],
+        [
+          "American Navy forces",
+          "turned the tide in the war against",
+          "Japan"
+        ],
+        [
+          "Australian forces",
+          "won over",
+          "Japan"
+        ],
+        [
+          "Battle of Midway",
+          "illustrates the importance of",
+          "espionage"
+        ],
+        [
+          "Battle of Midway",
+          "illustrates the importance of",
+          "intelligence gathering"
+        ],
+        [
+          "Battle of Midway",
+          "is a turning point in",
+          "Pacific War"
+        ],
+        [
+          "Battle of Midway",
+          "is a turning point in",
+          "World War II"
+        ],
+        [
+          "Battle of Midway",
+          "resulted in victory for",
+          "Allied Forces"
+        ],
+        [
+          "Japanese navy",
+          "sent to",
+          "Midway island"
+        ],
+        [
+          "Midway island",
+          "used by",
+          "United States"
+        ],
+        [
+          "United States",
+          "won over",
+          "Japan"
+        ],
+        [
+          "espionage",
+          "is important in",
+          "modern warfare"
+        ],
+        [
+          "intelligence gathering",
+          "is important in",
+          "modern warfare"
+        ]
+      ]
+    }
+  },
+  "statistics": {
+    "G_C": {
+      "nodes": 14,
+      "edges": 10,
+      "self_loops": 0,
+      "average_out_degree": 0.7143,
+      "directed_density": 0.054945
+    },
+    "G_Q": {
+      "nodes": 4,
+      "edges": 4,
+      "self_loops": 0,
+      "average_out_degree": 1.0,
+      "directed_density": 0.333333
+    },
+    "G_A": {
+      "nodes": 8,
+      "edges": 10,
+      "self_loops": 0,
+      "average_out_degree": 1.25,
+      "directed_density": 0.178571
+    },
+    "G_ref": {
+      "nodes": 17,
+      "edges": 14,
+      "self_loops": 0,
+      "average_out_degree": 0.8235,
+      "directed_density": 0.051471
+    }
+  },
+  "usage": {
+    "api_calls": 3,
+    "estimated_cost_usd": 0.004992,
+    "prompt_tokens": 10547,
+    "completion_tokens": 1570
+  },
+  "audit": {
+    "response_id": "16629",
+    "source_id": "12263",
+    "task": "QA",
+    "gen_model": "llama-2-7b-chat",
+    "split": "train",
+    "alpha": 0.7,
+    "EG": 0.75,
+    "RP": 0.0,
+    "RP_defined": true,
+    "CFI": 0.525,
+    "H": 0.475,
+    "unscorable": false,
+    "ref_empty": false,
+    "graph_sizes": {
+      "Vc": 14,
+      "Ec": 10,
+      "Vq": 4,
+      "Eq": 4,
+      "Va": 8,
+      "Ea": 10
+    },
+    "ungrounded_entities": [
+      "japanese military codes",
+      "us"
+    ],
+    "unsupported_relations": [
+      [
+        "australian forces",
+        "defeated",
+        "japanese navy"
+      ],
+      [
+        "australian forces",
+        "participated in",
+        "battles of the coral sea"
+      ],
+      [
+        "battle of midway",
+        "took place in",
+        "pacific"
+      ],
+      [
+        "battles of the coral sea",
+        "took place in",
+        "pacific"
+      ],
+      [
+        "japanese navy",
+        "headed towards",
+        "midway island"
+      ],
+      [
+        "us",
+        "broke",
+        "japanese military codes"
+      ],
+      [
+        "us",
+        "defeated",
+        "japanese navy"
+      ],
+      [
+        "us",
+        "monitored",
+        "japanese navy"
+      ],
+      [
+        "us",
+        "participated in",
+        "battle of midway"
+      ],
+      [
+        "us",
+        "participated in",
+        "battles of the coral sea"
+      ]
+    ],
+    "matched_entities": [
+      [
+        "australian forces",
+        "australian forces",
+        "exact"
+      ],
+      [
+        "battle of midway",
+        "battle of midway",
+        "exact"
+      ],
+      [
+        "battles of the coral sea",
+        "battle of the coral sea",
+        "embedding"
+      ],
+      [
+        "japanese navy",
+        "japanese navy",
+        "exact"
+      ],
+      [
+        "midway island",
+        "midway island",
+        "exact"
+      ],
+      [
+        "pacific",
+        "pacific war",
+        "substring"
+      ]
+    ],
+    "supported_relations": [],
+    "gt_label": 1,
+    "gt_span_types": [
+      "Evident Baseless Info"
+    ],
+    "timings_s": {}
+  }
+}
