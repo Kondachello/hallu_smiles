@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the visible one-record KGGen demo without persisting an OpenRouter key.
+# Run the visible one-record KGGen demo with a local provider API key.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -8,10 +8,23 @@ MODEL="${1:-}"
 MAX_TOKENS="${KGGEN_DEMO_MAX_TOKENS:-1024}"
 
 if [[ -z "$MODEL" ]]; then
-  echo "Usage: $0 <LiteLLM-model-slug>"
+  echo "Usage: $0 <LiteLLM-model-slug> [micro-demo options]"
   echo "Example: $0 openrouter/nvidia/nemotron-nano-9b-v2:free"
+  echo "Gemini example: $0 gemini/gemini-3.1-flash-lite --audit"
+  echo "Audit example: $0 openrouter/nvidia/nemotron-nano-9b-v2:free --audit"
   exit 2
 fi
+shift
+
+case "$MODEL" in
+  openrouter/*) API_KEY_ENV="OPENROUTER_API_KEY" ;;
+  gemini/*) API_KEY_ENV="GEMINI_API_KEY" ;;
+  *)
+    echo "Unsupported demo provider in model slug: $MODEL" >&2
+    echo "Use openrouter/... or gemini/..." >&2
+    exit 2
+    ;;
+esac
 if [[ ! "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]]; then
   echo "KGGEN_DEMO_MAX_TOKENS must be a positive integer (got: $MAX_TOKENS)" >&2
   exit 2
@@ -49,18 +62,20 @@ export DSPY_CACHEDIR="${DSPY_CACHEDIR:-$ROOT/.cache/dspy}"
 mkdir -p "$DSPY_CACHEDIR"
 
 # A local credential file makes it possible to rerun the demo non-interactively
-# without putting the key in code, config.yaml, shell history, or Git. Parse
-# only the one expected assignment rather than sourcing arbitrary shell code.
+# without putting keys in code, config.yaml, shell history, or Git. Parse only
+# the provider-specific assignment rather than sourcing arbitrary shell code.
 KEY_FILE="$ROOT/.env.micro_qa_demo"
-if [[ -z "${OPENROUTER_API_KEY:-}" && -f "$KEY_FILE" ]]; then
-  OPENROUTER_API_KEY="$(sed -n -E 's/^OPENROUTER_API_KEY=([^[:space:]]+)[[:space:]]*$/\1/p' "$KEY_FILE" | head -n 1)"
-  export OPENROUTER_API_KEY
+if [[ -z "${!API_KEY_ENV:-}" && -f "$KEY_FILE" ]]; then
+  parsed_key="$(sed -n -E "s/^${API_KEY_ENV}=([^[:space:]]+)[[:space:]]*$/\\1/p" "$KEY_FILE" | head -n 1)"
+  if [[ -n "$parsed_key" ]]; then
+    export "$API_KEY_ENV=$parsed_key"
+  fi
 fi
 
-if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
-  read -r -s -p "OpenRouter API key (not saved): " OPENROUTER_API_KEY
+if [[ -z "${!API_KEY_ENV:-}" ]]; then
+  read -r -s -p "$API_KEY_ENV (not saved): " parsed_key
   echo
-  export OPENROUTER_API_KEY
+  export "$API_KEY_ENV=$parsed_key"
 fi
 
 # ``-t`` delegates the filename template to macOS/BSD ``mktemp`` and avoids
@@ -68,7 +83,7 @@ fi
 DEMO_CONFIG="$(TMPDIR="${TMPDIR:-/tmp}" mktemp -t micro-qa-demo)"
 trap 'rm -f "$DEMO_CONFIG"' EXIT
 
-"$PYTHON" - "$ROOT/config.yaml" "$DEMO_CONFIG" "$MODEL" <<'PY'
+"$PYTHON" - "$ROOT/config.yaml" "$DEMO_CONFIG" "$MODEL" "$API_KEY_ENV" <<'PY'
 import sys
 import os
 from pathlib import Path
@@ -78,10 +93,11 @@ import yaml
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 model = sys.argv[3]
+api_key_env = sys.argv[4]
 with source.open(encoding="utf-8") as fh:
     config = yaml.safe_load(fh)
 config["llm"]["model"] = model
-config["llm"]["api_key_env"] = "OPENROUTER_API_KEY"
+config["llm"]["api_key_env"] = api_key_env
 config["llm"]["max_tokens"] = int(os.environ.get("KGGEN_DEMO_MAX_TOKENS", "1024"))
 with destination.open("w", encoding="utf-8") as fh:
     yaml.safe_dump(config, fh, allow_unicode=True, sort_keys=False)
@@ -90,4 +106,5 @@ PY
 "$PYTHON" "$ROOT/scripts/micro_qa_demo.py" \
   --config "$DEMO_CONFIG" \
   --data-dir "$ROOT/data" \
-  --output-dir "$ROOT/results/micro_qa_demo"
+  --output-dir "$ROOT/results/micro_qa_demo" \
+  "$@"

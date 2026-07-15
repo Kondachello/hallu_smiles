@@ -4,7 +4,14 @@ import json
 from types import SimpleNamespace
 
 from src.extract import Graph, KGExtractor
-from src.micro_qa_demo import graph_stats, mermaid_graph, write_obsidian_artifacts
+from src.matching import DictEmbedder
+from src.micro_qa_demo import (
+    audit_micro_graphs,
+    graph_stats,
+    list_qa_candidates,
+    mermaid_graph,
+    write_obsidian_artifacts,
+)
 
 
 def test_graph_stats_excludes_self_loops_from_density():
@@ -101,3 +108,60 @@ def test_kg_extractor_keeps_kggen_clustering_and_native_chunking(tmp_path):
             "chunk_size": 8,
         }
     ]
+
+
+def test_micro_audit_uses_the_normal_eg_rp_audit_contract():
+    cfg = SimpleNamespace(
+        matching=SimpleNamespace(
+            entity_sim_threshold=0.99,
+            relation_sim_threshold=0.99,
+            allow_substring_match=True,
+            direction_sensitive_edges=True,
+            inverse_edge_match=False,
+            min_substring_chars=2,
+            stopwords=[],
+            embedding_model="unused-in-test",
+        )
+    )
+    instance = SimpleNamespace(
+        response_id="r1", source_id="s1", task="QA", gen_model="model", split="train",
+        y=1, gt_span_types=["Type"],
+    )
+    gc = Graph({"Paris", "France"}, {("Paris", "is capital of", "France")})
+    gq = Graph(set(), set())
+    ga = Graph({"Paris", "Berlin"}, {("Berlin", "is capital of", "France")})
+
+    audit = audit_micro_graphs(
+        cfg,
+        instance,
+        {"G_C": gc, "G_Q": gq, "G_A": ga, "G_ref": gc.union(gq)},
+        alpha=0.7,
+        embedder=DictEmbedder(),
+    )
+
+    assert audit["EG"] == 0.5
+    assert audit["RP"] == 0.0
+    assert audit["H"] == 0.65
+    assert audit["ungrounded_entities"] == ["berlin"]
+    assert audit["unsupported_relations"] == [["berlin", "is capital of", "france"]]
+
+
+def test_candidate_listing_filters_and_balances_all_three_inputs():
+    def instance(rid, c, q, a):
+        return SimpleNamespace(
+            response_id=rid, source_id=f"s{rid}", task="QA", context="c" * c,
+            query="q" * q, response="a" * a,
+        )
+
+    selected = list_qa_candidates(
+        [
+            instance("context-only", 3000, 10, 1000),
+            instance("balanced", 900, 100, 1000),
+            instance("short-answer", 900, 100, 200),
+        ],
+        min_context_chars=700,
+        min_query_chars=50,
+        min_response_chars=500,
+    )
+
+    assert [item.response_id for item in selected] == ["balanced"]

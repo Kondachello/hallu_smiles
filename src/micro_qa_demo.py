@@ -1,8 +1,8 @@
-"""One-record KGGen extraction demo with Obsidian-friendly graph artifacts.
+"""One-record KGGen demo with Obsidian-friendly graph and audit artifacts.
 
-This module deliberately stops after extraction.  It is intended to make the
-``C -> G_C``, ``Q -> G_Q`` and ``A -> G_A`` steps inspectable without pulling
-in the SentenceTransformer scoring stack.
+The default is extraction-only, so ``C -> G_C``, ``Q -> G_Q`` and ``A -> G_A``
+remain quick to inspect.  An explicit audit mode uses the project's normal
+matching and audit modules for one illustrative record.
 """
 from __future__ import annotations
 
@@ -20,6 +20,9 @@ from typing import Any, Iterable
 from .config import load_config
 from .data import Instance, load_instances
 from .extract import Graph, KGExtractor, UsageLogger
+from .audit import build_audit_record, write_audit
+from .matching import Embedder, RefGraph, SBERTEmbedder
+from .metrics import score_response
 
 
 GRAPH_ORDER = ("G_C", "G_Q", "G_A", "G_ref")
@@ -83,6 +86,51 @@ def select_qa_instance(instances: Iterable[Instance], max_context_chars: int) ->
     return min(candidates, key=preference)
 
 
+def list_qa_candidates(
+    instances: Iterable[Instance],
+    min_context_chars: int = 0,
+    min_query_chars: int = 0,
+    min_response_chars: int = 0,
+    limit: int = 20,
+) -> list[Instance]:
+    """Return QA records with substantial C/Q/A text, ranked for manual selection.
+
+    Character length is only a pre-filter: the actual KG vertex count remains a
+    property of the model's extraction and is printed by the live demo.
+    """
+    minimums = (min_context_chars, min_query_chars, min_response_chars)
+    if any(value < 0 for value in minimums):
+        raise ValueError("candidate minimum lengths must be non-negative.")
+    if limit < 1:
+        raise ValueError("candidate limit must be at least 1.")
+
+    candidates = [
+        inst
+        for inst in instances
+        if inst.task == "QA"
+        and inst.context.strip()
+        and (inst.query or "").strip()
+        and inst.response.strip()
+        and len(inst.context) >= min_context_chars
+        and len(inst.query or "") >= min_query_chars
+        and len(inst.response) >= min_response_chars
+    ]
+
+    # The QA questions are intrinsically much shorter than passages/answers,
+    # so balance their lengths against reference scales rather than letting C
+    # alone dominate the manually curated shortlist.
+    def richness(inst: Instance) -> tuple[float, int, str, str]:
+        balanced = min(
+            len(inst.context) / 900,
+            len(inst.query or "") / 100,
+            len(inst.response) / 1000,
+        )
+        total = len(inst.context) + len(inst.query or "") + len(inst.response)
+        return (-balanced, -total, inst.source_id, inst.response_id)
+
+    return sorted(candidates, key=richness)[:limit]
+
+
 def _one_line(value: str) -> str:
     return " ".join(str(value).split())
 
@@ -120,6 +168,18 @@ def _table_cell(value: Any) -> str:
 
 def _format_density(value: float | int | None) -> str:
     return "n/a (V < 2)" if value is None else f"{value:.6f}"
+
+
+def _format_metric(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.4f}"
+
+
+def _fenced_text(value: str) -> list[str]:
+    """Render arbitrary input text inside a safe Markdown code fence."""
+    fence = "```"
+    while fence in value:
+        fence += "`"
+    return [f"{fence}text", value, fence]
 
 
 def _entity_stem(entity: str) -> str:
@@ -167,6 +227,7 @@ def write_obsidian_artifacts(
     graphs: dict[str, Graph],
     stats: dict[str, dict[str, float | int | None]],
     metadata: dict[str, Any],
+    inputs: dict[str, str] | None = None,
 ) -> None:
     """Write a Mermaid overview plus entity pages that can be opened as a vault."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -174,10 +235,15 @@ def write_obsidian_artifacts(
 
     selected = metadata["selected_instance"]
     lengths = metadata["input_lengths_chars"]
+    audit = metadata.get("audit")
     lines = [
         "# KGGen micro demo — QA extraction",
         "",
-        "This vault contains extraction only: no embedding matching, scoring, or audit.",
+        (
+            "This vault contains extraction plus a one-record structural audit."
+            if audit
+            else "This vault contains extraction only: no embedding matching, scoring, or audit."
+        ),
         "",
         "## Run metadata",
         "",
@@ -189,13 +255,38 @@ def write_obsidian_artifacts(
         "- Full C/Q/A text and machine-readable graph data: `graphs.json`.",
         "- [[entity_index|Open the entity index]] or open this directory as an Obsidian vault for Graph View.",
         "",
+    ]
+
+    if inputs:
+        lines.extend(["## Input text", ""])
+        for name, label in (
+            ("context", "Retrieved context (C)"),
+            ("query", "User query (Q)"),
+            ("response", "Model response (A)"),
+        ):
+            lines.extend([f"### {label}", "", *_fenced_text(inputs.get(name, "")), ""])
+
+    if audit:
+        lines.extend([
+            "## One-record audit",
+            "",
+            f"- Illustrative α: `{audit['alpha']:.2f}` (not tuned on one record)",
+            f"- EG: `{_format_metric(audit['EG'])}` · RP: `{_format_metric(audit['RP'])}` · "
+            f"CFI: `{_format_metric(audit['CFI'])}` · H: `{_format_metric(audit['H'])}`",
+            f"- Ungrounded entities: {len(audit['ungrounded_entities'])} · "
+            f"Unsupported relations: {len(audit['unsupported_relations'])}",
+            f"- Full audit record: `audit/{audit['response_id']}.json`.",
+            "",
+        ])
+
+    lines.extend([
         "## Graph statistics",
         "",
         "Directed density excludes self-loops and is `E / (V × (V − 1))`.",
         "",
         "| Graph | V | E | Self-loops | Avg. out-degree | Directed density |",
         "|---|---:|---:|---:|---:|---:|",
-    ]
+    ])
     for graph_name in GRAPH_ORDER:
         stat = stats[graph_name]
         avg = stat["average_out_degree"]
@@ -251,12 +342,40 @@ def _extract_one(
     return graph, elapsed
 
 
+def audit_micro_graphs(
+    cfg: Any,
+    instance: Instance,
+    graphs: dict[str, Graph],
+    alpha: float = 0.7,
+    embedder: Embedder | None = None,
+) -> dict[str, Any]:
+    """Score micro graphs with the normal EG/RP and audit implementation.
+
+    A one-record demo cannot tune alpha or derive a decision threshold, so its
+    alpha is intentionally caller-supplied and only affects CFI/H.
+    """
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError(f"audit alpha must be in [0, 1], got {alpha!r}.")
+    if embedder is None:
+        embedder = SBERTEmbedder(cfg.matching.embedding_model)
+    ref_graph = RefGraph(
+        graphs["G_ref"].entities,
+        graphs["G_ref"].relations,
+        cfg.matching,
+        embedder,
+    )
+    result = score_response(graphs["G_A"], ref_graph, graphs["G_C"], graphs["G_Q"])
+    return build_audit_record(instance, result, alpha)
+
+
 def run_micro_demo(
     config_path: str | Path,
     data_dir: str | Path,
     output_dir: str | Path,
     max_context_chars: int = 3000,
     response_id: str | None = None,
+    audit: bool = False,
+    audit_alpha: float = 0.7,
 ) -> dict[str, Any]:
     """Run the one-record extraction demo and return its serializable payload."""
     cfg = load_config(config_path)
@@ -266,9 +385,9 @@ def run_micro_demo(
             "llm.model is still PLACEHOLDER. Pass a demo YAML config with a concrete model."
         )
     key_env = getattr(cfg.llm, "api_key_env", None)
-    if model.startswith("openrouter/") and (not key_env or not os.environ.get(key_env)):
+    if not key_env or not os.environ.get(key_env):
         raise RuntimeError(
-            f"{key_env or 'OPENROUTER_API_KEY'} is not set. Export it only in this terminal session."
+            f"{key_env or 'API key'} is not set. Export it only in this terminal session."
         )
 
     instances = load_instances(data_dir)
@@ -335,9 +454,28 @@ def run_micro_demo(
         "statistics": stats,
         "usage": usage.summary(),
     }
+    if audit:
+        print("[audit] local entity/relation matching — starting", flush=True)
+        audit_record = audit_micro_graphs(cfg, selected, graphs, alpha=audit_alpha)
+        audit_path = write_audit(audit_record, out / "audit")
+        payload["audit"] = audit_record
+        print(
+            f"[audit] EG={_format_metric(audit_record['EG'])} "
+            f"RP={_format_metric(audit_record['RP'])} H={_format_metric(audit_record['H'])}; "
+            f"ungrounded={len(audit_record['ungrounded_entities'])} "
+            f"unsupported={len(audit_record['unsupported_relations'])}; "
+            f"{audit_path.resolve()}",
+            flush=True,
+        )
     (out / "graphs.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    write_obsidian_artifacts(out, graphs, stats, metadata)
+    write_obsidian_artifacts(
+        out,
+        graphs,
+        stats,
+        {**metadata, "audit": payload.get("audit")},
+        inputs=payload["inputs"],
+    )
     print(f"[done] artifacts: {out.resolve()}", flush=True)
     return payload
