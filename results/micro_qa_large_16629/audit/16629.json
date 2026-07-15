@@ -1,0 +1,117 @@
+{
+  "response_id": "16629",
+  "source_id": "12263",
+  "task": "QA",
+  "gen_model": "llama-2-7b-chat",
+  "split": "train",
+  "alpha": 0.7,
+  "EG": 0.75,
+  "RP": 0.0,
+  "RP_defined": true,
+  "CFI": 0.525,
+  "H": 0.475,
+  "unscorable": false,
+  "ref_empty": false,
+  "graph_sizes": {
+    "Vc": 14,
+    "Ec": 10,
+    "Vq": 4,
+    "Eq": 4,
+    "Va": 8,
+    "Ea": 10
+  },
+  "ungrounded_entities": [
+    "japanese military codes",
+    "us"
+  ],
+  "unsupported_relations": [
+    [
+      "australian forces",
+      "defeated",
+      "japanese navy"
+    ],
+    [
+      "australian forces",
+      "participated in",
+      "battles of the coral sea"
+    ],
+    [
+      "battle of midway",
+      "took place in",
+      "pacific"
+    ],
+    [
+      "battles of the coral sea",
+      "took place in",
+      "pacific"
+    ],
+    [
+      "japanese navy",
+      "headed towards",
+      "midway island"
+    ],
+    [
+      "us",
+      "broke",
+      "japanese military codes"
+    ],
+    [
+      "us",
+      "defeated",
+      "japanese navy"
+    ],
+    [
+      "us",
+      "monitored",
+      "japanese navy"
+    ],
+    [
+      "us",
+      "participated in",
+      "battle of midway"
+    ],
+    [
+      "us",
+      "participated in",
+      "battles of the coral sea"
+    ]
+  ],
+  "matched_entities": [
+    [
+      "australian forces",
+      "australian forces",
+      "exact"
+    ],
+    [
+      "battle of midway",
+      "battle of midway",
+      "exact"
+    ],
+    [
+      "battles of the coral sea",
+      "battle of the coral sea",
+      "embedding"
+    ],
+    [
+      "japanese navy",
+      "japanese navy",
+      "exact"
+    ],
+    [
+      "midway island",
+      "midway island",
+      "exact"
+    ],
+    [
+      "pacific",
+      "pacific war",
+      "substring"
+    ]
+  ],
+  "supported_relations": [],
+  "gt_label": 1,
+  "gt_span_types": [
+    "Evident Baseless Info"
+  ],
+  "timings_s": {}
+}

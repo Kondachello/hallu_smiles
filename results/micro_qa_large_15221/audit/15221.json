@@ -1,0 +1,132 @@
+{
+  "response_id": "15221",
+  "source_id": "15457",
+  "task": "QA",
+  "gen_model": "llama-2-70b-chat",
+  "split": "train",
+  "alpha": 0.7,
+  "EG": 0.6364,
+  "RP": 0.0,
+  "RP_defined": true,
+  "CFI": 0.4455,
+  "H": 0.5545,
+  "unscorable": false,
+  "ref_empty": false,
+  "graph_sizes": {
+    "Vc": 11,
+    "Ec": 14,
+    "Vq": 2,
+    "Eq": 2,
+    "Va": 11,
+    "Ea": 12
+  },
+  "ungrounded_entities": [
+    "counterparties",
+    "exchanges",
+    "financial contracts",
+    "margin account"
+  ],
+  "unsupported_relations": [
+    [
+      "futures contracts",
+      "are a type of",
+      "financial contracts"
+    ],
+    [
+      "futures contracts",
+      "are marked-to-market based on",
+      "underlying asset"
+    ],
+    [
+      "futures contracts",
+      "are traded on",
+      "safex"
+    ],
+    [
+      "futures contracts",
+      "are traded on",
+      "exchanges"
+    ],
+    [
+      "futures contracts",
+      "enable parties to buy or sell",
+      "assets"
+    ],
+    [
+      "futures contracts",
+      "require",
+      "margin account"
+    ],
+    [
+      "safex",
+      "is",
+      "safex"
+    ],
+    [
+      "forward contracts",
+      "are a type of",
+      "financial contracts"
+    ],
+    [
+      "forward contracts",
+      "are agreements between",
+      "counterparties"
+    ],
+    [
+      "forward contracts",
+      "are not traded on",
+      "exchanges"
+    ],
+    [
+      "forward contracts",
+      "enable parties to buy or sell",
+      "assets"
+    ],
+    [
+      "forward contracts",
+      "settle at the end of",
+      "forward contracts"
+    ]
+  ],
+  "matched_entities": [
+    [
+      "futures contracts",
+      "futures contracts",
+      "exact"
+    ],
+    [
+      "safex",
+      "safex",
+      "exact"
+    ],
+    [
+      "assets",
+      "asset",
+      "embedding"
+    ],
+    [
+      "buyers",
+      "buyers",
+      "exact"
+    ],
+    [
+      "forward contracts",
+      "forward contracts",
+      "exact"
+    ],
+    [
+      "sellers",
+      "sellers",
+      "exact"
+    ],
+    [
+      "underlying asset",
+      "asset",
+      "substring"
+    ]
+  ],
+  "supported_relations": [],
+  "gt_label": 0,
+  "gt_span_types": [],
+  "timings_s": {}
+}

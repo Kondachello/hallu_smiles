@@ -1,0 +1,6 @@
+{"kind": "context", "cache_key": "44d7942e5ca1db8f0efd0ff97ac1295d94985623a44d3a0cf57a9c19ce787c2c", "seconds": 132.0525, "cached": false, "cum_calls": 1, "cum_cost_usd": 0.0, "cum_prompt_tokens": 2989, "cum_completion_tokens": 4211}
+{"kind": "query", "cache_key": "06deeee7e0be8f607b01022c6f2c2f4587a71a3efb6590dfe5ff75a354a51888", "seconds": 102.6482, "cached": false, "cum_calls": 2, "cum_cost_usd": 0.0, "cum_prompt_tokens": 5823, "cum_completion_tokens": 8816}
+{"kind": "response", "cache_key": "2805ae10f45f7ab98b7face8c05631923cbce0415c2581a0c26465b70f0fd058", "seconds": 68.8807, "cached": false, "cum_calls": 3, "cum_cost_usd": 0.0, "cum_prompt_tokens": 7269, "cum_completion_tokens": 10827}
+{"kind": "context", "cache_key": "44d7942e5ca1db8f0efd0ff97ac1295d94985623a44d3a0cf57a9c19ce787c2c", "seconds": 0.0, "cached": true, "cum_calls": 0, "cum_cost_usd": 0.0, "cum_prompt_tokens": 0, "cum_completion_tokens": 0}
+{"kind": "query", "cache_key": "06deeee7e0be8f607b01022c6f2c2f4587a71a3efb6590dfe5ff75a354a51888", "seconds": 0.0, "cached": true, "cum_calls": 0, "cum_cost_usd": 0.0, "cum_prompt_tokens": 0, "cum_completion_tokens": 0}
+{"kind": "response", "cache_key": "2805ae10f45f7ab98b7face8c05631923cbce0415c2581a0c26465b70f0fd058", "seconds": 0.0, "cached": true, "cum_calls": 0, "cum_cost_usd": 0.0, "cum_prompt_tokens": 0, "cum_completion_tokens": 0}

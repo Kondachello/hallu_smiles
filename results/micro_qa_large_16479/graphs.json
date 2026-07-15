@@ -1,0 +1,539 @@
+{
+  "generated_at_utc": "2026-07-14T22:47:11.558845+00:00",
+  "model": "gemini/gemini-3.1-flash-lite",
+  "selected_instance": {
+    "source_id": "12238",
+    "response_id": "16479",
+    "task": "QA",
+    "split": "train",
+    "label": 1
+  },
+  "input_lengths_chars": {
+    "context": 912,
+    "query": 79,
+    "response": 1748
+  },
+  "timings_seconds": {
+    "G_C": 9.2996,
+    "G_Q": 2.6194,
+    "G_A": 46.4601
+  },
+  "inputs": {
+    "context": "passage 1:Sometimes we fail to hear or heed these voices of freedom because to us the privilege of our freedom is such an old, old story. —Franklin Delano Roosevelt, in his Third Inaugural Address, January 20, 1941. Full text of the speech is available through the EDSITEment resource, Presidential Speeches.\n\npassage 2:In the future days, which we seek to make secure, we look forward to a world founded upon four essential human freedoms. The first is freedom of speech and expression -- everywhere in the world. The second is freedom of every person to worship God in his own way -- everywhere in the world.\n\npassage 3:In the future days, which we seek to make secure, we look forward to a world founded upon four essential human freedoms. The first is freedom of speech and expression -- everywhere in the world. The second is freedom of every person to worship God in his own way -- everywhere in the world.",
+    "query": "how did different groups understand or experience the four freedoms differently",
+    "response": "Based on the provided passages, here are some ways in which different groups may have understood or experienced the four freedoms differently:\n\n1. Freedom of speech and expression:\n\t* Some groups may have interpreted this freedom as only applying to certain types of speech or expression, such as political or religious speech, while excluding other forms of expression, like artistic or personal expression.\n\t* Others may have seen this freedom as limited by cultural or social norms, such as taboos around discussing sensitive topics or censorship in the media.\n2. Freedom of worship:\n\t* Some groups may have viewed this freedom as limited to specific religions or belief systems, while excluding others. For example, a group may have believed that only their particular religion was deserving of this freedom.\n\t* Others may have seen this freedom as conflicting with their own beliefs or values, such as those who believe in the separation of church and state.\n3. Freedom from want:\n\t* Some groups may have understood this freedom as primarily referring to economic security, while others may have seen it as encompassing broader aspects of well-being, such as access to education or healthcare.\n\t* Additionally, some groups may have experienced this freedom as limited by systemic inequalities, such as discrimination or unequal access to resources.\n4. Freedom from fear:\n\t* Some groups may have viewed this freedom as related solely to physical safety, while others may have seen it as encompassing psychological or emotional well-being as well.\n\t* Additionally, some groups may have experienced this freedom as threatened by factors such as political oppression, violence, or social marginalization.\n\nUnable to answer based on given passages."
+  },
+  "graphs": {
+    "G_C": {
+      "entities": [
+        "EDSITEment",
+        "Franklin Delano Roosevelt",
+        "God",
+        "Presidential Speeches",
+        "Third Inaugural Address",
+        "four essential human freedoms",
+        "freedom of expression",
+        "freedom of speech",
+        "freedom of worship"
+      ],
+      "relations": [
+        [
+          "EDSITEment",
+          "provides",
+          "Presidential Speeches"
+        ],
+        [
+          "Franklin Delano Roosevelt",
+          "delivered",
+          "Third Inaugural Address"
+        ],
+        [
+          "Franklin Delano Roosevelt",
+          "spoke about",
+          "four essential human freedoms"
+        ],
+        [
+          "Third Inaugural Address",
+          "is available through",
+          "EDSITEment"
+        ],
+        [
+          "four essential human freedoms",
+          "includes",
+          "freedom of expression"
+        ],
+        [
+          "four essential human freedoms",
+          "includes",
+          "freedom of speech"
+        ],
+        [
+          "four essential human freedoms",
+          "includes",
+          "freedom of worship"
+        ],
+        [
+          "freedom of worship",
+          "allows person to worship",
+          "God"
+        ]
+      ]
+    },
+    "G_Q": {
+      "entities": [
+        "different groups",
+        "four freedoms"
+      ],
+      "relations": [
+        [
+          "different groups",
+          "experience",
+          "four freedoms"
+        ],
+        [
+          "different groups",
+          "understand",
+          "four freedoms"
+        ]
+      ]
+    },
+    "G_A": {
+      "entities": [
+        "artistic expression",
+        "belief systems",
+        "church and state",
+        "cultural norms",
+        "discrimination",
+        "economic security",
+        "education",
+        "emotional well-being",
+        "four freedoms",
+        "freedom from fear",
+        "freedom from want",
+        "freedom of expression",
+        "freedom of speech",
+        "freedom of worship",
+        "healthcare",
+        "media",
+        "personal expression",
+        "physical safety",
+        "political oppression",
+        "political speech",
+        "psychological well-being",
+        "religions",
+        "religious speech",
+        "resources",
+        "social marginalization",
+        "social norms",
+        "systemic inequalities",
+        "violence"
+      ],
+      "relations": [
+        [
+          "freedom from fear",
+          "encompasses",
+          "emotional well-being"
+        ],
+        [
+          "freedom from fear",
+          "encompasses",
+          "psychological well-being"
+        ],
+        [
+          "freedom from fear",
+          "is threatened by",
+          "political oppression"
+        ],
+        [
+          "freedom from fear",
+          "is threatened by",
+          "social marginalization"
+        ],
+        [
+          "freedom from fear",
+          "is threatened by",
+          "violence"
+        ],
+        [
+          "freedom from fear",
+          "relates to",
+          "physical safety"
+        ],
+        [
+          "freedom from want",
+          "encompasses",
+          "education"
+        ],
+        [
+          "freedom from want",
+          "encompasses",
+          "healthcare"
+        ],
+        [
+          "freedom from want",
+          "is limited by",
+          "discrimination"
+        ],
+        [
+          "freedom from want",
+          "is limited by",
+          "resources"
+        ],
+        [
+          "freedom from want",
+          "is limited by",
+          "systemic inequalities"
+        ],
+        [
+          "freedom from want",
+          "refers to",
+          "economic security"
+        ],
+        [
+          "freedom of speech",
+          "excludes",
+          "artistic expression"
+        ],
+        [
+          "freedom of speech",
+          "excludes",
+          "personal expression"
+        ],
+        [
+          "freedom of speech",
+          "includes",
+          "political speech"
+        ],
+        [
+          "freedom of speech",
+          "includes",
+          "religious speech"
+        ],
+        [
+          "freedom of speech",
+          "is limited by",
+          "cultural norms"
+        ],
+        [
+          "freedom of speech",
+          "is limited by",
+          "media"
+        ],
+        [
+          "freedom of speech",
+          "is limited by",
+          "social norms"
+        ],
+        [
+          "freedom of worship",
+          "conflicts with",
+          "church and state"
+        ],
+        [
+          "freedom of worship",
+          "is limited to",
+          "belief systems"
+        ],
+        [
+          "freedom of worship",
+          "is limited to",
+          "religions"
+        ]
+      ]
+    },
+    "G_ref": {
+      "entities": [
+        "EDSITEment",
+        "Franklin Delano Roosevelt",
+        "God",
+        "Presidential Speeches",
+        "Third Inaugural Address",
+        "different groups",
+        "four essential human freedoms",
+        "four freedoms",
+        "freedom of expression",
+        "freedom of speech",
+        "freedom of worship"
+      ],
+      "relations": [
+        [
+          "EDSITEment",
+          "provides",
+          "Presidential Speeches"
+        ],
+        [
+          "Franklin Delano Roosevelt",
+          "delivered",
+          "Third Inaugural Address"
+        ],
+        [
+          "Franklin Delano Roosevelt",
+          "spoke about",
+          "four essential human freedoms"
+        ],
+        [
+          "Third Inaugural Address",
+          "is available through",
+          "EDSITEment"
+        ],
+        [
+          "different groups",
+          "experience",
+          "four freedoms"
+        ],
+        [
+          "different groups",
+          "understand",
+          "four freedoms"
+        ],
+        [
+          "four essential human freedoms",
+          "includes",
+          "freedom of expression"
+        ],
+        [
+          "four essential human freedoms",
+          "includes",
+          "freedom of speech"
+        ],
+        [
+          "four essential human freedoms",
+          "includes",
+          "freedom of worship"
+        ],
+        [
+          "freedom of worship",
+          "allows person to worship",
+          "God"
+        ]
+      ]
+    }
+  },
+  "statistics": {
+    "G_C": {
+      "nodes": 9,
+      "edges": 8,
+      "self_loops": 0,
+      "average_out_degree": 0.8889,
+      "directed_density": 0.111111
+    },
+    "G_Q": {
+      "nodes": 2,
+      "edges": 2,
+      "self_loops": 0,
+      "average_out_degree": 1.0,
+      "directed_density": 1.0
+    },
+    "G_A": {
+      "nodes": 28,
+      "edges": 22,
+      "self_loops": 0,
+      "average_out_degree": 0.7857,
+      "directed_density": 0.029101
+    },
+    "G_ref": {
+      "nodes": 11,
+      "edges": 10,
+      "self_loops": 0,
+      "average_out_degree": 0.9091,
+      "directed_density": 0.090909
+    }
+  },
+  "usage": {
+    "api_calls": 3,
+    "estimated_cost_usd": 0.006035,
+    "prompt_tokens": 13297,
+    "completion_tokens": 1807
+  },
+  "audit": {
+    "response_id": "16479",
+    "source_id": "12238",
+    "task": "QA",
+    "gen_model": "llama-2-7b-chat",
+    "split": "train",
+    "alpha": 0.7,
+    "EG": 0.1429,
+    "RP": 0.0,
+    "RP_defined": true,
+    "CFI": 0.1,
+    "H": 0.9,
+    "unscorable": false,
+    "ref_empty": false,
+    "graph_sizes": {
+      "Vc": 9,
+      "Ec": 8,
+      "Vq": 2,
+      "Eq": 2,
+      "Va": 28,
+      "Ea": 22
+    },
+    "ungrounded_entities": [
+      "artistic expression",
+      "belief systems",
+      "church and state",
+      "cultural norms",
+      "discrimination",
+      "economic security",
+      "education",
+      "emotional well-being",
+      "freedom from fear",
+      "freedom from want",
+      "healthcare",
+      "media",
+      "personal expression",
+      "physical safety",
+      "political oppression",
+      "political speech",
+      "psychological well-being",
+      "religions",
+      "religious speech",
+      "resources",
+      "social marginalization",
+      "social norms",
+      "systemic inequalities",
+      "violence"
+    ],
+    "unsupported_relations": [
+      [
+        "freedom from fear",
+        "encompasses",
+        "emotional well-being"
+      ],
+      [
+        "freedom from fear",
+        "encompasses",
+        "psychological well-being"
+      ],
+      [
+        "freedom from fear",
+        "is threatened by",
+        "political oppression"
+      ],
+      [
+        "freedom from fear",
+        "is threatened by",
+        "social marginalization"
+      ],
+      [
+        "freedom from fear",
+        "is threatened by",
+        "violence"
+      ],
+      [
+        "freedom from fear",
+        "relates to",
+        "physical safety"
+      ],
+      [
+        "freedom from want",
+        "encompasses",
+        "education"
+      ],
+      [
+        "freedom from want",
+        "encompasses",
+        "healthcare"
+      ],
+      [
+        "freedom from want",
+        "is limited by",
+        "discrimination"
+      ],
+      [
+        "freedom from want",
+        "is limited by",
+        "resources"
+      ],
+      [
+        "freedom from want",
+        "is limited by",
+        "systemic inequalities"
+      ],
+      [
+        "freedom from want",
+        "refers to",
+        "economic security"
+      ],
+      [
+        "freedom of speech",
+        "excludes",
+        "artistic expression"
+      ],
+      [
+        "freedom of speech",
+        "excludes",
+        "personal expression"
+      ],
+      [
+        "freedom of speech",
+        "includes",
+        "political speech"
+      ],
+      [
+        "freedom of speech",
+        "includes",
+        "religious speech"
+      ],
+      [
+        "freedom of speech",
+        "is limited by",
+        "cultural norms"
+      ],
+      [
+        "freedom of speech",
+        "is limited by",
+        "media"
+      ],
+      [
+        "freedom of speech",
+        "is limited by",
+        "social norms"
+      ],
+      [
+        "freedom of worship",
+        "conflicts with",
+        "church and state"
+      ],
+      [
+        "freedom of worship",
+        "is limited to",
+        "belief systems"
+      ],
+      [
+        "freedom of worship",
+        "is limited to",
+        "religions"
+      ]
+    ],
+    "matched_entities": [
+      [
+        "four freedoms",
+        "four freedoms",
+        "exact"
+      ],
+      [
+        "freedom of expression",
+        "freedom of expression",
+        "exact"
+      ],
+      [
+        "freedom of speech",
+        "freedom of speech",
+        "exact"
+      ],
+      [
+        "freedom of worship",
+        "freedom of worship",
+        "exact"
+      ]
+    ],
+    "supported_relations": [],
+    "gt_label": 1,
+    "gt_span_types": [
+      "Evident Baseless Info",
+      "Evident Baseless Info",
+      "Evident Baseless Info"
+    ],
+    "timings_s": {}
+  }
+}

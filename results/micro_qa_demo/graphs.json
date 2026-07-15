@@ -1,0 +1,165 @@
+{
+  "generated_at_utc": "2026-07-14T18:24:33.031308+00:00",
+  "model": "openrouter/nvidia/nemotron-nano-9b-v2:free",
+  "selected_instance": {
+    "source_id": "12202",
+    "response_id": "16264",
+    "task": "QA",
+    "split": "train",
+    "label": 1
+  },
+  "input_lengths_chars": {
+    "context": 630,
+    "query": 35,
+    "response": 233
+  },
+  "timings_seconds": {
+    "G_C": 0.0006,
+    "G_Q": 0.0005,
+    "G_A": 0.0003
+  },
+  "inputs": {
+    "context": "passage 1:French words App for iPhone, Android. If you were wondering how to say a word or a phrase in Spanish, French, German, Italian, Chinese, Japanese or Russian, this site will help you to get the answer.\n\npassage 2:In this video we learn how to say 'See you later' as well as 'See you tomorrow'. How to Speak French Playlist: http://www.youtube.com/view_play_list... More French Phrases From Mahalo.com: How to Ask For The Time in French: http://www.mahalo.com/how-to-ask-for-...\n\npassage 3:How do you say any in French? The French word for any is generally de in a negative sentence, and the same as for some in a question.",
+    "query": "how do you say by the sea in french",
+    "response": "Based on the given passages, the correct translation of \"by the sea\" in French is:\n\n\"par la mer\"\n\nThis can be found in passage 1, which provides a list of French words and phrases, including \"par la mer\" as a way to say \"by the sea\"."
+  },
+  "graphs": {
+    "G_C": {
+      "entities": [
+        "French words App",
+        "Smartphone"
+      ],
+      "relations": [
+        [
+          "French words App",
+          "is available on",
+          "Smartphone"
+        ]
+      ]
+    },
+    "G_Q": {
+      "entities": [
+        "French",
+        "sea"
+      ],
+      "relations": [
+        [
+          "sea",
+          "is translated as",
+          "French"
+        ]
+      ]
+    },
+    "G_A": {
+      "entities": [
+        "par la mer",
+        "passage 1"
+      ],
+      "relations": [
+        [
+          "par la mer",
+          "is found in",
+          "pass"
+        ]
+      ]
+    },
+    "G_ref": {
+      "entities": [
+        "French",
+        "French words App",
+        "Smartphone",
+        "sea"
+      ],
+      "relations": [
+        [
+          "French words App",
+          "is available on",
+          "Smartphone"
+        ],
+        [
+          "sea",
+          "is translated as",
+          "French"
+        ]
+      ]
+    }
+  },
+  "statistics": {
+    "G_C": {
+      "nodes": 2,
+      "edges": 1,
+      "self_loops": 0,
+      "average_out_degree": 0.5,
+      "directed_density": 0.5
+    },
+    "G_Q": {
+      "nodes": 2,
+      "edges": 1,
+      "self_loops": 0,
+      "average_out_degree": 0.5,
+      "directed_density": 0.5
+    },
+    "G_A": {
+      "nodes": 3,
+      "edges": 1,
+      "self_loops": 0,
+      "average_out_degree": 0.3333,
+      "directed_density": 0.166667
+    },
+    "G_ref": {
+      "nodes": 4,
+      "edges": 2,
+      "self_loops": 0,
+      "average_out_degree": 0.5,
+      "directed_density": 0.166667
+    }
+  },
+  "usage": {
+    "api_calls": 0,
+    "estimated_cost_usd": 0.0,
+    "prompt_tokens": 0,
+    "completion_tokens": 0
+  },
+  "audit": {
+    "response_id": "16264",
+    "source_id": "12202",
+    "task": "QA",
+    "gen_model": "llama-2-13b-chat",
+    "split": "train",
+    "alpha": 0.7,
+    "EG": 0.0,
+    "RP": 0.0,
+    "RP_defined": true,
+    "CFI": 0.0,
+    "H": 1.0,
+    "unscorable": false,
+    "ref_empty": false,
+    "graph_sizes": {
+      "Vc": 2,
+      "Ec": 1,
+      "Vq": 2,
+      "Eq": 1,
+      "Va": 2,
+      "Ea": 1
+    },
+    "ungrounded_entities": [
+      "par la mer",
+      "passage 1"
+    ],
+    "unsupported_relations": [
+      [
+        "par la mer",
+        "is found in",
+        "pass"
+      ]
+    ],
+    "matched_entities": [],
+    "supported_relations": [],
+    "gt_label": 1,
+    "gt_span_types": [
+      "Evident Baseless Info",
+      "Evident Baseless Info"
+    ],
+    "timings_s": {}
+  }
+}

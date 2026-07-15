@@ -1,0 +1,191 @@
+{
+  "response_id": "16479",
+  "source_id": "12238",
+  "task": "QA",
+  "gen_model": "llama-2-7b-chat",
+  "split": "train",
+  "alpha": 0.7,
+  "EG": 0.1429,
+  "RP": 0.0,
+  "RP_defined": true,
+  "CFI": 0.1,
+  "H": 0.9,
+  "unscorable": false,
+  "ref_empty": false,
+  "graph_sizes": {
+    "Vc": 9,
+    "Ec": 8,
+    "Vq": 2,
+    "Eq": 2,
+    "Va": 28,
+    "Ea": 22
+  },
+  "ungrounded_entities": [
+    "artistic expression",
+    "belief systems",
+    "church and state",
+    "cultural norms",
+    "discrimination",
+    "economic security",
+    "education",
+    "emotional well-being",
+    "freedom from fear",
+    "freedom from want",
+    "healthcare",
+    "media",
+    "personal expression",
+    "physical safety",
+    "political oppression",
+    "political speech",
+    "psychological well-being",
+    "religions",
+    "religious speech",
+    "resources",
+    "social marginalization",
+    "social norms",
+    "systemic inequalities",
+    "violence"
+  ],
+  "unsupported_relations": [
+    [
+      "freedom from fear",
+      "encompasses",
+      "emotional well-being"
+    ],
+    [
+      "freedom from fear",
+      "encompasses",
+      "psychological well-being"
+    ],
+    [
+      "freedom from fear",
+      "is threatened by",
+      "political oppression"
+    ],
+    [
+      "freedom from fear",
+      "is threatened by",
+      "social marginalization"
+    ],
+    [
+      "freedom from fear",
+      "is threatened by",
+      "violence"
+    ],
+    [
+      "freedom from fear",
+      "relates to",
+      "physical safety"
+    ],
+    [
+      "freedom from want",
+      "encompasses",
+      "education"
+    ],
+    [
+      "freedom from want",
+      "encompasses",
+      "healthcare"
+    ],
+    [
+      "freedom from want",
+      "is limited by",
+      "discrimination"
+    ],
+    [
+      "freedom from want",
+      "is limited by",
+      "resources"
+    ],
+    [
+      "freedom from want",
+      "is limited by",
+      "systemic inequalities"
+    ],
+    [
+      "freedom from want",
+      "refers to",
+      "economic security"
+    ],
+    [
+      "freedom of speech",
+      "excludes",
+      "artistic expression"
+    ],
+    [
+      "freedom of speech",
+      "excludes",
+      "personal expression"
+    ],
+    [
+      "freedom of speech",
+      "includes",
+      "political speech"
+    ],
+    [
+      "freedom of speech",
+      "includes",
+      "religious speech"
+    ],
+    [
+      "freedom of speech",
+      "is limited by",
+      "cultural norms"
+    ],
+    [
+      "freedom of speech",
+      "is limited by",
+      "media"
+    ],
+    [
+      "freedom of speech",
+      "is limited by",
+      "social norms"
+    ],
+    [
+      "freedom of worship",
+      "conflicts with",
+      "church and state"
+    ],
+    [
+      "freedom of worship",
+      "is limited to",
+      "belief systems"
+    ],
+    [
+      "freedom of worship",
+      "is limited to",
+      "religions"
+    ]
+  ],
+  "matched_entities": [
+    [
+      "four freedoms",
+      "four freedoms",
+      "exact"
+    ],
+    [
+      "freedom of expression",
+      "freedom of expression",
+      "exact"
+    ],
+    [
+      "freedom of speech",
+      "freedom of speech",
+      "exact"
+    ],
+    [
+      "freedom of worship",
+      "freedom of worship",
+      "exact"
+    ]
+  ],
+  "supported_relations": [],
+  "gt_label": 1,
+  "gt_span_types": [
+    "Evident Baseless Info",
+    "Evident Baseless Info",
+    "Evident Baseless Info"
+  ],
+  "timings_s": {}
+}

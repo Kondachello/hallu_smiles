@@ -1,0 +1,4 @@
+{"kind": "context", "cache_key": "99f508bcac422c122205c49ea3952c401d0ca08fb1bb03778cd055dad4c76abe", "seconds": 199.6329, "cached": false, "cum_calls": 1, "cum_cost_usd": 0.0, "cum_prompt_tokens": 4500, "cum_completion_tokens": 9267}
+{"kind": "context", "cache_key": "67bf68540370e561427ec4aca0566de5b5db0758761ea463cd5f514d86afaaaf", "seconds": 9.5818, "cached": false, "cum_calls": 1, "cum_cost_usd": 0.000949, "cum_prompt_tokens": 2134, "cum_completion_tokens": 277}
+{"kind": "query", "cache_key": "f8bb927e885b967eca21b04da8d5a1fe7cbb4b6d675411f64eb1bd51f07dc6a7", "seconds": 2.5171, "cached": false, "cum_calls": 2, "cum_cost_usd": 0.00155, "cum_prompt_tokens": 3572, "cum_completion_tokens": 438}
+{"kind": "response", "cache_key": "15a0b1a253dfb5801fdafc41db4e8e48d739691f90ce48c4fe8fdeba49f06f7f", "seconds": 4.9242, "cached": false, "cum_calls": 3, "cum_cost_usd": 0.003756, "cum_prompt_tokens": 6902, "cum_completion_tokens": 1354}

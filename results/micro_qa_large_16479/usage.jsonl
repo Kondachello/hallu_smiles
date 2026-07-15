@@ -1,0 +1,3 @@
+{"kind": "context", "cache_key": "5df4bc4560e3f6ec2a86afa83a899663d540ac52ae69407d16fde02c547e977f", "seconds": 9.2985, "cached": false, "cum_calls": 1, "cum_cost_usd": 0.001091, "cum_prompt_tokens": 2383, "cum_completion_tokens": 330}
+{"kind": "query", "cache_key": "6ff21e98acf57a3345f51131e7afe8b9f960ef11e96f9d656083f171da417e01", "seconds": 2.6185, "cached": false, "cum_calls": 2, "cum_cost_usd": 0.00161, "cum_prompt_tokens": 3711, "cum_completion_tokens": 455}
+{"kind": "response", "cache_key": "6c3553bbc328d457f3ec05709088509545ec7135e9e751d167ef437b59f6bf72", "seconds": 46.4585, "cached": false, "cum_calls": 3, "cum_cost_usd": 0.006035, "cum_prompt_tokens": 13297, "cum_completion_tokens": 1807}
