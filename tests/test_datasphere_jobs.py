@@ -97,7 +97,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "timeout --signal=TERM --kill-after=60s 10800" in config["cmd"]
     assert config["outputs"] == [{"qa-pilot-new-metrics-20260716.tar.gz": "ARTIFACT_ARCHIVE"}]
     assert "vllm==0.6.3.post1" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
-    assert "transformers>=4.45.2,<5" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
+    assert "transformers==4.45.2" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
     assert "lm-format-enforcer==0.10.6" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
 
     runner = (SCRIPTS / "run_datasphere_qa_pilot.sh").read_text(encoding="utf-8")
@@ -111,6 +111,22 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "--guided-decoding-backend" in runner
     assert "lm-format-enforcer" in runner
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)
+
+
+def test_cpu_preflight_uses_the_same_locked_runtime_and_import_check(tmp_path):
+    rendered = tmp_path / "preflight.yaml"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_job.py"),
+        "--kind", "preflight", "--commit", "f" * 40,
+        "--run-id", "new-metrics-20260717", "--output", str(rendered),
+    ], check=True)
+    config = yaml.safe_load(rendered.read_text(encoding="utf-8"))
+    assert config["cloud-instance-types"] == ["c1.4"]
+    assert config["working-storage"]["size"] == "100Gb"
+    assert "check_datasphere_runtime_dependencies.py" in config["cmd"]
+    assert (ROOT / "requirements.datasphere.preflight.txt").read_text(encoding="utf-8") == (
+        ROOT / "requirements.datasphere.txt"
+    ).read_text(encoding="utf-8")
 
 
 def test_rendered_jobs_pass_local_cli_guardrails(tmp_path):

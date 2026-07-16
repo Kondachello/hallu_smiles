@@ -142,8 +142,11 @@ GPU Job неизменно использует `g1.1` (V100 32 GB), FP16,
 `requirements.datasphere.txt` намеренно закрепляет `vllm==0.6.3.post1`: эта
 версия использует PyTorch 2.4/CUDA 12.1, совместимые с CUDA 12.2 driver `g1.1`.
 Не заменяйте pin на диапазон версий: новый vLLM может потребовать более свежий
-driver. Также сохраняйте `transformers>=4.45.2,<5`: Transformers 5.x требует
-API более нового PyTorch и ломает импорт vLLM 0.6.3 ещё до healthcheck. До загрузки модели Job записывает `gpu-runtime.json` с CUDA smoke-check,
+driver. Также сохраняйте точный `transformers==4.45.2`: эта версия проверена
+вместе с `lm-format-enforcer==0.10.6`. Плавающий диапазон поставил 4.57, где
+удален `LogitsWarper`, и первый completion завершался HTTP 500. Transformers
+5.x дополнительно требует API более нового PyTorch и ломает импорт vLLM 0.6.3
+ещё до healthcheck. До загрузки модели Job записывает `gpu-runtime.json` с CUDA smoke-check,
 версией PyTorch/CUDA, GPU и compute capability.
 
 `max-model-len=8192` — сознательный лимит, позволяющий Llama 8B работать на
@@ -159,6 +162,20 @@ pin `lm-format-enforcer==0.10.6`. Default `outlines` в этой среде им
 `pyairports==0.0.1`, но этот distribution не содержит Python-модуль;
 результат — HTTP 500 ещё на первом completion. Не меняйте backend обратно без
 живого smoke-check на целевой конфигурации.
+
+Поскольку `lm-format-enforcer==0.10.6` импортирует `LogitsWarper`, нельзя
+оставлять диапазон версий Transformers: на практике resolver выбрал 4.57, где
+этот символ удален. Обязательная проверенная тройка —
+`vllm==0.6.3.post1`, `lm-format-enforcer==0.10.6`,
+`transformers==4.45.2`.
+
+CPU preflight теперь не только проверяет ready-marker, SHA и размеры shared
+assets. Он устанавливает **тот же exact requirements набор**, что GPU Job,
+импортирует `vllm`, `transformers`, `lmformatenforcer` и его Transformers
+adapter, а затем сохраняет `runtime-dependencies.json`. Это не загружает 8B
+веса и не резервирует GPU, но ловит resolver/import-конфликты до дорогого
+запуска. GPU Job разрешён только когда и `preflight.json`, и
+`runtime-dependencies.json` имеют `status: ready`.
 
 ## Что именно pre-submit проверяет
 

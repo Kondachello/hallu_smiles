@@ -13,6 +13,7 @@ cmd: >-
   test "$actual_commit" = "__GIT_COMMIT__";
   python source/scripts/resolve_datasphere_shared_model.py --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared" --model-id "__MODEL_ID__" > "$ARTIFACT_DIR/model-path.txt";
   python source/scripts/check_datasphere_shared_assets.py --model-path "$(cat "$ARTIFACT_DIR/model-path.txt")" --data-dir "$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth" --model-id "__MODEL_ID__" --report "$ARTIFACT_DIR/preflight.json";
+  python source/scripts/check_datasphere_runtime_dependencies.py --report "$ARTIFACT_DIR/runtime-dependencies.json";
   tar -C "$(dirname "$ARTIFACT_DIR")" -czf "${ARTIFACT_ARCHIVE}" "$(basename "$ARTIFACT_DIR")"'
 env:
   python:
@@ -29,6 +30,9 @@ flags:
   - attach-project-disk
 cloud-instance-types:
   - c1.4
+working-storage:
+  type: SSD
+  size: 100Gb
 graceful-shutdown:
   signal: SIGTERM
   timeout: 30s
