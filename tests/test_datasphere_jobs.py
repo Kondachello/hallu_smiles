@@ -96,6 +96,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "timeout --signal=TERM --kill-after=60s 10800" in config["cmd"]
     assert config["outputs"] == [{"qa-pilot-new-metrics-20260716.tar.gz": "ARTIFACT_ARCHIVE"}]
     assert "vllm==0.6.3.post1" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
+    assert "transformers>=4.45.2,<5" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
 
     runner = (SCRIPTS / "run_datasphere_qa_pilot.sh").read_text(encoding="utf-8")
     assert "huggingface-cli download" not in runner

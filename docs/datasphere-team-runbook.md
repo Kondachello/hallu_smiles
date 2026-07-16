@@ -142,7 +142,8 @@ GPU Job неизменно использует `g1.1` (V100 32 GB), FP16,
 `requirements.datasphere.txt` намеренно закрепляет `vllm==0.6.3.post1`: эта
 версия использует PyTorch 2.4/CUDA 12.1, совместимые с CUDA 12.2 driver `g1.1`.
 Не заменяйте pin на диапазон версий: новый vLLM может потребовать более свежий
-driver. До загрузки модели Job записывает `gpu-runtime.json` с CUDA smoke-check,
+driver. Также сохраняйте `transformers>=4.45.2,<5`: Transformers 5.x требует
+API более нового PyTorch и ломает импорт vLLM 0.6.3 ещё до healthcheck. До загрузки модели Job записывает `gpu-runtime.json` с CUDA smoke-check,
 версией PyTorch/CUDA, GPU и compute capability.
 
 ## Что именно pre-submit проверяет

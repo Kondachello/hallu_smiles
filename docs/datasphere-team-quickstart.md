@@ -25,6 +25,9 @@
   именно эта версия совместима с CUDA driver V100 `g1.1`. Диапазон вида
   `vllm>=...` может молча поставить несовместимую версию и потратить GPU-время
   до первой полезной операции.
+- Пара `torch==2.4` и `vllm==0.6.3.post1` требует
+  `transformers>=4.45.2,<5`. Верхняя граница важна: Transformers 5.x пытается
+  импортировать API более нового PyTorch, и vLLM не успевает открыть порт.
 
 ## Короткая схема
 
@@ -180,7 +183,8 @@ activity после его старта, отменяйте **только ко�
 ```text
 Работай только в ветке new-metrics или её опубликованной дочерней ветке.
 Не создавай DataSphere Project/cloud, не меняй shared/models и shared/ragtruth,
-не передавай HF_TOKEN в Job и не меняй pin vllm==0.6.3.post1.
+не передавай HF_TOKEN в Job и не меняй pins vllm==0.6.3.post1 и
+transformers>=4.45.2,<5.
 
 До GPU Job требуй успешный CPU preflight. Для запуска используй только
 scripts/submit_datasphere_job.sh с уникальным RUN_ID; не редактируй Job YAML
@@ -249,6 +253,7 @@ shared assets и не влияет на отдельные Jobs.
 | Ошибка requirements parser | В requirements были комментарии или `-r`. | Оставлять только прямые PEP 508 зависимости в `requirements.datasphere.txt`. |
 | Аргумент `--shared-root` стал отдельной командой | Некорректный folded YAML/отступ. | Не редактировать сгенерированную shell-команду; helper её валидирует. |
 | vLLM не стартует: driver/CUDA too old | Установилась новая несовместимая версия vLLM. | Не использовать `>=`; сохранить `vllm==0.6.3.post1` и смотреть `gpu-runtime.json`. |
+| vLLM ждёт healthcheck, а в логе `cannot import name 'DTensor'` | Resolver поставил Transformers 5.x, несовместимый с PyTorch 2.4. | Сохранить прямой pin `transformers>=4.45.2,<5`; не убирать его при обновлении requirements. |
 | Логи `attach` шумные или пустые | Локальный macOS gRPC клиент нестабилен. | Смотреть `job get` и Launch history; архив скачивать после terminal. |
 | Повторная загрузка модели / нехватка диска | GPU Job пытается staging/download. | GPU Job только читает ready-marker; staging — лишь одноразово на c1.4. |
 | Непонятно, где результат | Job output — не Git и не shared model folder. | Скачивать архив в `outputs/datasphere-results/<RUN_ID>/`. |

@@ -45,6 +45,10 @@ def _validate_gpu_requirements(path: Path) -> None:
         "vllm==0.6.3.post1" in lines,
         "g1.1 requires the driver-compatible vllm==0.6.3.post1 pin; do not use a floating vLLM range",
     )
+    _require(
+        "transformers>=4.45.2,<5" in lines,
+        "vllm==0.6.3.post1 requires the compatible transformers>=4.45.2,<5 pin",
+    )
 
 
 def validate_job(path: Path, repo_root: Path) -> dict:
