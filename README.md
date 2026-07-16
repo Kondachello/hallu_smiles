@@ -132,17 +132,18 @@ export DS_SHARED_ROOT="$PWD/shared"
 python scripts/stage_datasphere_shared_assets.py --shared-root "$DS_SHARED_ROOT" \
   --model-id meta-llama/Meta-Llama-3.1-8B-Instruct
 
-# Locally, pin and submit a read-only preflight followed by the one-GPU pilot.
-COMMIT="$(git rev-parse HEAD)"
-python scripts/render_datasphere_job.py --kind preflight --commit "$COMMIT" \
-  --model-id meta-llama/Meta-Llama-3.1-8B-Instruct --run-id preflight-20260716 \
-  --output datasphere/jobs/rendered/preflight.yaml
-datasphere project job execute -p <PROJECT_ID> -c datasphere/jobs/rendered/preflight.yaml
+# Locally, pin, validate and submit a read-only preflight followed by the one-GPU pilot.
+# The helper refuses an unpushed commit and catches DataSphere CLI/YAML mistakes before
+# it creates a cloud Job.  Use a Python environment that contains the `datasphere` package.
+PYTHON_BIN=.venv-datasphere/bin/python \
+DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
+bash scripts/submit_datasphere_job.sh --kind preflight --project-id <PROJECT_ID> \
+  --run-id preflight-20260716 --branch new-metrics
 
-python scripts/render_datasphere_job.py --kind qa-pilot-g1 --commit "$COMMIT" \
-  --model-id meta-llama/Meta-Llama-3.1-8B-Instruct --run-id new-metrics-20260716 \
-  --output datasphere/jobs/rendered/qa-pilot.yaml
-datasphere project job execute -p <PROJECT_ID> -c datasphere/jobs/rendered/qa-pilot.yaml
+PYTHON_BIN=.venv-datasphere/bin/python \
+DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
+bash scripts/submit_datasphere_job.sh --kind qa-pilot-g1 --project-id <PROJECT_ID> \
+  --run-id new-metrics-20260716 --branch new-metrics
 ```
 
 The GPU configuration is one `g1.1` V100 in FP16, with `max-model-len=8192` and a hard

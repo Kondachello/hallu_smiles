@@ -104,6 +104,23 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)
 
 
+def test_rendered_jobs_pass_local_cli_guardrails(tmp_path):
+    for kind in ("preflight", "qa-pilot-g1"):
+        rendered = tmp_path / f"{kind}.yaml"
+        subprocess.run([
+            sys.executable, str(SCRIPTS / "render_datasphere_job.py"),
+            "--kind", kind, "--commit", "f" * 40,
+            "--run-id", "new-metrics-20260717", "--output", str(rendered),
+        ], check=True)
+        checked = subprocess.run([
+            sys.executable, str(SCRIPTS / "validate_datasphere_job.py"),
+            "--job", str(rendered), "--repo-root", str(ROOT),
+        ], check=True, text=True, capture_output=True)
+        assert "safe for DataSphere CLI submission" in checked.stdout
+
+    subprocess.run(["bash", "-n", str(SCRIPTS / "submit_datasphere_job.sh")], check=True)
+
+
 def test_stager_defaults_to_gated_llama_and_uses_model_specific_storage():
     text = (SCRIPTS / "stage_datasphere_shared_assets.py").read_text(encoding="utf-8")
     assert 'MODEL_ID_DEFAULT = "meta-llama/Meta-Llama-3.1-8B-Instruct"' in text
