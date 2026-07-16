@@ -49,6 +49,10 @@ def _validate_gpu_requirements(path: Path) -> None:
         "transformers>=4.45.2,<5" in lines,
         "vllm==0.6.3.post1 requires the compatible transformers>=4.45.2,<5 pin",
     )
+    _require(
+        "lm-format-enforcer==0.10.6" in lines,
+        "g1.1 vLLM runtime requires the pinned lm-format-enforcer guided-decoding backend",
+    )
 
 
 def validate_job(path: Path, repo_root: Path) -> dict:

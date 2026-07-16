@@ -32,6 +32,9 @@
   должен получить `llm.max_tokens: 1024`: его дефолт 16 000 переполняет окно
   ещё до генерации. Скрипт делает один дешёвый completion smoke-check после
   healthcheck, прежде чем запускать все 20 QA.
+- Для vLLM 0.6.3 выбран `--guided-decoding-backend lm-format-enforcer`
+  (`lm-format-enforcer==0.10.6`). Не возвращайте default `outlines`: его
+  dependency `pyairports==0.0.1` в этой среде ставится без Python-модуля.
 
 ## Короткая схема
 
@@ -259,6 +262,7 @@ shared assets и не влияет на отдельные Jobs.
 | vLLM не стартует: driver/CUDA too old | Установилась новая несовместимая версия vLLM. | Не использовать `>=`; сохранить `vllm==0.6.3.post1` и смотреть `gpu-runtime.json`. |
 | vLLM ждёт healthcheck, а в логе `cannot import name 'DTensor'` | Resolver поставил Transformers 5.x, несовместимый с PyTorch 2.4. | Сохранить прямой pin `transformers>=4.45.2,<5`; не убирать его при обновлении requirements. |
 | `/v1/chat/completions` отвечает `400`, а `failed_extractions.jsonl` содержит `ContextWindowExceededError` | KGGen без явного лимита просит до 16 000 output tokens, но vLLM для V100 ограничен 8 192. | Сохранить `llm.max_tokens: 1024` в runtime config и completion smoke-check до QA. |
+| Completion smoke-check отвечает `500`, в `vllm.log` — `ModuleNotFoundError: pyairports` | Default guided-decoding backend `outlines` импортирует дефектный `pyairports==0.0.1`. | Использовать `--guided-decoding-backend lm-format-enforcer` и pin `lm-format-enforcer==0.10.6`. |
 | Логи `attach` шумные или пустые | Локальный macOS gRPC клиент нестабилен. | Смотреть `job get` и Launch history; архив скачивать после terminal. |
 | Повторная загрузка модели / нехватка диска | GPU Job пытается staging/download. | GPU Job только читает ready-marker; staging — лишь одноразово на c1.4. |
 | Непонятно, где результат | Job output — не Git и не shared model folder. | Скачивать архив в `outputs/datasphere-results/<RUN_ID>/`. |

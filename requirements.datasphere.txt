@@ -12,4 +12,5 @@ tabulate
 PyYAML
 vllm==0.6.3.post1
 transformers>=4.45.2,<5
+lm-format-enforcer==0.10.6
 huggingface_hub[cli]>=0.27

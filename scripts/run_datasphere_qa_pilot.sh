@@ -20,6 +20,9 @@ MODEL_MAX_MODEL_LEN="${MODEL_MAX_MODEL_LEN:-8192}"
 # KGGen 0.4 otherwise requests up to 16k completion tokens.  That cannot fit
 # alongside a prompt in the deliberately memory-safe 8k vLLM context window.
 KGGEN_MAX_TOKENS="${KGGEN_MAX_TOKENS:-1024}"
+# outlines imports the broken pyairports 0.0.1 distribution on this runtime.
+# vLLM 0.6.3 supports this installed backend for JSON-guided KGGen responses.
+GUIDED_DECODING_BACKEND="${GUIDED_DECODING_BACKEND:-lm-format-enforcer}"
 RUNTIME_CONFIG="$RUN_ROOT/runtime_config.yaml"
 MANIFEST="$RUN_ROOT/qa_pilot_manifest.json"
 STRICT_OUT="$RUN_ROOT/strict"
@@ -104,6 +107,7 @@ vllm serve "$MODEL_PATH" \
   --served-model-name "$MODEL_ID" \
   --host 127.0.0.1 --port "$PORT" \
   --dtype "$MODEL_DTYPE" --max-model-len "$MODEL_MAX_MODEL_LEN" \
+  --guided-decoding-backend "$GUIDED_DECODING_BACKEND" \
   --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.90}" \
   >"$VLLM_LOG" 2>&1 &
 VLLM_PID=$!

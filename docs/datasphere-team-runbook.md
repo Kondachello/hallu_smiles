@@ -154,6 +154,12 @@ V100 32 GB. Для KGGen в Job обязательно выставляется 
 OpenAI-совместимый API и контекст до того, как будут оплачены десятки extraction
 запросов.
 
+Для vLLM 0.6.3 Job задаёт `--guided-decoding-backend lm-format-enforcer` и
+pin `lm-format-enforcer==0.10.6`. Default `outlines` в этой среде импортирует
+`pyairports==0.0.1`, но этот distribution не содержит Python-модуль;
+результат — HTTP 500 ещё на первом completion. Не меняйте backend обратно без
+живого smoke-check на целевой конфигурации.
+
 ## Что именно pre-submit проверяет
 
 `scripts/validate_datasphere_job.py` запускается helper-ом автоматически. Он
