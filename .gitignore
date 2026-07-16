@@ -1,6 +1,8 @@
 # virtualenv
 .venv/
 venv/
+.venv-datasphere/
+.tools/
 
 # extraction cache (content-addressed; safe to delete, will re-fill)
 .cache/

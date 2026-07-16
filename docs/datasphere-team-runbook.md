@@ -46,6 +46,29 @@ staging-сессии. Скрипт сам разрешает точный HF com
 
 ## Как запустить ветку
 
+### Одноразовая настройка CLI на рабочем компьютере
+
+Jobs создаются через CLI, а страница DataSphere показывает их историю. Используйте
+Python 3.8–3.12: для macOS с Homebrew в этом проекте подходит `python3.12`.
+
+```bash
+# В корне репозитория; окружение и yc не попадают в Git.
+python3.12 -m venv .venv-datasphere
+.venv-datasphere/bin/python -m pip install --upgrade pip datasphere
+
+# Установите yc официальным способом, затем один раз авторизуйтесь.
+# https://yandex.cloud/en/docs/cli/operations/install-cli
+yc init
+```
+
+Команда `yc init` создаёт локальный профиль с OAuth-доступом. Не сохраняйте OAuth
+токен в `.env`, YAML, терминальном логе или Git. Убедитесь, что доступен проект:
+
+```bash
+yc resource-manager cloud list
+.venv-datasphere/bin/datasphere --profile default project get --id <PROJECT_ID>
+```
+
 1. Убедитесь, что нужный commit отправлен в GitHub. Job скачивает публичный
    репозиторий и проверяет, что checkout ровно равен указанному SHA.
 2. Сначала создайте дешёвый CPU preflight:
