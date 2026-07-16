@@ -1,9 +1,9 @@
 # Render with scripts/render_datasphere_job.py; do not submit this template directly.
 name: hallu-shared-preflight-__RUN_ID__
 desc: Verify immutable Llama and RAGTruth assets before a GPU experiment.
-cmd: >
-  set -Eeuo pipefail;
-  export ARTIFACT_DIR="${PWD}/preflight-artifacts/__RUN_ID__";
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export ARTIFACT_DIR="$PWD/preflight-artifacts/__RUN_ID__";
   mkdir -p "$ARTIFACT_DIR";
   git init source;
   git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
@@ -12,18 +12,23 @@ cmd: >
   actual_commit="$(git -C source rev-parse HEAD)";
   test "$actual_commit" = "__GIT_COMMIT__";
   python source/scripts/resolve_datasphere_shared_model.py
-    --shared-root "${DS_PROJECT_HOME}/hallu_smiles/shared"
+    --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared"
     --model-id "__MODEL_ID__" > "$ARTIFACT_DIR/model-path.txt";
   python source/scripts/check_datasphere_shared_assets.py
     --model-path "$(cat "$ARTIFACT_DIR/model-path.txt")"
-    --data-dir "${DS_PROJECT_HOME}/hallu_smiles/shared/ragtruth"
+    --data-dir "$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth"
     --model-id "__MODEL_ID__"
     --report "$ARTIFACT_DIR/preflight.json";
-  tar -C "$(dirname "$ARTIFACT_DIR")" -czf "${ARTIFACT_ARCHIVE}" "$(basename "$ARTIFACT_DIR")"
+  tar -C "$(dirname "$ARTIFACT_DIR")" -czf "${ARTIFACT_ARCHIVE}" "$(basename "$ARTIFACT_DIR")"'
 env:
   python:
     type: manual
     version: "3.11"
+    requirements-file: requirements.datasphere.preflight.txt
+    # The CLI requires an explicit local source path for shell entrypoints.
+    # The Job itself still clones and verifies the pinned public Git commit.
+    local-paths:
+      - scripts
 outputs:
   - preflight-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
 flags:

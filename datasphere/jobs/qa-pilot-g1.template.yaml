@@ -1,9 +1,9 @@
 # Render with scripts/render_datasphere_job.py; do not submit this template directly.
 name: hallu-qa-g1-__RUN_ID__
 desc: Strict then support relation-metrics QA pilot on one V100.
-cmd: >
-  set -Eeuo pipefail;
-  export RUN_ROOT="${PWD}/qa-pilot-artifacts/__RUN_ID__";
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export RUN_ROOT="$PWD/qa-pilot-artifacts/__RUN_ID__";
   mkdir -p "$RUN_ROOT";
   git init source;
   git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
@@ -13,8 +13,8 @@ cmd: >
   test "$actual_commit" = "__GIT_COMMIT__";
   export MODEL_ID="__MODEL_ID__";
   export MODEL_PATH="$(python source/scripts/resolve_datasphere_shared_model.py
-    --shared-root "${DS_PROJECT_HOME}/hallu_smiles/shared" --model-id "$MODEL_ID")";
-  export DATA_DIR="${DS_PROJECT_HOME}/hallu_smiles/shared/ragtruth";
+    --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared" --model-id "$MODEL_ID")";
+  export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
   export VLLM_DTYPE=half;
   export VLLM_MAX_MODEL_LEN=8192;
   export DATASPHERE_UNITS_PER_SECOND=72;
@@ -24,12 +24,16 @@ cmd: >
   job_status=$?;
   set -e;
   tar -C "$(dirname "$RUN_ROOT")" -czf "${ARTIFACT_ARCHIVE}" "$(basename "$RUN_ROOT")";
-  exit "$job_status"
+  exit "$job_status"'
 env:
   python:
     type: manual
     version: "3.11"
     requirements-file: requirements.datasphere.txt
+    # The CLI requires an explicit local source path for shell entrypoints.
+    # The Job itself still clones and verifies the pinned public Git commit.
+    local-paths:
+      - scripts
 outputs:
   - qa-pilot-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
 flags:

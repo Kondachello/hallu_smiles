@@ -1,4 +1,14 @@
-# DataSphere batch job runtime. Install this in the Job image/command, not on a Mac.
--r requirements.txt
+kg-gen>=0.1.6
+litellm>=1.0.0
+sentence-transformers
+scikit-learn
+scipy
+numpy
+pandas
+tenacity
+tqdm
+matplotlib
+tabulate
+PyYAML
 vllm>=0.6,<1
 huggingface_hub[cli]>=0.27
