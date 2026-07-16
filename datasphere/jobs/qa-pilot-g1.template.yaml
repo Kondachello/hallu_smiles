@@ -12,8 +12,7 @@ cmd: >-
   actual_commit="$(git -C source rev-parse HEAD)";
   test "$actual_commit" = "__GIT_COMMIT__";
   export MODEL_ID="__MODEL_ID__";
-  export MODEL_PATH="$(python source/scripts/resolve_datasphere_shared_model.py
-    --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared" --model-id "$MODEL_ID")";
+  export MODEL_PATH="$(python source/scripts/resolve_datasphere_shared_model.py --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared" --model-id "$MODEL_ID")";
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
   export VLLM_DTYPE=half;
   export VLLM_MAX_MODEL_LEN=8192;
