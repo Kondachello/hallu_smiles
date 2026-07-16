@@ -1,0 +1,4 @@
+# DataSphere batch job runtime. Install this in the Job image/command, not on a Mac.
+-r requirements.txt
+vllm>=0.6,<1
+huggingface_hub[cli]>=0.27

@@ -55,6 +55,12 @@ metrics:
   empty_response_graph_policy: "report_both"   # see metrics.py / report; {report_both, exclude, impute}
   empty_response_impute_h: 0.5
 
+# Uses llm.model above; deliberately no second model identifier.
+relation_verifier:
+  cache_dir: ".cache/verdicts"
+  prompt_version: "relation-entailment-v1"
+  max_evidence_sentences: 4
+
 data:
   dir: "data"                         # holds source_info.jsonl and response.jsonl
   exclude_implicit_true: false        # RAGTruth strict convention: implicit_true spans COUNT as hallucinations

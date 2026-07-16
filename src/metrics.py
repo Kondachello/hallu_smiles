@@ -1,23 +1,22 @@
-"""HalluGraph metrics: Entity Grounding, edge-aware Relation Preservation, CFI, H.
+"""HalluGraph metrics, including strict and text-verified relation support.
 
-  EG  = |{ v in V_a : exists w in V_ref, match(v,w) }| / |V_a|
-  RP  = (1/|E_a|) * sum_{e in E_a} 1[ exists e' in E_ref : align(e,e') ]      (undefined if |E_a|=0)
-  CFI = alpha*EG + (1-alpha)*RP        (or CFI = EG when RP is undefined -- edge-aware)
-  H   = 1 - CFI
+Strict RP is intentionally retained byte-for-byte in meaning:
 
-Degenerate cases:
-  |V_a| = 0  -> response is unscorable by structure (EG undefined). Handled by policy at report time.
-  |V_ref| = 0 -> instance flagged & excluded.
+  RP_strict = |{e in E_a: exists e' in E_ref, align(e,e')}| / |E_a|
 
-EG/RP are computed once (they do NOT depend on alpha); CFI/H are derived later so alpha
-tuning and the tau sweep never require re-extraction.
+The support path adds endpoint grounding and an evidence-constrained relation
+verdict.  It never substitutes ``RP_grounded`` for factual support:
+
+  RP_grounded      = |{e: subject and object match V_ref}| / |E_a|
+  RP_entailed_cond = |{grounded e: verifier(e)=entailed}| / |E_grounded|
+  RP_support       = |{grounded e: verifier(e)=entailed}| / |E_a|
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
 
-from .matching import RefGraph
+from .matching import RefGraph, normalize
 
 
 @dataclass
@@ -29,133 +28,259 @@ class ScoreResult:
     Eq: int = 0
     Va: int = 0
     Ea: int = 0
-    # core alpha-independent metrics
-    EG: float | None = None          # None => |V_a| = 0 (unscorable)
-    RP: float | None = None          # None => |E_a| = 0 (edge-aware: excluded)
+    # alpha-independent entity and legacy strict metrics
+    EG: float | None = None
+    RP: float | None = None  # legacy alias for RP_strict
     RP_defined: bool = False
-    # audit detail
-    matched_entities: list[tuple[str, str, str]] = field(default_factory=list)   # (v, ref, method)
+    RP_strict: float | None = None
+    RP_strict_defined: bool = False
+    # New relation-support decomposition
+    RP_grounded: float | None = None
+    RP_grounded_defined: bool = False
+    RP_entailed_cond: float | None = None
+    RP_entailed_cond_defined: bool = False
+    RP_support: float | None = None
+    RP_support_defined: bool = False
+    support_verified: bool = False
+    # legacy audit detail
+    matched_entities: list[tuple[str, str, str]] = field(default_factory=list)
     ungrounded_entities: list[str] = field(default_factory=list)
     supported_relations: list[list[str]] = field(default_factory=list)
     unsupported_relations: list[list[str]] = field(default_factory=list)
+    # one explanatory record for every answer edge
+    relation_audits: list[dict[str, Any]] = field(default_factory=list)
     # flags
-    unscorable: bool = False         # |V_a| = 0
-    ref_empty: bool = False          # |V_ref| = 0
+    unscorable: bool = False
+    ref_empty: bool = False
 
-    def cfi(self, alpha: float) -> float | None:
-        """Composite Fidelity Index for a given alpha (None if unscorable)."""
+    def rp_for_mode(self, mode: str = "strict") -> float | None:
+        if mode == "strict":
+            return self.RP_strict if self.RP_strict is not None else self.RP
+        if mode == "support":
+            return self.RP_support
+        raise ValueError(f"unknown relation mode {mode!r}")
+
+    def rp_defined_for_mode(self, mode: str = "strict") -> bool:
+        if mode == "strict":
+            return bool(self.RP_strict_defined or self.RP_defined)
+        if mode == "support":
+            return self.RP_support_defined
+        raise ValueError(f"unknown relation mode {mode!r}")
+
+    def cfi_for_mode(self, alpha: float, mode: str = "strict") -> float | None:
+        """Composite fidelity for strict or verified relation support."""
         if self.unscorable or self.EG is None:
             return None
-        if not self.RP_defined or self.RP is None:
-            return self.EG  # edge-aware: CFI reduces to EG
-        return alpha * self.EG + (1.0 - alpha) * self.RP
+        rp = self.rp_for_mode(mode)
+        if not self.rp_defined_for_mode(mode) or rp is None:
+            return self.EG  # no answer edges: edge-aware reduction to EG
+        return alpha * self.EG + (1.0 - alpha) * rp
+
+    def h_for_mode(
+        self, alpha: float, mode: str = "strict", impute: float | None = None
+    ) -> float | None:
+        c = self.cfi_for_mode(alpha, mode)
+        return impute if c is None else 1.0 - c
+
+    # Backward-compatible strict aliases used by existing code/tests.
+    def cfi(self, alpha: float) -> float | None:
+        return self.cfi_for_mode(alpha, "strict")
 
     def h(self, alpha: float, impute: float | None = None) -> float | None:
-        """Hallucination score H = 1 - CFI. If unscorable, return `impute` (or None)."""
-        c = self.cfi(alpha)
-        if c is None:
-            return impute
-        return 1.0 - c
+        return self.h_for_mode(alpha, "strict", impute)
 
     def eg_only_h(self) -> float | None:
         return None if self.EG is None else 1.0 - self.EG
 
     def rp_only_h(self) -> float | None:
-        return None if self.RP is None else 1.0 - self.RP
+        rp = self.rp_for_mode("strict")
+        return None if rp is None else 1.0 - rp
+
+    def support_rp_only_h(self) -> float | None:
+        return None if self.RP_support is None else 1.0 - self.RP_support
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "Vc": self.Vc, "Ec": self.Ec, "Vq": self.Vq, "Eq": self.Eq,
             "Va": self.Va, "Ea": self.Ea,
-            "EG": self.EG, "RP": self.RP, "RP_defined": self.RP_defined,
+            "EG": self.EG,
+            "RP": self.RP, "RP_defined": self.RP_defined,
+            "RP_strict": self.RP_strict, "RP_strict_defined": self.RP_strict_defined,
+            "RP_grounded": self.RP_grounded, "RP_grounded_defined": self.RP_grounded_defined,
+            "RP_entailed_cond": self.RP_entailed_cond,
+            "RP_entailed_cond_defined": self.RP_entailed_cond_defined,
+            "RP_support": self.RP_support, "RP_support_defined": self.RP_support_defined,
+            "support_verified": self.support_verified,
             "matched_entities": [list(m) for m in self.matched_entities],
             "ungrounded_entities": self.ungrounded_entities,
             "supported_relations": self.supported_relations,
             "unsupported_relations": self.unsupported_relations,
+            "relation_audits": self.relation_audits,
             "unscorable": self.unscorable, "ref_empty": self.ref_empty,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ScoreResult":
+        # Existing scored.jsonl artifacts only contain the legacy strict fields.
+        legacy_rp = d.get("RP")
+        legacy_defined = bool(d.get("RP_defined", legacy_rp is not None))
         return cls(
-            Vc=d["Vc"], Ec=d["Ec"], Vq=d["Vq"], Eq=d["Eq"], Va=d["Va"], Ea=d["Ea"],
-            EG=d["EG"], RP=d["RP"], RP_defined=d["RP_defined"],
+            Vc=d.get("Vc", 0), Ec=d.get("Ec", 0), Vq=d.get("Vq", 0), Eq=d.get("Eq", 0),
+            Va=d.get("Va", 0), Ea=d.get("Ea", 0), EG=d.get("EG"),
+            RP=legacy_rp, RP_defined=legacy_defined,
+            RP_strict=d.get("RP_strict", legacy_rp),
+            RP_strict_defined=bool(d.get("RP_strict_defined", legacy_defined)),
+            RP_grounded=d.get("RP_grounded"),
+            RP_grounded_defined=bool(d.get("RP_grounded_defined", False)),
+            RP_entailed_cond=d.get("RP_entailed_cond"),
+            RP_entailed_cond_defined=bool(d.get("RP_entailed_cond_defined", False)),
+            RP_support=d.get("RP_support"),
+            RP_support_defined=bool(d.get("RP_support_defined", False)),
+            support_verified=bool(d.get("support_verified", False)),
             matched_entities=[tuple(m) for m in d.get("matched_entities", [])],
             ungrounded_entities=list(d.get("ungrounded_entities", [])),
             supported_relations=[list(r) for r in d.get("supported_relations", [])],
             unsupported_relations=[list(r) for r in d.get("unsupported_relations", [])],
-            unscorable=d["unscorable"], ref_empty=d["ref_empty"],
+            relation_audits=list(d.get("relation_audits", [])),
+            unscorable=bool(d.get("unscorable", False)), ref_empty=bool(d.get("ref_empty", False)),
         )
 
 
-def score_response(g_a, refgraph: RefGraph, g_c=None, g_q=None) -> ScoreResult:
-    """Compute EG, RP and the audit lists for one response graph against the ref graph.
-
-    g_a is a Graph (entities: set[str], relations: set[tuple]); refgraph is a RefGraph
-    built from V_ref = V_c ∪ V_q, E_ref = E_c ∪ E_q.
-    """
-    Va = len(g_a.entities)
-    Ea = len(g_a.relations)
+def score_response(
+    g_a,
+    refgraph: RefGraph,
+    g_c=None,
+    g_q=None,
+    *,
+    context: str = "",
+    query: str | None = None,
+    verifier=None,
+    verifier_matching_params: dict[str, Any] | None = None,
+) -> ScoreResult:
+    """Score one answer graph; verifier is optional so strict scoring stays LLM-free."""
+    Va, Ea = len(g_a.entities), len(g_a.relations)
     res = ScoreResult(
         Va=Va, Ea=Ea,
         Vc=len(g_c.entities) if g_c is not None else 0,
         Ec=len(g_c.relations) if g_c is not None else 0,
         Vq=len(g_q.entities) if g_q is not None else 0,
         Eq=len(g_q.relations) if g_q is not None else 0,
+        support_verified=verifier is not None,
     )
+    res.ref_empty = len(refgraph.ent_norm) == 0
 
-    ref_empty = len(refgraph.ent_norm) == 0
-    res.ref_empty = ref_empty
-
-    # ---- Entity Grounding ----
+    # Entity Grounding remains independent of all relation metrics.
     if Va == 0:
         res.unscorable = True
         res.EG = None
     else:
-        grounded = 0
-        for v in sorted(g_a.entities):
-            m = refgraph.match_entity(v)
-            if m.matched:
-                grounded += 1
-                res.matched_entities.append((_norm(v, refgraph), m.ref or "", m.method or ""))
+        grounded_entities = 0
+        for entity in sorted(g_a.entities):
+            match = refgraph.match_entity(entity)
+            if match.matched:
+                grounded_entities += 1
+                res.matched_entities.append((_norm(entity), match.ref or "", match.method or ""))
             else:
-                res.ungrounded_entities.append(_norm(v, refgraph))
-        res.EG = grounded / Va
+                res.ungrounded_entities.append(_norm(entity))
+        res.EG = grounded_entities / Va
 
-    # ---- Relation Preservation (edge-aware) ----
     if Ea == 0:
-        res.RP = None
-        res.RP_defined = False
-    else:
-        supported = 0
-        for e in sorted(g_a.relations):
-            a = refgraph.align_relation(e)
-            triple = [_norm(e[0], refgraph), _norm(e[1], refgraph), _norm(e[2], refgraph)]
-            if a.matched:
-                supported += 1
-                res.supported_relations.append(triple)
-            else:
-                res.unsupported_relations.append(triple)
-        res.RP = supported / Ea
-        res.RP_defined = True
+        # Every relation metric is undefined when the response has no relation edges.
+        return res
 
+    strict_supported = 0
+    grounded_edges = 0
+    entailed_edges = 0
+    for edge in sorted(g_a.relations):
+        subject, predicate, obj = (_norm(x) for x in edge)
+        subj_match = refgraph.match_entity(edge[0])
+        obj_match = refgraph.match_entity(edge[2])
+        alignment = refgraph.align_relation(edge)
+        triple = [subject, predicate, obj]
+        strict_ref = list(alignment.ref) if alignment.ref is not None else None
+
+        if alignment.matched:
+            strict_supported += 1
+            res.supported_relations.append(triple)
+        else:
+            res.unsupported_relations.append(triple)
+
+        audit: dict[str, Any] = {
+            "answer_edge": triple,
+            "canonical_edge": None,
+            "subject": {
+                "grounded": subj_match.matched,
+                "canonical": subj_match.ref,
+                "method": subj_match.method,
+            },
+            "object": {
+                "grounded": obj_match.matched,
+                "canonical": obj_match.ref,
+                "method": obj_match.method,
+            },
+            "strict_alignment": {
+                "matched": alignment.matched,
+                "reference_edge": strict_ref,
+                "method": alignment.method,
+            },
+            "evidence": [],
+            "verdict": None,
+            "verifier_cache_hit": None,
+        }
+
+        if not subj_match.matched and not obj_match.matched:
+            audit["status"] = "ungrounded_both"
+        elif not subj_match.matched:
+            audit["status"] = "ungrounded_subject"
+        elif not obj_match.matched:
+            audit["status"] = "ungrounded_object"
+        else:
+            grounded_edges += 1
+            canonical = (subj_match.ref or subject, predicate, obj_match.ref or obj)
+            audit["canonical_edge"] = list(canonical)
+            if verifier is None:
+                # A strict-only run deliberately does not claim textual entailment.
+                audit["status"] = "aligned" if alignment.matched else "grounded_unverified"
+            else:
+                decision = verifier.verify(
+                    canonical, context, query, matching_params=verifier_matching_params
+                )
+                audit["evidence"] = [span.to_dict() for span in decision.evidence]
+                audit["verdict"] = decision.verdict
+                audit["verifier_cache_hit"] = decision.cache_hit
+                if decision.verdict == "entailed":
+                    entailed_edges += 1
+                    audit["status"] = "aligned" if alignment.matched else "entailed_from_text"
+                elif decision.verdict == "contradicted":
+                    audit["status"] = "contradicted"
+                else:
+                    audit["status"] = "grounded_unknown"
+        res.relation_audits.append(audit)
+
+    # Strict fields and legacy aliases always preserve the historical formula.
+    res.RP_strict = strict_supported / Ea
+    res.RP_strict_defined = True
+    res.RP = res.RP_strict
+    res.RP_defined = True
+    res.RP_grounded = grounded_edges / Ea
+    res.RP_grounded_defined = True
+
+    if verifier is not None:
+        res.RP_support = entailed_edges / Ea
+        res.RP_support_defined = True
+        if grounded_edges:
+            res.RP_entailed_cond = entailed_edges / grounded_edges
+            res.RP_entailed_cond_defined = True
     return res
 
 
-def _norm(s: str, refgraph: RefGraph) -> str:
-    from .matching import normalize
-
-    return normalize(s)
+def _norm(value: str) -> str:
+    return normalize(value)
 
 
-# --------------------------------------------------------------------------------------
-# Small helpers used by tuning/eval
-# --------------------------------------------------------------------------------------
 def cfi(eg: float, rp: float | None, alpha: float) -> float:
     """Pure CFI given values (rp=None => edge-aware reduction to EG)."""
-    if rp is None:
-        return eg
-    return alpha * eg + (1.0 - alpha) * rp
+    return eg if rp is None else alpha * eg + (1.0 - alpha) * rp
 
 
 def hallucination(cfi_value: float) -> float:

@@ -100,6 +100,41 @@ def ablation_table(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def relation_score_comparison(df: pd.DataFrame) -> pd.DataFrame:
+    """Compare strict and support hallucination scores when both are available."""
+    rows = []
+    for name, col in [("H_strict", "H_strict"), ("H_support", "H_support")]:
+        if col not in df:
+            continue
+        values = pd.to_numeric(df[col], errors="coerce")
+        sub = df[np.isfinite(values)].copy()
+        h = pd.to_numeric(sub[col], errors="coerce").to_numpy()
+        rows.append({
+            "detector": name,
+            "n": int(len(sub)),
+            "AUC": safe_auc(h, sub["y"].to_numpy()) if len(sub) else float("nan"),
+        })
+    return pd.DataFrame(rows)
+
+
+def relation_status_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+    """Distribution of per-edge audit statuses split by RAGTruth response label."""
+    import json
+
+    rows = []
+    for _, record in df.iterrows():
+        raw = record.get("relation_statuses", "[]")
+        try:
+            statuses = json.loads(raw) if isinstance(raw, str) else list(raw or [])
+        except (TypeError, ValueError):
+            statuses = []
+        for status in statuses:
+            rows.append({"y": int(record["y"]), "status": str(status)})
+    if not rows:
+        return pd.DataFrame(columns=["status", "y", "n"])
+    return pd.DataFrame(rows).groupby(["status", "y"]).size().reset_index(name="n")
+
+
 def context_length_buckets(df: pd.DataFrame, buckets: Sequence[float], hcol: str = "H") -> pd.DataFrame:
     edges = list(buckets)
     labels = [f"[{edges[i]},{edges[i+1]})" for i in range(len(edges) - 1)]
@@ -217,6 +252,9 @@ def run_evaluation(
     tuning_info: dict[str, Any] | None = None,
     usage_summary: dict[str, Any] | None = None,
     n_failed: int = 0,
+    relation_mode: str = "strict",
+    tau_e: float | None = None,
+    tau_r: float | None = None,
 ) -> dict[str, Any]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -241,6 +279,8 @@ def run_evaluation(
     auc_model = auc_breakdown(test_excl, "gen_model")
     prf_task = prf_breakdown(test_excl, theta, "task")
     ablation = ablation_table(test_excl)
+    relation_comparison = relation_score_comparison(test_excl)
+    status_breakdown = relation_status_breakdown(test)
     clb = context_length_buckets(test_excl, buckets)
     gstats = graph_stats(test)
     wil = wilcoxon_factual_vs_hallucinated(test_excl)
@@ -268,9 +308,10 @@ def run_evaluation(
     }
 
     summary = {
+        "relation_mode": relation_mode,
         "alpha": alpha, "theta": theta,
-        "tau_e": float(cfg.matching.entity_sim_threshold),
-        "tau_r": float(cfg.matching.relation_sim_threshold),
+        "tau_e": float(cfg.matching.entity_sim_threshold if tau_e is None else tau_e),
+        "tau_r": float(cfg.matching.relation_sim_threshold if tau_r is None else tau_r),
         "overall_AUC_exclude_unscorable": overall_auc,
         "overall_AUC_ci95": auc_ci,
         "overall_P": p_o, "overall_R": r_o, "overall_F1": f1_o,
@@ -285,6 +326,7 @@ def run_evaluation(
         out_dir, cfg, summary, auc_task, auc_model, prf_task, ablation, clb, gstats, wil,
         tuning_info or {}, usage_summary or {}, degen, plots,
         policy_b={"AUC": auc_imp, "P": p_i, "R": r_i, "F1": f1_i, "impute_h": impute_h},
+        relation_comparison=relation_comparison, status_breakdown=status_breakdown,
     )
     return summary
 
@@ -304,11 +346,13 @@ def _flatten_summary(s: dict[str, Any]) -> dict[str, Any]:
 
 
 def _write_report(out_dir, cfg, summary, auc_task, auc_model, prf_task, ablation, clb,
-                   gstats, wil, tuning_info, usage, degen, plots, policy_b) -> None:
+                   gstats, wil, tuning_info, usage, degen, plots, policy_b,
+                   relation_comparison, status_breakdown) -> None:
     L = []
     A = L.append
     A("# HalluGraph-KGGen — RAGTruth evaluation report\n")
     A(f"- **LLM model:** `{cfg.llm.model}`")
+    A(f"- **relation detector mode:** `{summary['relation_mode']}`")
     A(f"- **Embedding model:** `{cfg.matching.embedding_model}`")
     A(f"- **alpha (tuned on train):** {summary['alpha']}")
     A(f"- **theta / decision threshold (tuned on train F1):** {summary['theta']:.4f}")
@@ -333,6 +377,10 @@ def _write_report(out_dir, cfg, summary, auc_task, auc_model, prf_task, ablation
     A("## 4. AUC by generator model\n"); A(_df_to_md(auc_model) + "\n")
     A("## 5. Precision / Recall / F1 by task (@ tuned theta)\n"); A(_df_to_md(prf_task) + "\n")
     A("## 6. Ablation — EG-only / RP-only / CFI(H) AUC\n"); A(_df_to_md(ablation) + "\n")
+    A("## 6a. Strict vs. text-supported relation score (test)\n")
+    A(_df_to_md(relation_comparison) + "\n" if len(relation_comparison) else "_support not scored_\n")
+    A("## 6b. Relation audit statuses by response label\n")
+    A(_df_to_md(status_breakdown) + "\n" if len(status_breakdown) else "_no relation audits_\n")
     A("## 7. AUC vs. context length (RAGTruth CLB-style buckets)\n")
     A(_df_to_md(clb) + "\n" if len(clb) else "_no data_\n")
     A("## 8. Graph statistics (mean |V|, |E|; empty-E_a fraction)\n"); A(_df_to_md(gstats) + "\n")
@@ -354,6 +402,9 @@ def _write_report(out_dir, cfg, summary, auc_task, auc_model, prf_task, ablation
         if "tau_sweep" in tuning_info:
             A("**tau_e x tau_r sensitivity (train AUC):**\n")
             A(_df_to_md(pd.DataFrame(tuning_info["tau_sweep"])) + "\n")
+        if "joint_cv" in tuning_info:
+            A("**joint tau_e x tau_r x alpha CV:**\n")
+            A(_df_to_md(pd.DataFrame(tuning_info["joint_cv"])) + "\n")
 
     if usage:
         A("## 12. API usage / cost\n")

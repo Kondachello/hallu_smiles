@@ -93,6 +93,58 @@ python run.py --stage all --fake-extractor --data-dir tests/fixture_data --outpu
 **entire pipeline** (extract → cache → score → tune → evaluate → audit) runs with zero network and
 zero torch. It exercises plumbing only — the numbers are meaningless.
 
+### Fixed 20-source QA relation pilot
+
+The pilot selects one response per QA `source_id`: 16 train rows (8/8 labels) and 4 test rows
+(2/2 labels). It writes a manifest; reuse that exact file for the support run so strict and
+text-verified metrics see identical `(C,Q,A)` triples.
+
+```bash
+# Baseline: existing graph-edge RP semantics, no verifier LLM calls.
+python run.py --stage all --relation-mode strict --qa-pilot \
+  --qa-pilot-manifest-out results/qa_pilot_manifest.json \
+  --output-dir results/qa_pilot_strict
+
+# Support variant: verifier checks each grounded answer edge against C/Q text.
+python run.py --stage all --relation-mode support \
+  --qa-pilot-manifest results/qa_pilot_manifest.json \
+  --output-dir results/qa_pilot_support
+```
+
+`RP_strict` remains the historical edge-alignment score. The support run additionally reports
+`RP_grounded`, `RP_entailed_cond`, and `RP_support`; it caches text-verifier verdicts under
+`.cache/verdicts/`. The verifier uses the same `llm.model` as KGGen and returns only
+`entailed`, `contradicted`, or `unknown` for a canonical triple plus up to four source sentences.
+
+### DataSphere batch job
+
+DataSphere Jobs mount Project storage for reads.  Therefore the gated model is staged **once**
+from a cheap `c1.4` Jupyter session into shared storage, and GPU Jobs never download it or install
+packages at runtime.  The strict and support modes then run sequentially under one vLLM server on
+the same 20-QA manifest and job-local KG/verdict caches.
+
+```bash
+# In DataSphere Jupyter, after adding the project secret HF_TOKEN and accepting Meta's HF license.
+export DS_SHARED_ROOT="$DS_PROJECT_HOME/hallu_smiles/shared"
+python scripts/stage_datasphere_shared_assets.py --shared-root "$DS_SHARED_ROOT"
+
+# Locally, pin and submit a read-only preflight followed by the one-GPU pilot.
+COMMIT="$(git rev-parse HEAD)"
+python scripts/render_datasphere_job.py --kind preflight --commit "$COMMIT" \
+  --run-id preflight-20260716 --output datasphere/jobs/rendered/preflight.yaml
+datasphere project job execute -p <PROJECT_ID> -c datasphere/jobs/rendered/preflight.yaml
+
+python scripts/render_datasphere_job.py --kind qa-pilot-g1 --commit "$COMMIT" \
+  --run-id new-metrics-20260716 --output datasphere/jobs/rendered/qa-pilot.yaml
+datasphere project job execute -p <PROJECT_ID> -c datasphere/jobs/rendered/qa-pilot.yaml
+```
+
+The GPU configuration is one `g1.1` V100 in FP16, with `max-model-len=8192` and a hard
+three-hour limit (777,600 units plus at most 60 seconds of graceful shutdown).  Per-run outputs
+contain the strict/support reports, comparison, audits, vLLM log, GPU utilization trace, and
+metadata.  See [the team DataSphere runbook](docs/datasphere-team-runbook.md) for the shared-storage
+contract and monitoring procedure.
+
 ## 5. Outputs (`results/`)
 
 - `metrics.csv` — per-response scored rows (EG, RP, H, graph sizes, split, task, model…).
