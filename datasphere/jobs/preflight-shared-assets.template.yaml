@@ -1,6 +1,6 @@
 # Render with scripts/render_datasphere_job.py; do not submit this template directly.
 name: hallu-shared-preflight-__RUN_ID__
-desc: Verify immutable Llama and RAGTruth assets before a GPU experiment.
+desc: Verify immutable Qwen and RAGTruth assets before a GPU experiment.
 cmd: >
   set -Eeuo pipefail;
   export ARTIFACT_DIR="${PWD}/preflight-artifacts/__RUN_ID__";
@@ -13,11 +13,11 @@ cmd: >
   test "$actual_commit" = "__GIT_COMMIT__";
   python source/scripts/resolve_datasphere_shared_model.py
     --shared-root "${DS_PROJECT_HOME}/hallu_smiles/shared"
-    --model-id "meta-llama/Meta-Llama-3.1-8B-Instruct" > "$ARTIFACT_DIR/model-path.txt";
+    --model-id "__MODEL_ID__" > "$ARTIFACT_DIR/model-path.txt";
   python source/scripts/check_datasphere_shared_assets.py
     --model-path "$(cat "$ARTIFACT_DIR/model-path.txt")"
     --data-dir "${DS_PROJECT_HOME}/hallu_smiles/shared/ragtruth"
-    --model-id "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    --model-id "__MODEL_ID__"
     --report "$ARTIFACT_DIR/preflight.json";
   tar -C "$(dirname "$ARTIFACT_DIR")" -czf "${ARTIFACT_ARCHIVE}" "$(basename "$ARTIFACT_DIR")"
 env:

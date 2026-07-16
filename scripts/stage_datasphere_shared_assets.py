@@ -3,20 +3,21 @@
 
 This program is intentionally *not* a DataSphere Job entrypoint.  Jobs mount
 ``DS_PROJECT_HOME`` for reads, so the one-time write must happen in Jupyter.
-It never prints the value of ``HF_TOKEN``.
+``HF_TOKEN`` is optional for public models and required only by a model host
+that enforces access control.  Its value is never printed.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_ID_DEFAULT = "meta-llama/Meta-Llama-3.1-8B-Instruct"
-MODEL_FAMILY = "llama-3.1-8b"
+MODEL_ID_DEFAULT = "Qwen/Qwen2.5-7B-Instruct"
 MODEL_READY = ".hallu_smiles_model_ready"
 MODEL_MANIFEST = "model-manifest.json"
 DATA_MANIFEST = "ragtruth-manifest.json"
@@ -41,6 +42,14 @@ def _file_inventory(root: Path) -> list[dict[str, int | str]]:
     ]
 
 
+def _model_family(model_id: str) -> str:
+    """Return a readable, stable Project-storage directory for a HF model ID."""
+    family = re.sub(r"[^a-z0-9]+", "-", model_id.lower()).strip("-")
+    if not family:
+        raise ValueError(f"model ID cannot be converted to a storage directory: {model_id!r}")
+    return family
+
+
 def _ready_model(path: Path, model_id: str) -> bool:
     manifest_path = path / MODEL_MANIFEST
     ready_path = path / MODEL_READY
@@ -55,15 +64,13 @@ def _ready_model(path: Path, model_id: str) -> bool:
 
 def stage_model(shared_root: Path, model_id: str, revision: str | None) -> Path:
     token = os.environ.get("HF_TOKEN")
-    if not token:
-        raise RuntimeError("HF_TOKEN is required only while staging the gated Meta model.")
 
     # Keep this import lazy: offline tests and normal GPU Jobs must not need it.
     from huggingface_hub import HfApi, snapshot_download
 
     api = HfApi(token=token)
     resolved_revision = api.model_info(model_id, revision=revision).sha
-    family_root = shared_root / "models" / MODEL_FAMILY
+    family_root = shared_root / "models" / _model_family(model_id)
     destination = family_root / resolved_revision
     if _ready_model(destination, model_id):
         print(f"[skip] shared model is ready: {destination}")

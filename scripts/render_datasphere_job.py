@@ -13,6 +13,8 @@ TEMPLATES = {
 }
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
+MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+DEFAULT_MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
 
 
 def main() -> None:
@@ -21,14 +23,21 @@ def main() -> None:
     parser.add_argument("--commit", required=True, help="Lowercase Git SHA to clone and verify.")
     parser.add_argument("--run-id", required=True, help="Lowercase, dash-separated output/job suffix.")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help="HF model ID selected for this Job.")
     args = parser.parse_args()
 
     if not COMMIT_RE.fullmatch(args.commit):
         raise SystemExit("--commit must be a lowercase full 40-character hexadecimal Git SHA")
     if not RUN_ID_RE.fullmatch(args.run_id):
         raise SystemExit("--run-id must match [a-z0-9][a-z0-9-]{0,47}")
+    if not MODEL_ID_RE.fullmatch(args.model_id):
+        raise SystemExit("--model-id must look like an organization/model Hugging Face ID")
     rendered = TEMPLATES[args.kind].read_text(encoding="utf-8")
-    rendered = rendered.replace("__GIT_COMMIT__", args.commit).replace("__RUN_ID__", args.run_id)
+    rendered = (
+        rendered.replace("__GIT_COMMIT__", args.commit)
+        .replace("__RUN_ID__", args.run_id)
+        .replace("__MODEL_ID__", args.model_id)
+    )
     if "__" in rendered:
         raise RuntimeError("unresolved placeholder in Job template")
     output = Path(args.output)

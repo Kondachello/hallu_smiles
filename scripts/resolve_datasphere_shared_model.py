@@ -13,14 +13,21 @@ def main() -> None:
     parser.add_argument("--model-id", required=True)
     args = parser.parse_args()
 
-    family_root = Path(args.shared_root) / "models" / "llama-3.1-8b"
-    active_path = family_root / "active-model.json"
-    try:
-        active = json.loads(active_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"no valid active model manifest: {active_path}") from exc
-    if active.get("model_id") != args.model_id:
-        raise SystemExit(f"active model ID mismatch: {active.get('model_id')!r}")
+    models_root = Path(args.shared_root) / "models"
+    candidates: list[tuple[Path, dict[str, object]]] = []
+    for active_path in sorted(models_root.glob("*/active-model.json")):
+        try:
+            active = json.loads(active_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if active.get("model_id") == args.model_id:
+            candidates.append((active_path.parent, active))
+    if len(candidates) != 1:
+        raise SystemExit(
+            f"expected exactly one active model manifest for {args.model_id!r} under {models_root}; "
+            f"found {len(candidates)}"
+        )
+    family_root, active = candidates[0]
     model_dir = family_root / str(active.get("model_dir", ""))
     if not (model_dir / ".hallu_smiles_model_ready").is_file():
         raise SystemExit(f"active model is not ready: {model_dir}")

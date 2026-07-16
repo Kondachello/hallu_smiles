@@ -11,7 +11,7 @@ cmd: >
   git -C source checkout --detach FETCH_HEAD;
   actual_commit="$(git -C source rev-parse HEAD)";
   test "$actual_commit" = "__GIT_COMMIT__";
-  export MODEL_ID="meta-llama/Meta-Llama-3.1-8B-Instruct";
+  export MODEL_ID="__MODEL_ID__";
   export MODEL_PATH="$(python source/scripts/resolve_datasphere_shared_model.py
     --shared-root "${DS_PROJECT_HOME}/hallu_smiles/shared" --model-id "$MODEL_ID")";
   export DATA_DIR="${DS_PROJECT_HOME}/hallu_smiles/shared/ragtruth";
