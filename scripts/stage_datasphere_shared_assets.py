@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_ID_DEFAULT = "Qwen/Qwen2.5-7B-Instruct"
+MODEL_ID_DEFAULT = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 MODEL_READY = ".hallu_smiles_model_ready"
 MODEL_MANIFEST = "model-manifest.json"
 DATA_MANIFEST = "ragtruth-manifest.json"

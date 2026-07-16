@@ -11,13 +11,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
-MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
+MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 REVISION = "a" * 40
 
 
 def _shared_assets(tmp_path: Path) -> tuple[Path, Path, Path]:
     shared = tmp_path / "shared"
-    model = shared / "models" / "qwen-qwen2-5-7b-instruct" / REVISION
+    model = shared / "models" / "meta-llama-meta-llama-3-1-8b-instruct" / REVISION
     model.mkdir(parents=True)
     (model / "config.json").write_text("{}", encoding="utf-8")
     (model / "model-00001-of-00001.safetensors").write_bytes(b"weights")
@@ -104,8 +104,8 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)
 
 
-def test_stager_defaults_to_public_qwen_and_uses_model_specific_storage():
+def test_stager_defaults_to_gated_llama_and_uses_model_specific_storage():
     text = (SCRIPTS / "stage_datasphere_shared_assets.py").read_text(encoding="utf-8")
-    assert 'MODEL_ID_DEFAULT = "Qwen/Qwen2.5-7B-Instruct"' in text
+    assert 'MODEL_ID_DEFAULT = "meta-llama/Meta-Llama-3.1-8B-Instruct"' in text
     assert 'shared_root / "models" / _model_family(model_id)' in text
     assert "optional for public models" in text

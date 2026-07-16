@@ -1,6 +1,6 @@
-# DataSphere: общая Qwen и безопасные запуски веток
+# DataSphere: общая Llama 3.1 8B и безопасные запуски веток
 
-Эта памятка описывает единственный общий экземпляр Qwen и изолированные Jobs
+Эта памятка описывает единственный общий экземпляр Llama 3.1 8B и изолированные Jobs
 для экспериментов. Она рассчитана на проект `Online_project19_1` в одной
 DataSphere community.
 
@@ -10,7 +10,7 @@ DataSphere community.
 
 ```text
 $DS_PROJECT_HOME/hallu_smiles/shared/
-├── models/qwen-qwen2-5-7b-instruct/
+├── models/meta-llama-meta-llama-3-1-8b-instruct/
 │   ├── active-model.json
 │   └── <HF commit SHA>/
 │       ├── model-manifest.json
@@ -27,13 +27,12 @@ $DS_PROJECT_HOME/hallu_smiles/shared/
 ```bash
 export DS_SHARED_ROOT="$DS_PROJECT_HOME/hallu_smiles/shared"
 python scripts/stage_datasphere_shared_assets.py --shared-root "$DS_SHARED_ROOT" \
-  --model-id Qwen/Qwen2.5-7B-Instruct
+  --model-id meta-llama/Meta-Llama-3.1-8B-Instruct
 ```
 
-Qwen публичен и для него `HF_TOKEN` не нужен. Скрипт сам разрешает точный HF
-commit, пишет manifest и создаёт `ready`-маркер только после полной загрузки.
-Для gated-модели токен допускается только в одноразовой staging-сессии; GPU Jobs
-не нуждаются в токене.
+Llama gated: `HF_TOKEN` c read-only доступом допускается только в одноразовой
+staging-сессии. Скрипт сам разрешает точный HF commit, пишет manifest и создаёт
+`ready`-маркер только после полной загрузки. GPU Jobs не нуждаются в токене.
 
 **Никому не разрешается** удалять, перезаписывать или класть рабочие кэши в
 `shared/models` и `shared/ragtruth`. Jobs монтируют Project storage для чтения;
@@ -49,7 +48,7 @@ commit, пишет manifest и создаёт `ready`-маркер только 
    COMMIT="$(git rev-parse HEAD)"
    RUN_ID="preflight-$(date -u +%Y%m%d-%H%M%S)"
    python scripts/render_datasphere_job.py --kind preflight \
-     --commit "$COMMIT" --model-id Qwen/Qwen2.5-7B-Instruct --run-id "$RUN_ID" \
+     --commit "$COMMIT" --model-id meta-llama/Meta-Llama-3.1-8B-Instruct --run-id "$RUN_ID" \
      --output datasphere/jobs/rendered/preflight.yaml
    datasphere project job execute -p <PROJECT_ID> \
      -c datasphere/jobs/rendered/preflight.yaml
@@ -63,7 +62,7 @@ commit, пишет manifest и создаёт `ready`-маркер только 
 
    ```bash
    python scripts/render_datasphere_job.py --kind qa-pilot-g1 \
-     --commit "$COMMIT" --model-id Qwen/Qwen2.5-7B-Instruct --run-id "$RUN_ID" \
+     --commit "$COMMIT" --model-id meta-llama/Meta-Llama-3.1-8B-Instruct --run-id "$RUN_ID" \
      --output datasphere/jobs/rendered/qa-pilot.yaml
    datasphere project job execute -p <PROJECT_ID> \
      -c datasphere/jobs/rendered/qa-pilot.yaml

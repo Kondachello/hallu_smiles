@@ -118,26 +118,27 @@ python run.py --stage all --relation-mode support \
 
 ### DataSphere batch job
 
-DataSphere Jobs mount Project storage for reads.  Therefore Qwen is staged **once**
+DataSphere Jobs mount Project storage for reads.  Therefore Llama 3.1 8B is staged **once**
 from a cheap `c1.4` Jupyter session into shared storage, and GPU Jobs never download it or install
 packages at runtime.  The strict and support modes then run sequentially under one vLLM server on
 the same 20-QA manifest and job-local KG/verdict caches.
 
 ```bash
-# In DataSphere Jupyter. Qwen is public and does not need HF_TOKEN.
+# In DataSphere Jupyter. Llama is gated: export a read-only HF_TOKEN for this
+# one-time staging session only; the GPU Job never receives it.
 export DS_SHARED_ROOT="$DS_PROJECT_HOME/hallu_smiles/shared"
 python scripts/stage_datasphere_shared_assets.py --shared-root "$DS_SHARED_ROOT" \
-  --model-id Qwen/Qwen2.5-7B-Instruct
+  --model-id meta-llama/Meta-Llama-3.1-8B-Instruct
 
 # Locally, pin and submit a read-only preflight followed by the one-GPU pilot.
 COMMIT="$(git rev-parse HEAD)"
 python scripts/render_datasphere_job.py --kind preflight --commit "$COMMIT" \
-  --model-id Qwen/Qwen2.5-7B-Instruct --run-id preflight-20260716 \
+  --model-id meta-llama/Meta-Llama-3.1-8B-Instruct --run-id preflight-20260716 \
   --output datasphere/jobs/rendered/preflight.yaml
 datasphere project job execute -p <PROJECT_ID> -c datasphere/jobs/rendered/preflight.yaml
 
 python scripts/render_datasphere_job.py --kind qa-pilot-g1 --commit "$COMMIT" \
-  --model-id Qwen/Qwen2.5-7B-Instruct --run-id new-metrics-20260716 \
+  --model-id meta-llama/Meta-Llama-3.1-8B-Instruct --run-id new-metrics-20260716 \
   --output datasphere/jobs/rendered/qa-pilot.yaml
 datasphere project job execute -p <PROJECT_ID> -c datasphere/jobs/rendered/qa-pilot.yaml
 ```
