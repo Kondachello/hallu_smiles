@@ -10,5 +10,5 @@ tqdm
 matplotlib
 tabulate
 PyYAML
-vllm>=0.6,<1
+vllm==0.6.3.post1
 huggingface_hub[cli]>=0.27

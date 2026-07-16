@@ -18,6 +18,7 @@ git switch -c <your-branch>
 
 - Общие Llama 3.1 8B и RAGTruth находятся в Project storage.
 - GPU Job читает их read-only: модель заново не скачиваем.
+- Не меняем закреплённый `vllm==0.6.3.post1`: он выбран для driver V100 `g1.1`.
 - `HF_TOKEN` обычным Jobs не нужен и не передаётся.
 - Общие `shared/models` и `shared/ragtruth` не редактируем и не удаляем.
 

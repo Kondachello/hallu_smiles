@@ -39,6 +39,14 @@ def _validate_requirements(path: Path) -> None:
         )
 
 
+def _validate_gpu_requirements(path: Path) -> None:
+    lines = {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
+    _require(
+        "vllm==0.6.3.post1" in lines,
+        "g1.1 requires the driver-compatible vllm==0.6.3.post1 pin; do not use a floating vLLM range",
+    )
+
+
 def validate_job(path: Path, repo_root: Path) -> dict:
     try:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -68,11 +76,14 @@ def validate_job(path: Path, repo_root: Path) -> dict:
     _require(python.get("local-paths"), "manual shell Job requires non-empty env.python.local-paths")
     requirements = python.get("requirements-file")
     _require(isinstance(requirements, str), "manual Job requires env.python.requirements-file")
-    _validate_requirements(repo_root / requirements)
+    requirements_path = repo_root / requirements
+    _validate_requirements(requirements_path)
 
     lowered = body.lower()
     _require("huggingface-cli download" not in lowered, "GPU/CPU Job must not download model weights")
     _require("pip install" not in lowered, "GPU/CPU Job must not install packages at runtime")
+    if document.get("cloud-instance-types") == ["g1.1"]:
+        _validate_gpu_requirements(requirements_path)
     return document
 
 

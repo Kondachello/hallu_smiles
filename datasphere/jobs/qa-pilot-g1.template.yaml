@@ -14,8 +14,8 @@ cmd: >-
   export MODEL_ID="__MODEL_ID__";
   export MODEL_PATH="$(python source/scripts/resolve_datasphere_shared_model.py --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared" --model-id "$MODEL_ID")";
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
-  export VLLM_DTYPE=half;
-  export VLLM_MAX_MODEL_LEN=8192;
+  export MODEL_DTYPE=half;
+  export MODEL_MAX_MODEL_LEN=8192;
   export DATASPHERE_UNITS_PER_SECOND=72;
   export GPU_TIME_LIMIT_SECONDS=10800;
   set +e;

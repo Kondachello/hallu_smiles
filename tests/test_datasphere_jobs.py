@@ -95,12 +95,14 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert config["working-storage"]["size"] == "100Gb"
     assert "timeout --signal=TERM --kill-after=60s 10800" in config["cmd"]
     assert config["outputs"] == [{"qa-pilot-new-metrics-20260716.tar.gz": "ARTIFACT_ARCHIVE"}]
+    assert "vllm==0.6.3.post1" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
 
     runner = (SCRIPTS / "run_datasphere_qa_pilot.sh").read_text(encoding="utf-8")
     assert "huggingface-cli download" not in runner
     assert "pip install" not in runner
     assert "--relation-mode strict" in runner
     assert "--relation-mode support" in runner
+    assert "check_datasphere_gpu_runtime.py" in runner
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)
 
 

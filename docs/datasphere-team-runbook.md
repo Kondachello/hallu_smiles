@@ -139,6 +139,12 @@ GPU Job неизменно использует `g1.1` (V100 32 GB), FP16,
 останавливает vLLM. После terminal status DataSphere освобождает GPU VM сам;
 держать Job для просмотра отчёта не нужно.
 
+`requirements.datasphere.txt` намеренно закрепляет `vllm==0.6.3.post1`: эта
+версия использует PyTorch 2.4/CUDA 12.1, совместимые с CUDA 12.2 driver `g1.1`.
+Не заменяйте pin на диапазон версий: новый vLLM может потребовать более свежий
+driver. До загрузки модели Job записывает `gpu-runtime.json` с CUDA smoke-check,
+версией PyTorch/CUDA, GPU и compute capability.
+
 ## Что именно pre-submit проверяет
 
 `scripts/validate_datasphere_job.py` запускается helper-ом автоматически. Он
@@ -184,8 +190,8 @@ mkdir -p "outputs/datasphere-results/<RUN_ID>"
   --output-dir "outputs/datasphere-results/<RUN_ID>"
 ```
 
-В архиве QA Job обязательны `shared-assets-preflight.json`, `vllm.log`,
-`gpu.csv`, `run_metadata.json`, `qa_pilot_manifest.json`, `strict/`,
+В архиве QA Job обязательны `shared-assets-preflight.json`, `gpu-runtime.json`,
+`vllm.log`, `gpu.csv`, `run_metadata.json`, `qa_pilot_manifest.json`, `strict/`,
 `support/`, `comparison.json` и `comparison.md`. Если Job уже `EXECUTING`, но
 из log видно, что vLLM не прошёл healthcheck или долго нет GPU activity,
 отмените именно этот Job: `datasphere project job cancel --id <JOB_ID> --graceful`.

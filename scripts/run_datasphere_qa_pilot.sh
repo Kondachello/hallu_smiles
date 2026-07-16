@@ -15,8 +15,8 @@ MIN_WORK_FREE_GB="${MIN_WORK_FREE_GB:-5}"
 # FP16 works on both V100 and A100.  In particular, a V100 cannot serve the
 # model's native BF16 dtype.  8192 tokens comfortably covers the 6000-char KG
 # chunks while avoiding a needless 128K KV-cache reservation on a 32-GiB V100.
-VLLM_DTYPE="${VLLM_DTYPE:-half}"
-VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-8192}"
+MODEL_DTYPE="${MODEL_DTYPE:-half}"
+MODEL_MAX_MODEL_LEN="${MODEL_MAX_MODEL_LEN:-8192}"
 RUNTIME_CONFIG="$RUN_ROOT/runtime_config.yaml"
 MANIFEST="$RUN_ROOT/qa_pilot_manifest.json"
 STRICT_OUT="$RUN_ROOT/strict"
@@ -58,6 +58,8 @@ command -v nvidia-smi >/dev/null || { echo "nvidia-smi is absent; this must run 
 "$PYTHON_BIN" "$ROOT/scripts/check_datasphere_shared_assets.py" \
   --model-path "$MODEL_PATH" --data-dir "$DATA_DIR" \
   --model-id "$MODEL_ID" --report "$RUN_ROOT/shared-assets-preflight.json"
+"$PYTHON_BIN" "$ROOT/scripts/check_datasphere_gpu_runtime.py" \
+  --report "$RUN_ROOT/gpu-runtime.json"
 "$PYTHON_BIN" - "$RUN_ROOT/shared-assets-preflight.json" "$RUN_ROOT/model_revision.txt" <<'PY'
 import json
 import sys
@@ -97,7 +99,7 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-local-datasphere-key}"
 vllm serve "$MODEL_PATH" \
   --served-model-name "$MODEL_ID" \
   --host 127.0.0.1 --port "$PORT" \
-  --dtype "$VLLM_DTYPE" --max-model-len "$VLLM_MAX_MODEL_LEN" \
+  --dtype "$MODEL_DTYPE" --max-model-len "$MODEL_MAX_MODEL_LEN" \
   --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.90}" \
   >"$VLLM_LOG" 2>&1 &
 VLLM_PID=$!
