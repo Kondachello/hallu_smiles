@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -61,7 +61,9 @@ def check(model_path: Path, data_dir: Path, model_id: str) -> dict[str, Any]:
         if expected_data_sizes.get(name) != path.stat().st_size:
             raise RuntimeError(f"RAGTruth file does not match manifest: {path}")
     return {
-        "checked_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        # Keep the verifier runnable in Python 3.10 c1.4 preflight sessions,
+        # where ``datetime.UTC`` (added in 3.11) is unavailable.
+        "checked_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "model_id": model_id,
         "model_revision": manifest["revision"],
         "model_path": str(model_path),

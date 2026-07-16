@@ -1,6 +1,6 @@
 # Render with scripts/render_datasphere_job.py; do not submit this template directly.
 name: hallu-shared-preflight-__RUN_ID__
-desc: Verify immutable Qwen and RAGTruth assets before a GPU experiment.
+desc: Verify immutable Llama and RAGTruth assets before a GPU experiment.
 cmd: >
   set -Eeuo pipefail;
   export ARTIFACT_DIR="${PWD}/preflight-artifacts/__RUN_ID__";
