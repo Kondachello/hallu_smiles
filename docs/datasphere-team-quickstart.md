@@ -28,6 +28,10 @@
 - Пара `torch==2.4` и `vllm==0.6.3.post1` требует
   `transformers>=4.45.2,<5`. Верхняя граница важна: Transformers 5.x пытается
   импортировать API более нового PyTorch, и vLLM не успевает открыть порт.
+- Локальный vLLM намеренно ограничен 8 192 токенами на V100. Поэтому KGGen
+  должен получить `llm.max_tokens: 1024`: его дефолт 16 000 переполняет окно
+  ещё до генерации. Скрипт делает один дешёвый completion smoke-check после
+  healthcheck, прежде чем запускать все 20 QA.
 
 ## Короткая схема
 
@@ -254,6 +258,7 @@ shared assets и не влияет на отдельные Jobs.
 | Аргумент `--shared-root` стал отдельной командой | Некорректный folded YAML/отступ. | Не редактировать сгенерированную shell-команду; helper её валидирует. |
 | vLLM не стартует: driver/CUDA too old | Установилась новая несовместимая версия vLLM. | Не использовать `>=`; сохранить `vllm==0.6.3.post1` и смотреть `gpu-runtime.json`. |
 | vLLM ждёт healthcheck, а в логе `cannot import name 'DTensor'` | Resolver поставил Transformers 5.x, несовместимый с PyTorch 2.4. | Сохранить прямой pin `transformers>=4.45.2,<5`; не убирать его при обновлении requirements. |
+| `/v1/chat/completions` отвечает `400`, а `failed_extractions.jsonl` содержит `ContextWindowExceededError` | KGGen без явного лимита просит до 16 000 output tokens, но vLLM для V100 ограничен 8 192. | Сохранить `llm.max_tokens: 1024` в runtime config и completion smoke-check до QA. |
 | Логи `attach` шумные или пустые | Локальный macOS gRPC клиент нестабилен. | Смотреть `job get` и Launch history; архив скачивать после terminal. |
 | Повторная загрузка модели / нехватка диска | GPU Job пытается staging/download. | GPU Job только читает ready-marker; staging — лишь одноразово на c1.4. |
 | Непонятно, где результат | Job output — не Git и не shared model folder. | Скачивать архив в `outputs/datasphere-results/<RUN_ID>/`. |

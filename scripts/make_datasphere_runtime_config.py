@@ -16,11 +16,19 @@ def main() -> None:
     parser.add_argument("--api-base", required=True)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=1024,
+        help="Maximum completion tokens for KGGen; must fit the local vLLM context window.",
+    )
+    parser.add_argument(
         "--work-dir",
         required=True,
         help="Writable, job-local directory for caches and generated artifacts.",
     )
     args = parser.parse_args()
+    if args.max_tokens <= 0:
+        raise ValueError("--max-tokens must be positive")
 
     with open(args.base_config, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -28,6 +36,10 @@ def main() -> None:
     config["llm"]["model"] = f"openai/{args.model_id}"
     config["llm"]["api_base"] = args.api_base
     config["llm"]["api_key_env"] = "OPENAI_API_KEY"
+    # KGGen 0.4 otherwise defaults to 16k completion tokens.  The g1.1
+    # Llama server deliberately has an 8k context window, so the upstream
+    # default makes every extraction request fail before generation begins.
+    config["llm"]["max_tokens"] = args.max_tokens
     config["data"]["dir"] = args.data_dir
     # DataSphere mounts project storage read-only in Jobs.  Every mutable file
     # therefore belongs to the job-local output directory, never DS_PROJECT_HOME.

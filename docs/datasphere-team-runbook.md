@@ -146,6 +146,14 @@ driver. Также сохраняйте `transformers>=4.45.2,<5`: Transformers 
 API более нового PyTorch и ломает импорт vLLM 0.6.3 ещё до healthcheck. До загрузки модели Job записывает `gpu-runtime.json` с CUDA smoke-check,
 версией PyTorch/CUDA, GPU и compute capability.
 
+`max-model-len=8192` — сознательный лимит, позволяющий Llama 8B работать на
+V100 32 GB. Для KGGen в Job обязательно выставляется `llm.max_tokens=1024`:
+без него KGGen 0.4 допускает до 16k output tokens, и vLLM отклоняет запросы с
+`ContextWindowExceededError`. Сразу после `/health` Job выполняет один
+двухтокенный `/v1/chat/completions` smoke-check. Он проверяет путь модели,
+OpenAI-совместимый API и контекст до того, как будут оплачены десятки extraction
+запросов.
+
 ## Что именно pre-submit проверяет
 
 `scripts/validate_datasphere_job.py` запускается helper-ом автоматически. Он

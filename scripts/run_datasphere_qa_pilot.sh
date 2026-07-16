@@ -17,6 +17,9 @@ MIN_WORK_FREE_GB="${MIN_WORK_FREE_GB:-5}"
 # chunks while avoiding a needless 128K KV-cache reservation on a 32-GiB V100.
 MODEL_DTYPE="${MODEL_DTYPE:-half}"
 MODEL_MAX_MODEL_LEN="${MODEL_MAX_MODEL_LEN:-8192}"
+# KGGen 0.4 otherwise requests up to 16k completion tokens.  That cannot fit
+# alongside a prompt in the deliberately memory-safe 8k vLLM context window.
+KGGEN_MAX_TOKENS="${KGGEN_MAX_TOKENS:-1024}"
 RUNTIME_CONFIG="$RUN_ROOT/runtime_config.yaml"
 MANIFEST="$RUN_ROOT/qa_pilot_manifest.json"
 STRICT_OUT="$RUN_ROOT/strict"
@@ -94,6 +97,7 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-local-datasphere-key}"
   --model-id "$MODEL_ID" \
   --api-base "http://127.0.0.1:${PORT}/v1" \
   --data-dir "$DATA_DIR" \
+  --max-tokens "$KGGEN_MAX_TOKENS" \
   --work-dir "$RUN_ROOT"
 
 vllm serve "$MODEL_PATH" \
@@ -111,6 +115,8 @@ for _ in $(seq 1 120); do
   sleep 2
 done
 curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null
+"$PYTHON_BIN" "$ROOT/scripts/check_datasphere_vllm_completion.py" \
+  --port "$PORT" --model-id "$MODEL_ID"
 
 nvidia-smi --query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used,memory.total \
   --format=csv,noheader,nounits -l 10 >"$GPU_LOG" 2>&1 &
