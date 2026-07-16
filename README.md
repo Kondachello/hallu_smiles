@@ -124,9 +124,11 @@ packages at runtime.  The strict and support modes then run sequentially under o
 the same 20-QA manifest and job-local KG/verdict caches.
 
 ```bash
-# In DataSphere Jupyter. Llama is gated: export a read-only HF_TOKEN for this
-# one-time staging session only; the GPU Job never receives it.
-export DS_SHARED_ROOT="$DS_PROJECT_HOME/hallu_smiles/shared"
+# In DataSphere Jupyter. Start at the Jupyter Project directory, then use the
+# repository's shared/ folder. DS_PROJECT_HOME is a Job-only mount variable.
+# Llama is gated: HF_TOKEN is read only here; the GPU Job never receives it.
+cd /home/jupyter/project/hallu_smiles
+export DS_SHARED_ROOT="$PWD/shared"
 python scripts/stage_datasphere_shared_assets.py --shared-root "$DS_SHARED_ROOT" \
   --model-id meta-llama/Meta-Llama-3.1-8B-Instruct
 

@@ -9,6 +9,10 @@ DataSphere community.
 В Project storage используются только эти пути:
 
 ```text
+# In JupyterLab (the one-time writer):
+/home/jupyter/project/hallu_smiles/shared/
+
+# In DataSphere Jobs (read-only mount of the same Project storage):
 $DS_PROJECT_HOME/hallu_smiles/shared/
 ├── models/meta-llama-meta-llama-3-1-8b-instruct/
 │   ├── active-model.json
@@ -25,7 +29,9 @@ $DS_PROJECT_HOME/hallu_smiles/shared/
 Один ответственный человек выполняет это из Jupyter на `c1.4`, а не из Job:
 
 ```bash
-export DS_SHARED_ROOT="$DS_PROJECT_HOME/hallu_smiles/shared"
+# DS_PROJECT_HOME exists in Jobs, not in Dedicated JupyterLab.
+cd /home/jupyter/project/hallu_smiles
+export DS_SHARED_ROOT="$PWD/shared"
 python scripts/stage_datasphere_shared_assets.py --shared-root "$DS_SHARED_ROOT" \
   --model-id meta-llama/Meta-Llama-3.1-8B-Instruct
 ```

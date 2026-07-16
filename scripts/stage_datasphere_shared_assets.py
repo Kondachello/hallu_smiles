@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Stage immutable model and RAGTruth assets from a DataSphere Jupyter c1.4 VM.
 
-This program is intentionally *not* a DataSphere Job entrypoint.  Jobs mount
-``DS_PROJECT_HOME`` for reads, so the one-time write must happen in Jupyter.
+This program is intentionally *not* a DataSphere Job entrypoint. Jobs mount
+``DS_PROJECT_HOME`` for reads, while Dedicated JupyterLab writes under its
+current Project directory; the one-time write must happen in Jupyter.
 ``HF_TOKEN`` is optional for public models and required only by a model host
 that enforces access control.  Its value is never printed.
 """
@@ -12,7 +13,7 @@ import argparse
 import json
 import os
 import re
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,9 @@ DATA_MANIFEST = "ragtruth-manifest.json"
 
 
 def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    # DataSphere's default image currently uses Python 3.10, where
+    # ``datetime.UTC`` is not available yet (it was added in Python 3.11).
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -144,7 +147,10 @@ def main() -> None:
     parser.add_argument(
         "--shared-root",
         default=os.environ.get("DS_SHARED_ROOT", ""),
-        help="Shared Project-storage root; normally $DS_PROJECT_HOME/hallu_smiles/shared.",
+        help=(
+            "Shared Project-storage root; normally <Jupyter project "
+            "directory>/hallu_smiles/shared in Dedicated JupyterLab."
+        ),
     )
     parser.add_argument("--model-id", default=MODEL_ID_DEFAULT)
     parser.add_argument("--revision", help="Optional HF revision; otherwise resolve the current commit once.")
