@@ -81,6 +81,8 @@ command -v nvidia-smi >/dev/null || { echo "nvidia-smi is absent; this must run 
   --model-id "$MODEL_ID" --report "$RUN_ROOT/shared-assets-preflight.json"
 "$PYTHON_BIN" "$ROOT/scripts/check_datasphere_gpu_runtime.py" \
   --report "$RUN_ROOT/gpu-runtime.json"
+"$PYTHON_BIN" "$ROOT/scripts/patch_datasphere_lmfe_bool_schema.py" \
+  --report "$RUN_ROOT/lmfe-bool-schema-patch.json"
 "$PYTHON_BIN" - "$RUN_ROOT/shared-assets-preflight.json" "$RUN_ROOT/model_revision.txt" <<'PY'
 import json
 import sys

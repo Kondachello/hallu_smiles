@@ -151,7 +151,7 @@ vLLM не нужна скачиваемая LiteLLM-карта цен, а вне
 версия использует PyTorch 2.4/CUDA 12.1, совместимые с CUDA 12.2 driver `g1.1`.
 Не заменяйте pin на диапазон версий: новый vLLM может потребовать более свежий
 driver. Также сохраняйте точный `transformers==4.45.2`: эта версия проверена
-вместе с `lm-format-enforcer==0.10.11`. Плавающий диапазон поставил 4.57, где
+вместе с `lm-format-enforcer==0.10.6`. Плавающий диапазон поставил 4.57, где
 удален `LogitsWarper`, и первый completion завершался HTTP 500. Transformers
 5.x дополнительно требует API более нового PyTorch и ломает импорт vLLM 0.6.3
 ещё до healthcheck. До загрузки модели Job записывает `gpu-runtime.json` с CUDA smoke-check,
@@ -176,17 +176,19 @@ V100 32 GB. Для KGGen в Job обязательно выставляется 
 простоя.
 
 Для vLLM 0.6.3 Job задаёт `--guided-decoding-backend lm-format-enforcer` и
-pin `lm-format-enforcer==0.10.11`. Эта версия сохраняет совместимый с vLLM
-adapter и исправляет парсинг `additionalProperties: false` в closed JSON Schema,
-которую передаёт native `guided_json`. Default `outlines` в этой среде импортирует
+pin `lm-format-enforcer==0.10.6`, который строго требует vLLM 0.6.3. Перед
+стартом server `patch_datasphere_lmfe_bool_schema.py` применяет только
+upstream five-line fix для parsing `additionalProperties: false` в closed JSON
+Schema, которую передаёт native `guided_json`; он работает лишь в ephemeral
+Job venv и пишет audit report. Default `outlines` в этой среде импортирует
 `pyairports==0.0.1`, но этот distribution не содержит Python-модуль;
 результат — HTTP 500 ещё на первом completion. Не меняйте backend обратно без
 живого smoke-check на целевой конфигурации.
 
-Поскольку `lm-format-enforcer==0.10.11` импортирует `LogitsWarper`, нельзя
+Поскольку `lm-format-enforcer==0.10.6` импортирует `LogitsWarper`, нельзя
 оставлять диапазон версий Transformers: на практике resolver выбрал 4.57, где
 этот символ удален. Обязательная проверенная тройка —
-`vllm==0.6.3.post1`, `lm-format-enforcer==0.10.11`,
+`vllm==0.6.3.post1`, `lm-format-enforcer==0.10.6`,
 `transformers==4.45.2`.
 
 CPU preflight теперь не только проверяет ready-marker, SHA и размеры shared

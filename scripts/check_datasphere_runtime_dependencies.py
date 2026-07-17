@@ -26,7 +26,7 @@ EXPECTED_VERSIONS = {
     "pydantic": "2.10.6",
     "vllm": "0.6.3.post1",
     "transformers": "4.45.2",
-    "lm-format-enforcer": "0.10.11",
+    "lm-format-enforcer": "0.10.6",
 }
 
 
@@ -62,15 +62,14 @@ def check() -> dict[str, Any]:
     _import("litellm")
     _import("dspy")
     _import("kg_gen")
-    # lm-format-enforcer 0.10.11 imports LogitsWarper here. Transformers 4.57
+    # lm-format-enforcer 0.10.6 imports LogitsWarper here. Transformers 4.57
     # removed that symbol and previously caused a paid GPU HTTP 500.
     integration = importlib.import_module("lmformatenforcer.integrations.transformers")
     if not hasattr(integration, "build_token_enforcer_tokenizer_data"):
         raise RuntimeError("lm-format-enforcer Transformers integration has no tokenizer adapter")
-    # vLLM guided_json passes a normal closed JSON schema to this parser.  The
-    # former 0.10.6 pin crashed on the boolean ``additionalProperties`` value
-    # *after* the V100 had loaded model weights.  Construct it here so the CPU
-    # preflight rejects that exact broken dependency combination for free.
+    # ``patch_datasphere_lmfe_bool_schema.py`` backports the upstream bool
+    # guard before this check runs.  Construct the same closed schema which
+    # vLLM receives, so a missing/failed patch is caught before V100 startup.
     from lmformatenforcer import JsonSchemaParser
 
     JsonSchemaParser(

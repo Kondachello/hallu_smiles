@@ -125,7 +125,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert config["outputs"] == [{"qa-pilot-new-metrics-20260716.tar.gz": "ARTIFACT_ARCHIVE"}]
     assert "vllm==0.6.3.post1" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
     assert "transformers==4.45.2" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
-    assert "lm-format-enforcer==0.10.11" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
+    assert "lm-format-enforcer==0.10.6" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
     assert "pydantic==2.10.6" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
 
     runner = (SCRIPTS / "run_datasphere_qa_pilot.sh").read_text(encoding="utf-8")
@@ -136,6 +136,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "check_datasphere_gpu_runtime.py" in runner
     assert "check_datasphere_vllm_completion.py" in runner
     assert "check_datasphere_vllm_guided_json.py" in runner
+    assert "patch_datasphere_lmfe_bool_schema.py" in runner
     assert "check_datasphere_kggen_probe.py" in runner
     assert "check_datasphere_qa_reference_probe.py" in runner
     assert "KGGEN_MAX_TOKENS" in runner
@@ -198,9 +199,10 @@ def test_cpu_preflight_uses_the_same_locked_runtime_and_import_check(tmp_path):
     assert "check_datasphere_runtime_dependencies.py" in config["cmd"]
     assert "LITELLM_LOCAL_MODEL_COST_MAP=true" in config["cmd"]
     dependency_check = (SCRIPTS / "check_datasphere_runtime_dependencies.py").read_text(encoding="utf-8")
-    assert '"lm-format-enforcer": "0.10.11"' in dependency_check
+    assert '"lm-format-enforcer": "0.10.6"' in dependency_check
     assert "JsonSchemaParser" in dependency_check
     assert '"additionalProperties": False' in dependency_check
+    assert "patch_datasphere_lmfe_bool_schema.py" in config["cmd"]
     assert (ROOT / "requirements.datasphere.preflight.txt").read_text(encoding="utf-8") == (
         ROOT / "requirements.datasphere.txt"
     ).read_text(encoding="utf-8")
