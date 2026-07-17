@@ -7,7 +7,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 MODEL_ID="${MODEL_ID:?Set MODEL_ID to the Hugging Face model identifier}"
-MODEL_PATH="${MODEL_PATH:?Set MODEL_PATH to a ready shared read-only model directory}"
+MODEL_PATH="${MODEL_PATH:-}"
 DATA_DIR="${DATA_DIR:?Set DATA_DIR to the shared RAGTruth directory}"
 RUN_ROOT="${RUN_ROOT:?Set RUN_ROOT to this Job writable output directory}"
 PORT="${VLLM_PORT:-8000}"
@@ -51,6 +51,23 @@ GPU_TIME_LIMIT_SECONDS="${GPU_TIME_LIMIT_SECONDS:-}"
 QA_PILOT_LIMIT="${QA_PILOT_LIMIT:-}"
 VLLM_PID=""
 GPU_PID=""
+
+# Keep dynamic shared-model resolution inside this runner rather than in the
+# outer Job shell.  The runner's stdout/stderr are archived on every exit, so a
+# Project-disk or interpreter startup failure has a concrete phase and a
+# bounded timeout instead of leaving an allocated GPU with no diagnostic.
+if [[ -z "$MODEL_PATH" ]]; then
+  : "${DS_PROJECT_HOME:?DS_PROJECT_HOME is required with attach-project-disk}"
+  echo "[startup] resolving active shared model path."
+  MODEL_PATH="$(timeout --signal=TERM --kill-after=15s "${MODEL_PATH_RESOLVE_TIMEOUT_SECONDS:-60}" \
+    "$PYTHON_BIN" -S "$ROOT/scripts/resolve_datasphere_shared_model.py" \
+      --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared" --model-id "$MODEL_ID")" || {
+    echo "[startup] shared-model resolution failed or exceeded ${MODEL_PATH_RESOLVE_TIMEOUT_SECONDS:-60}s." >&2
+    exit 2
+  }
+  export MODEL_PATH
+  echo "[startup] shared model path resolved."
+fi
 
 cleanup() {
   local exit_code=$?

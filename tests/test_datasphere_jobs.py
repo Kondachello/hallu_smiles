@@ -158,6 +158,10 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "LITELLM_LOCAL_MODEL_COST_MAP" in runner
     assert "run_extraction_with_gpu_watchdog" in runner
     assert "GPU_IDLE_ABORT_SECONDS" in runner
+    assert 'MODEL_PATH="${MODEL_PATH:-}"' in runner
+    assert "MODEL_PATH_RESOLVE_TIMEOUT_SECONDS" in runner
+    assert '"$PYTHON_BIN" -S "$ROOT/scripts/resolve_datasphere_shared_model.py"' in runner
+    assert "export MODEL_PATH=\"$(python source/scripts/resolve_datasphere_shared_model.py" not in text
     assert "--stage extract" in runner
     assert "--relation-mode strict --qa-pilot-manifest \"$MANIFEST\"" in runner
     assert "[extract] response:start" in (ROOT / "run.py").read_text(encoding="utf-8")
