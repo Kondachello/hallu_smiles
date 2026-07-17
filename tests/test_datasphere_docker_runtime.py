@@ -5,7 +5,10 @@ import subprocess
 
 import pytest
 
-from scripts.check_datasphere_docker_runtime import _inspection_payload
+from scripts.check_datasphere_docker_runtime import (
+    _check_native_build_toolchain,
+    _inspection_payload,
+)
 
 
 def _completed(stdout: str, stderr: str = "") -> subprocess.CompletedProcess[str]:
@@ -40,3 +43,38 @@ def test_inspection_payload_reports_captured_output_when_payload_is_missing():
 
     assert "INFO only" in str(raised.value)
     assert "warning from imported dependency" in str(raised.value)
+
+
+def test_native_build_toolchain_reports_gcc_and_python_header(monkeypatch):
+    completed = _completed(
+        json.dumps(
+            {
+                "python_include": "/usr/include/python3.11",
+                "python_header": "/usr/include/python3.11/Python.h",
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        "scripts.check_datasphere_docker_runtime.shutil.which",
+        lambda executable: "/usr/bin/gcc" if executable == "gcc" else None,
+    )
+    monkeypatch.setattr(
+        "scripts.check_datasphere_docker_runtime.subprocess.run",
+        lambda *args, **kwargs: completed,
+    )
+
+    assert _check_native_build_toolchain("/opt/hallu/server/bin/python") == {
+        "gcc": "/usr/bin/gcc",
+        "python_include": "/usr/include/python3.11",
+        "python_header": "/usr/include/python3.11/Python.h",
+    }
+
+
+def test_native_build_toolchain_fails_without_gcc(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.check_datasphere_docker_runtime.shutil.which", lambda executable: None
+    )
+
+    with pytest.raises(RuntimeError, match="missing gcc"):
+        _check_native_build_toolchain("/opt/hallu/server/bin/python")

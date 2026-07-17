@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,6 +108,28 @@ def _compile_xgrammar(server_python: str, schemas_path: Path) -> None:
     )
 
 
+def _check_native_build_toolchain(server_python: str) -> dict[str, str]:
+    """Verify the headers/toolchain needed by XGrammar's first Triton request."""
+    gcc = shutil.which("gcc")
+    if gcc is None:
+        raise RuntimeError("Docker runtime is missing gcc required by Triton JIT")
+    program = (
+        "import json,sysconfig; from pathlib import Path; "
+        "include=Path(sysconfig.get_paths()['include']); header=include/'Python.h'; "
+        "assert header.is_file(), f'missing Python development header: {header}'; "
+        "print(json.dumps({'python_include':str(include),'python_header':str(header)},sort_keys=True))"
+    )
+    completed = subprocess.run(
+        [server_python, "-c", program],
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    payload = json.loads(completed.stdout)
+    return {"gcc": gcc, **payload}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server-python", required=True)
@@ -158,6 +181,7 @@ def main() -> None:
         ["torch", "kg_gen", "dspy", "litellm", "pydantic", "sentence_transformers", "jsonschema"],
         expected_torch_cuda=None,
     )
+    native_build_toolchain = _check_native_build_toolchain(args.server_python)
     _compile_xgrammar(args.server_python, schemas_path)
     embedding_program = (
         "import sys; from sentence_transformers import SentenceTransformer; "
@@ -183,10 +207,12 @@ def main() -> None:
         "runtime_manifest": manifest,
         "server": server,
         "client": client,
+        "native_build_toolchain": native_build_toolchain,
         "schemas": str(schemas_path),
         "checks": [
             "split server/client dependency imports",
             "exact CUDA 11.8 server and CPU-only client PyTorch builds",
+            "gcc and Python development headers for XGrammar/Triton JIT",
             "XGrammar compilation of relation, verifier and enum schemas",
             "offline CPU SBERT embedding",
             "runtime source commit and embedded asset identity",

@@ -305,6 +305,8 @@ def test_remote_dockerfile_is_commit_pinned_and_contains_no_large_local_context(
     assert "__GIT_COMMIT__" not in dockerfile
     assert "ARG SOURCE_COMMIT=" + "f" * 40 in dockerfile
     assert "FROM nvidia/cuda:11.8.0-devel-ubuntu22.04" in dockerfile
+    assert "gcc python3.11 python3.11-dev python3.11-venv" in dockerfile
+    assert "test -r /usr/include/python3.11/Python.h" in dockerfile
     assert "torch.__version__ == '2.6.0+cu118'" in dockerfile
     assert "torch.version.cuda == '11.8'" in dockerfile
     assert "torch.__version__ == '2.6.0+cpu'" in dockerfile
