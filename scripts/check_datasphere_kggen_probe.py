@@ -150,7 +150,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--model-id", required=True)
     parser.add_argument("--timeout", type=float, default=60.0)
-    parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument(
         "--cluster",
         action="store_true",

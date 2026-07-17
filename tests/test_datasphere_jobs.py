@@ -82,7 +82,7 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["data"]["dir"] == "/read-only/ragtruth"
     assert config["cache_dir"] == str(work_dir / "cache" / "kg")
     assert config["relation_verifier"]["cache_dir"] == str(work_dir / "cache" / "verdicts")
-    assert config["llm"]["max_tokens"] == 256
+    assert config["llm"]["max_tokens"] == 1024
     assert config["llm"]["concurrency"] == 1
     assert config["llm"]["request_timeout_s"] == 90
     assert config["llm"]["vllm_guided_json"] is False
@@ -163,7 +163,9 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "check_datasphere_kggen_probe.py" in runner
     assert "check_datasphere_verifier_probe.py" in runner
     assert "check_datasphere_qa_reference_probe.py" in runner
-    assert "KGGEN_MAX_TOKENS" in runner
+    assert 'KGGEN_MAX_TOKENS="${KGGEN_MAX_TOKENS:-1024}"' in runner
+    assert '--max-tokens "$KGGEN_MAX_TOKENS"' in runner
+    assert '--max-tokens "${KGGEN_PROBE_MAX_TOKENS:-$KGGEN_MAX_TOKENS}"' in runner
     assert "KGGEN_CLUSTER_MAX_ITEMS" in runner
     assert "--disable-clustering" not in runner
     assert "--explicit-clustering" in runner

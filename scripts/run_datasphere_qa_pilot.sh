@@ -24,10 +24,10 @@ MIN_WORK_FREE_GB="${MIN_WORK_FREE_GB:-5}"
 # chunks while avoiding a needless 128K KV-cache reservation on a 32-GiB V100.
 MODEL_DTYPE="${MODEL_DTYPE:-half}"
 MODEL_MAX_MODEL_LEN="${MODEL_MAX_MODEL_LEN:-8192}"
-# KGGen 0.4 otherwise requests up to 16k completion tokens.  256 is sufficient
-# for the selected short QA contexts and bounds an 8B model from returning a
-# huge entity list which makes KGGen's dynamic Pydantic schemas CPU-bound.
-KGGEN_MAX_TOKENS="${KGGEN_MAX_TOKENS:-256}"
+# KGGen 0.4 otherwise requests up to 16k completion tokens.  The exact real
+# relation probe proved that 256 truncates source 15138 before JSON validation;
+# 1024 gives bounded 4x headroom inside 8192, and the exact gate verifies it.
+KGGEN_MAX_TOKENS="${KGGEN_MAX_TOKENS:-1024}"
 # The official QA method keeps KGGen LLM clustering enabled and unbounded.
 # Supplying a positive cap is reserved for an explicitly labelled diagnostic,
 # never for the final strict/support comparison.
@@ -292,6 +292,7 @@ CUDA_VISIBLE_DEVICES="" "$CLIENT_PYTHON" "$ROOT/scripts/check_datasphere_vllm_gu
   --data-dir "$DATA_DIR" \
   --timeout "${STRUCTURED_OUTPUT_PROBE_TIMEOUT_SECONDS:-90}" \
   --repeat 1 \
+  --max-tokens "$KGGEN_MAX_TOKENS" \
   --report "$RUN_ROOT/vllm-response-format-probe.json"
 
 # A plain completion is not enough: KGGen calls vLLM through DSPy's typed
@@ -303,7 +304,7 @@ timeout --signal=TERM --kill-after=30s "${KGGEN_PROBE_TIMEOUT_SECONDS:-180}" \
   env CUDA_VISIBLE_DEVICES="" "$CLIENT_PYTHON" "$ROOT/scripts/check_datasphere_kggen_probe.py" \
   --port "$PORT" --model-id "$MODEL_ID" \
   --timeout "${KGGEN_PROBE_REQUEST_TIMEOUT_SECONDS:-60}" \
-  --max-tokens "${KGGEN_PROBE_MAX_TOKENS:-256}" \
+  --max-tokens "${KGGEN_PROBE_MAX_TOKENS:-$KGGEN_MAX_TOKENS}" \
   --cluster \
   --structured-output-transport response_format \
   --report "$RUN_ROOT/kggen-probe.json"

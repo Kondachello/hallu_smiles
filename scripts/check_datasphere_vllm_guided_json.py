@@ -58,6 +58,7 @@ TWO_FACT_ENTITIES = [
     "Marie Curie",
     "Warsaw",
 ]
+DEFAULT_MAX_TOKENS = 1024
 
 
 def _utc_now() -> str:
@@ -179,6 +180,7 @@ def _run_case(
     model_id: str,
     timeout_s: float,
     repeat: int,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict[str, Any]:
     messages, schema = _request_fixture(source_text, entities)
     schema_sha256 = hashlib.sha256(
@@ -189,7 +191,7 @@ def _run_case(
         payload = {
             "model": model_id,
             "temperature": 0.0,
-            "max_tokens": 256,
+            "max_tokens": max_tokens,
             "messages": messages,
             "response_format": json_schema_response_format(
                 schema, name=f"kggen_{case}_relations"
@@ -240,7 +242,13 @@ def _run_case(
 
 
 def run_probe(
-    *, port: int, model_id: str, data_dir: str | Path, timeout_s: float, repeat: int = 2
+    *,
+    port: int,
+    model_id: str,
+    data_dir: str | Path,
+    timeout_s: float,
+    repeat: int = 2,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict[str, Any]:
     if port <= 0:
         raise ValueError("port must be positive")
@@ -248,6 +256,8 @@ def run_probe(
         raise ValueError("timeout must be positive")
     if repeat <= 0:
         raise ValueError("repeat must be positive")
+    if max_tokens <= 0:
+        raise ValueError("max_tokens must be positive")
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     swiss_text = _load_swiss_source(data_dir)
     specifications = [
@@ -266,6 +276,7 @@ def run_probe(
                     model_id=model_id,
                     timeout_s=timeout_s,
                     repeat=repeat,
+                    max_tokens=max_tokens,
                 )
             )
         except ContractProbeError as exc:
@@ -281,6 +292,7 @@ def run_probe(
         "source_id": SWISS_SOURCE_ID,
         "request_parameter": "response_format",
         "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+        "max_tokens": max_tokens,
         "cases": cases,
     }
 
@@ -292,6 +304,7 @@ def main() -> None:
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument("--repeat", type=int, default=2)
+    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
     report_path = Path(args.report)
@@ -302,6 +315,7 @@ def main() -> None:
             data_dir=args.data_dir,
             timeout_s=args.timeout,
             repeat=args.repeat,
+            max_tokens=args.max_tokens,
         )
     except Exception as exc:
         evidence = getattr(exc, "evidence", None)

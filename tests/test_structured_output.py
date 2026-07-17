@@ -364,8 +364,10 @@ def test_two_fact_direct_probe_requires_two_schema_valid_relations(monkeypatch):
         model_id="model",
         timeout_s=1,
         repeat=2,
+        max_tokens=777,
     )
 
     assert len(payloads) == 2
     assert [attempt["relations_count"] for attempt in result["attempts"]] == [2, 2]
+    assert all(payload["max_tokens"] == 777 for payload in payloads)
     assert all(payload["response_format"]["type"] == "json_schema" for payload in payloads)

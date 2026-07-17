@@ -20,7 +20,7 @@ def main() -> None:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=256,
+        default=1024,
         help="Maximum completion tokens for KGGen; must fit the local vLLM context window.",
     )
     parser.add_argument(
