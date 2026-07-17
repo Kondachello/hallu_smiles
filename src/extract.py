@@ -20,6 +20,7 @@ import json
 import os
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -178,6 +179,15 @@ class KGExtractor:
             if hasattr(cfg.extraction, "get")
             else getattr(cfg.extraction, "explicit_clustering", False)
         )
+        # ``guided_json`` is a DataSphere/vLLM transport detail, not a second
+        # model setting.  It makes DSPy send its existing typed-output schema
+        # through vLLM 0.6.3's native constrained-decoding API.  Leave the
+        # normal DSPy adapter untouched unless the runtime explicitly opts in.
+        self.vllm_guided_json = (
+            cfg.llm.get("vllm_guided_json", False)
+            if hasattr(cfg.llm, "get")
+            else getattr(cfg.llm, "vllm_guided_json", False)
+        )
         raw_dump_after = os.environ.get("DATASPHERE_KGGEN_DUMP_AFTER_SECONDS", "")
         self.debug_dump_after_s = float(raw_dump_after) if raw_dump_after else None
         if self.debug_dump_after_s is not None and self.debug_dump_after_s <= 0:
@@ -234,7 +244,8 @@ class KGExtractor:
             "chunk_chars": self.chunk_chars,
             "serial_chunking": self.serial_chunking,
             "explicit_clustering": self.explicit_clustering,
-            "v": 4,  # explicit phase sequencing changes the cache contract
+            "vllm_guided_json": self.vllm_guided_json,
+            "v": 5,  # guided transport can change valid extraction outputs
         }
         payload = json.dumps(params, sort_keys=True) + "\x00" + text
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -320,38 +331,60 @@ class KGExtractor:
         )
         return clustered
 
+    @contextmanager
+    def dspy_context(self, backend: Any):
+        """Scope the optional local-vLLM adapter around a full KGGen call.
+
+        KGGen creates nested ``dspy.context(lm=...)`` blocks itself.  DSPy's
+        context is additive, so this outer block retains the adapter during
+        raw extraction *and* official KGGen LLM clustering.
+        """
+        if not self.vllm_guided_json:
+            yield
+            return
+        import dspy
+
+        from .dspy_adapter import vllm_guided_json_adapter
+
+        lm = getattr(backend, "lm", None)
+        if lm is None:
+            raise RuntimeError("vllm_guided_json requires a KGGen backend with a DSPy LM")
+        with dspy.context(lm=lm, adapter=vllm_guided_json_adapter()):
+            yield
+
     def _call_backend(self, text: str) -> Graph:
         backend = self._get_backend()
-        if self.serial_chunking and len(text) > self.chunk_chars:
-            # KGGen 0.4 implements ``chunk_size`` with an unbounded nested
-            # ThreadPoolExecutor over one shared DSPy LM.  Combining that with
-            # response-level parallelism can deadlock a local vLLM client after
-            # some successful calls.  Preserve KGGen's algorithm (chunk,
-            # aggregate, then cluster) but schedule the chunks serially.
-            graphs = [
-                backend.generate(input_data=chunk, cluster=False)
-                for chunk in self._split_text(text, self.chunk_chars)
-            ]
-            g = backend.aggregate(graphs)
-            g = self._cluster_backend_graph(backend, g)
-        else:
-            # ``KGGen.generate(cluster=True)`` is implemented as raw extraction
-            # followed by ``KGGen.cluster(graph)``.  Keep that exact upstream
-            # cluster routine, but make the boundary explicit in the local
-            # profile so a client-side stall can be distinguished from a vLLM
-            # generation stall. A finite cap also needs raw triples first.
-            explicit_cluster_phase = self.cluster and (
-                self.explicit_clustering or self.cluster_max_items is not None
-            )
-            gen_kwargs: dict[str, Any] = {
-                "input_data": text,
-                "cluster": False if explicit_cluster_phase else self.cluster,
-            }
-            if len(text) > self.chunk_chars:
-                gen_kwargs["chunk_size"] = self.chunk_chars
-            g = backend.generate(**gen_kwargs)
-            if explicit_cluster_phase:
+        with self.dspy_context(backend):
+            if self.serial_chunking and len(text) > self.chunk_chars:
+                # KGGen 0.4 implements ``chunk_size`` with an unbounded nested
+                # ThreadPoolExecutor over one shared DSPy LM.  Combining that with
+                # response-level parallelism can deadlock a local vLLM client after
+                # some successful calls.  Preserve KGGen's algorithm (chunk,
+                # aggregate, then cluster) but schedule the chunks serially.
+                graphs = [
+                    backend.generate(input_data=chunk, cluster=False)
+                    for chunk in self._split_text(text, self.chunk_chars)
+                ]
+                g = backend.aggregate(graphs)
                 g = self._cluster_backend_graph(backend, g)
+            else:
+                # ``KGGen.generate(cluster=True)`` is implemented as raw extraction
+                # followed by ``KGGen.cluster(graph)``.  Keep that exact upstream
+                # cluster routine, but make the boundary explicit in the local
+                # profile so a client-side stall can be distinguished from a vLLM
+                # generation stall. A finite cap also needs raw triples first.
+                explicit_cluster_phase = self.cluster and (
+                    self.explicit_clustering or self.cluster_max_items is not None
+                )
+                gen_kwargs: dict[str, Any] = {
+                    "input_data": text,
+                    "cluster": False if explicit_cluster_phase else self.cluster,
+                }
+                if len(text) > self.chunk_chars:
+                    gen_kwargs["chunk_size"] = self.chunk_chars
+                g = backend.generate(**gen_kwargs)
+                if explicit_cluster_phase:
+                    g = self._cluster_backend_graph(backend, g)
         entities = {str(e) for e in getattr(g, "entities", set())}
         relations = {
             tuple(str(x) for x in r)

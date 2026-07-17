@@ -47,6 +47,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--vllm-guided-json",
+        action="store_true",
+        help=(
+            "Use vLLM's native guided_json transport for DSPy typed outputs. "
+            "Required by the pinned local vLLM 0.6.3 runtime; it does not change KGGen."
+        ),
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=1,
@@ -89,6 +97,7 @@ def main() -> None:
     # default makes every extraction request fail before generation begins.
     config["llm"]["max_tokens"] = args.max_tokens
     config["llm"]["concurrency"] = args.concurrency
+    config["llm"]["vllm_guided_json"] = args.vllm_guided_json
     config["extraction"]["serial_chunking"] = args.serial_chunking
     config["extraction"]["cluster_max_items"] = args.cluster_max_items
     if args.disable_clustering:

@@ -14,10 +14,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 PROBE_TEXT = "Ada Lovelace wrote notes about Charles Babbage's Analytical Engine."
@@ -31,7 +37,13 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def run_probe(
-    *, model_id: str, api_base: str, timeout_s: float, max_tokens: int, cluster: bool = False
+    *,
+    model_id: str,
+    api_base: str,
+    timeout_s: float,
+    max_tokens: int,
+    cluster: bool = False,
+    vllm_guided_json: bool = False,
 ) -> dict[str, Any]:
     if timeout_s <= 0:
         raise ValueError("timeout must be positive")
@@ -57,7 +69,15 @@ def run_probe(
     # The pilot deliberately keeps raw KGGen triples on the local Llama
     # profile. Exercise that exact code path here: clustering is an optional
     # post-processing LLM pass, not part of relation extraction.
-    graph = backend.generate(input_data=PROBE_TEXT, cluster=cluster)
+    if vllm_guided_json:
+        import dspy
+
+        from src.dspy_adapter import vllm_guided_json_adapter
+
+        with dspy.context(lm=backend.lm, adapter=vllm_guided_json_adapter()):
+            graph = backend.generate(input_data=PROBE_TEXT, cluster=cluster)
+    else:
+        graph = backend.generate(input_data=PROBE_TEXT, cluster=cluster)
     return {
         "checked_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "status": "ready",
@@ -67,6 +87,7 @@ def run_probe(
         "timeout_s": timeout_s,
         "max_tokens": max_tokens,
         "cluster": cluster,
+        "vllm_guided_json": vllm_guided_json,
         "versions": {
             "kg-gen": metadata.version("kg-gen"),
             "dspy": metadata.version("dspy"),
@@ -88,6 +109,11 @@ def main() -> None:
         action="store_true",
         help="Also exercise optional KGGen LLM clustering (off for the local pilot).",
     )
+    parser.add_argument(
+        "--vllm-guided-json",
+        action="store_true",
+        help="Use vLLM's native guided_json schema transport, like the local pilot.",
+    )
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
     if args.port <= 0:
@@ -98,6 +124,7 @@ def main() -> None:
         timeout_s=args.timeout,
         max_tokens=args.max_tokens,
         cluster=args.cluster,
+        vllm_guided_json=args.vllm_guided_json,
     )
     _atomic_json(Path(args.report), report)
     print(json.dumps(report, sort_keys=True))

@@ -82,6 +82,7 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["llm"]["max_tokens"] == 256
     assert config["llm"]["concurrency"] == 1
     assert config["llm"]["request_timeout_s"] == 90
+    assert config["llm"]["vllm_guided_json"] is False
     assert config["extraction"]["serial_chunking"] is True
     assert config["extraction"]["cluster_max_items"] is None
 
@@ -100,10 +101,12 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
         "--model-id", MODEL_ID, "--api-base", "http://127.0.0.1:8000/v1",
         "--data-dir", "/read-only/ragtruth", "--work-dir", str(work_dir),
         "--explicit-clustering",
+        "--vllm-guided-json",
     ], check=True)
     explicit = yaml.safe_load(output.read_text(encoding="utf-8"))["extraction"]
     assert explicit["cluster"] is True
     assert explicit["explicit_clustering"] is True
+    assert yaml.safe_load(output.read_text(encoding="utf-8"))["llm"]["vllm_guided_json"] is True
 
 
 def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path):
@@ -132,16 +135,20 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "--relation-mode support" in runner
     assert "check_datasphere_gpu_runtime.py" in runner
     assert "check_datasphere_vllm_completion.py" in runner
+    assert "check_datasphere_vllm_guided_json.py" in runner
     assert "check_datasphere_kggen_probe.py" in runner
     assert "check_datasphere_qa_reference_probe.py" in runner
     assert "KGGEN_MAX_TOKENS" in runner
     assert "KGGEN_CLUSTER_MAX_ITEMS" in runner
     assert "--disable-clustering" not in runner
     assert "--explicit-clustering" in runner
-    assert "  --cluster \\\n  --report" in runner
+    assert "  --cluster \\" in runner
+    assert "  --vllm-guided-json \\" in runner
     assert "KGGEN_CONCURRENCY" in runner
     assert "--serial-chunking" in runner
     assert "--guided-decoding-backend" in runner
+    assert "--vllm-guided-json" in runner
+    assert "require_complete_extraction" in runner
     assert "lm-format-enforcer" in runner
     assert "LITELLM_LOCAL_MODEL_COST_MAP" in runner
     assert "run_extraction_with_gpu_watchdog" in runner
@@ -150,6 +157,32 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "--relation-mode strict --qa-pilot-manifest \"$MANIFEST\"" in runner
     assert "[extract] response:start" in (ROOT / "run.py").read_text(encoding="utf-8")
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)
+
+
+def test_vllm_guided_json_adapter_passes_the_dspy_schema_without_response_format(monkeypatch):
+    import dspy
+
+    from src.dspy_adapter import vllm_guided_json_adapter
+    from dspy.adapters.chat_adapter import ChatAdapter
+
+    class Signature(dspy.Signature):
+        """Return a closed relation list."""
+
+        text: str = dspy.InputField()
+        relations: list[str] = dspy.OutputField()
+
+    captured = {}
+
+    def fake_call(self, lm, lm_kwargs, signature, demos, inputs):
+        captured.update(lm_kwargs)
+        return [{"relations": []}]
+
+    monkeypatch.setattr(ChatAdapter, "__call__", fake_call)
+    result = vllm_guided_json_adapter()(object(), {}, Signature, [], {"text": "x"})
+
+    assert result == [{"relations": []}]
+    assert "response_format" not in captured
+    assert captured["extra_body"]["guided_json"]["required"] == ["relations"]
 
 
 def test_cpu_preflight_uses_the_same_locked_runtime_and_import_check(tmp_path):

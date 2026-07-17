@@ -62,7 +62,6 @@ def _cluster_stack_dump_timeout() -> float | None:
 
 def run_probe(config_path: str | Path) -> dict[str, Any]:
     # Imported lazily so offline test/import paths stay dependency-light.
-    import dspy
     from kg_gen.models import Graph as KGGenGraph
     from kg_gen.steps._1_get_entities import get_entities
     from kg_gen.steps._2_get_relations import get_relations
@@ -108,7 +107,7 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
 
     started = time.perf_counter()
     backend = extractor._get_backend()
-    with dspy.context(lm=backend.lm):
+    with extractor.dspy_context(backend):
         _emit(
             "entities:start",
             source_id=inst.source_id,

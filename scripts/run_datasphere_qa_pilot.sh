@@ -116,6 +116,7 @@ runtime_config_args=(
   --api-base "http://127.0.0.1:${PORT}/v1"
   --data-dir "$DATA_DIR"
   --max-tokens "$KGGEN_MAX_TOKENS"
+  --vllm-guided-json
   --explicit-clustering
   --concurrency "$KGGEN_CONCURRENCY"
   --serial-chunking
@@ -148,6 +149,11 @@ done
 curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null
 "$PYTHON_BIN" "$ROOT/scripts/check_datasphere_vllm_completion.py" \
   --port "$PORT" --model-id "$MODEL_ID"
+echo "[probe] verifying vLLM native guided_json schema enforcement."
+"$PYTHON_BIN" "$ROOT/scripts/check_datasphere_vllm_guided_json.py" \
+  --port "$PORT" --model-id "$MODEL_ID" \
+  --timeout "${GUIDED_JSON_PROBE_TIMEOUT_SECONDS:-60}" \
+  --report "$RUN_ROOT/vllm-guided-json-probe.json"
 
 nvidia-smi --query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used,memory.total \
   --format=csv,noheader,nounits -l 10 >"$GPU_LOG" 2>&1 &
@@ -164,6 +170,7 @@ timeout --signal=TERM --kill-after=30s "${KGGEN_PROBE_TIMEOUT_SECONDS:-180}" \
   --timeout "${KGGEN_PROBE_REQUEST_TIMEOUT_SECONDS:-60}" \
   --max-tokens "${KGGEN_PROBE_MAX_TOKENS:-256}" \
   --cluster \
+  --vllm-guided-json \
   --report "$RUN_ROOT/kggen-probe.json"
 
 # The synthetic probe above validates the typed-output protocol.  This second
@@ -224,6 +231,16 @@ if [[ -n "$QA_PILOT_LIMIT" ]]; then
   extract_args+=(--qa-pilot-limit "$QA_PILOT_LIMIT")
 fi
 run_extraction_with_gpu_watchdog "$PYTHON_BIN" "$ROOT/run.py" "${extract_args[@]}"
+require_complete_extraction() {
+  local output_dir="$1"
+  local failures="$output_dir/failed_extractions.jsonl"
+  if [[ -s "$failures" ]]; then
+    echo "[error] KG extraction was incomplete; refusing to mark this run successful." >&2
+    cat "$failures" >&2
+    return 1
+  fi
+}
+require_complete_extraction "$STRICT_OUT"
 if [[ -n "$QA_PILOT_LIMIT" ]]; then
   end_epoch="$(date +%s)"
   "$PYTHON_BIN" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$QA_PILOT_LIMIT" <<'PY'
