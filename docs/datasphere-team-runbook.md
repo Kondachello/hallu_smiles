@@ -9,10 +9,11 @@ DataSphere Project. «Локальная LLM» здесь означает Llama
 
 ```text
 локальный checkout
-  └─ commit + push → render Dockerfile/YAML → DataSphere CLI submit
-                                                │
+  └─ commit + push → GitHub-hosted remote build → immutable GHCR digest
+                                                        │
+                                  DataSphere CLI submit ─┤
 existing DataSphere Project                     │
-  ├─ immutable Docker resource ─────────────────┤
+  ├─ public OCI image@sha256 ───────────────────┤
   │    ├─ /opt/hallu/server  (vLLM + XGrammar + CUDA PyTorch)
   │    ├─ /opt/hallu/client  (KGGen/DSPy/scoring + CPU PyTorch)
   │    ├─ /opt/hallu/models/all-MiniLM-L6-v2
@@ -28,7 +29,7 @@ existing DataSphere Project                     │
 Три идентификатора образуют воспроизводимый runtime:
 
 1. полный 40-символьный Git SHA;
-2. immutable DataSphere Docker resource ID;
+2. immutable OCI manifest digest (либо optional DataSphere resource ID);
 3. exact model revision из shared model manifest.
 
 Они записываются в `runtime-manifest.json`, `run_metadata.json` и cache
@@ -110,7 +111,7 @@ Pydantic/scientific pins, CPU-only `torch==2.6.0`, `jsonschema` и
 `sentence-transformers`. Exact MiniLM revision скачивается только во время
 remote image build и после сборки используется офлайн.
 
-### Сборка resource
+### Удалённая CLI-only сборка
 
 Сначала commit должен быть опубликован:
 
@@ -122,43 +123,44 @@ git fetch origin refs/heads/new-metrics
 git merge-base --is-ancestor "$COMMIT" FETCH_HEAD
 ```
 
-Затем:
+Push автоматически запускает `.github/workflows/datasphere-runtime-image.yml`.
+GitHub-hosted `ubuntu-22.04` runner рендерит Dockerfile по `GITHUB_SHA`, собирает
+`linux/amd64`, публикует commit tag в public GHCR, затем выходит из registry и
+проверяет anonymous pull exact digest. На Mac не нужен Docker и не сохраняются
+image layers. Статус проверяется через CLI:
 
 ```bash
-mkdir -p datasphere/docker/rendered
-.venv-datasphere/bin/python scripts/render_datasphere_dockerfile.py \
-  --commit "$COMMIT" \
-  --branch new-metrics \
-  --output "datasphere/docker/rendered/Dockerfile-$COMMIT"
+gh run list --repo Kondachello/hallu_smiles --branch new-metrics \
+  --workflow datasphere-runtime-image.yml --limit 1
 ```
 
-Renderer сам повторяет `fetch`/`merge-base` guard и откажется строить image из
-неопубликованного commit. Флаг `--skip-pushed-check` существует только для
-изолированных unit tests и не должен использоваться при реальной сборке.
-
-Создайте из rendered Dockerfile новый Docker resource в **существующем**
-DataSphere Project и дождитесь успешной remote build. Сохраните resource ID:
+Разрешение commit tag в exact digest тоже не требует Docker daemon:
 
 ```bash
-DOCKER_IMAGE_ID=<bxxxxxxxxxxxxxxxxxxx>
+.venv-datasphere/bin/python scripts/resolve_datasphere_runtime_image.py \
+  --commit "$COMMIT"
 ```
 
-Resource ID immutable. Не заменяйте его tag/name, который может указывать на
-другую сборку. Manifest внутри image содержит source commit, SHA двух freezes,
-embedding revision/path и общий runtime fingerprint. CPU preflight отклоняет
-image, построенный из другого SHA.
+Submit helper выполняет это разрешение сам и записывает в YAML только
+`ghcr.io/...@sha256:...`; mutable tags fail-closed запрещены. Manifest внутри
+image содержит source commit, SHA двух freezes, embedding revision/path и общий
+runtime fingerprint. CPU preflight отклоняет image, построенный из другого SHA.
+Если команда уже располагает DataSphere Project Docker resource, его можно
+явно передать через `--docker-image-id b...`; это совместимый optional path.
 
 Практическое следствие: изменение кода, который входит в runtime contract,
-requirements или Dockerfile требует commit → push → нового Docker resource →
-нового CPU preflight. Никогда не проверяйте новую Job старым image «для
+requirements или Dockerfile требует commit → push → успешной remote image build →
+нового CPU preflight. Никогда не проверяйте новую Job старым digest «для
 экономии одного шага».
 
 ## Локальная настройка DataSphere CLI
 
+В checkout уже находятся `.venv-datasphere/bin/datasphere` и `.tools/yc/yc`.
+Wrapper сам добавляет `.tools/yc` в `PATH`, поэтому повторная установка и
+повторный `yc init` не нужны. Проверка:
+
 ```bash
-python3.12 -m venv .venv-datasphere
-.venv-datasphere/bin/python -m pip install --upgrade pip datasphere
-yc init
+PATH="$PWD/.tools/yc:$PATH" \
 .venv-datasphere/bin/datasphere --profile default project get \
   --id bt1i64odluitglbaj5st
 ```
@@ -172,7 +174,7 @@ Project. Секреты и вывод авторизации не публику
 Не отправляйте template YAML напрямую и не вызывайте `job execute` вручную.
 Используйте `scripts/submit_datasphere_job.sh`; он:
 
-1. проверяет формат аргументов и immutable Docker ID;
+1. проверяет аргументы и разрешает exact commit в immutable OCI digest;
 2. убеждается, что commit входит в `origin/<branch>`;
 3. рендерит конкретный YAML;
 4. валидирует `bash -lc`, attached project disk, `env.docker`, отсутствие
@@ -188,14 +190,11 @@ Project. Секреты и вывод авторизации не публику
 PROJECT_ID=bt1i64odluitglbaj5st
 BRANCH=new-metrics
 
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh \
   --kind <preflight|cluster-probe-g1|qa-pilot-g1> \
   --project-id "$PROJECT_ID" \
   --branch "$BRANCH" \
   --commit "$COMMIT" \
-  --docker-image-id "$DOCKER_IMAGE_ID" \
   --run-id <unique-lowercase-run-id>
 ```
 
@@ -207,14 +206,12 @@ preflight этот аргумент запрещён.
 
 ```bash
 RUN_ID=preflight-$(git rev-parse --short HEAD)-$(date +%Y%m%d)
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh \
   --kind preflight --project-id "$PROJECT_ID" --branch "$BRANCH" \
-  --commit "$COMMIT" --docker-image-id "$DOCKER_IMAGE_ID" --run-id "$RUN_ID"
+  --commit "$COMMIT" --run-id "$RUN_ID"
 ```
 
-`c1.4` Job использует тот же Docker resource, но не загружает 8B weights и не
+`c1.4` Job использует тот же immutable image digest, но не загружает 8B weights и не
 резервирует GPU. Extended `working-storage` для неё намеренно не запрашивается:
 небольшие отчёты помещаются в системную рабочую директорию, поэтому отдельные
 100 ГБ SSD не тарифицируются. Она проверяет:
@@ -268,11 +265,9 @@ bare triple или отключать official LLM-clustering.
 ```bash
 RUN_ID=cluster-probe-$(git rev-parse --short HEAD)-$(date +%Y%m%d)
 PREFLIGHT_ARCHIVE=<PATH_TO_DOWNLOADED_preflight-*.tar.gz>
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh \
   --kind cluster-probe-g1 --project-id "$PROJECT_ID" --branch "$BRANCH" \
-  --commit "$COMMIT" --docker-image-id "$DOCKER_IMAGE_ID" \
+  --commit "$COMMIT" \
   --gate-artifact "$PREFLIGHT_ARCHIVE" --run-id "$RUN_ID"
 ```
 
@@ -296,11 +291,9 @@ Gate пройден только при terminal `SUCCESS`, всех probe repor
 ```bash
 RUN_ID=qa-pilot-$(git rev-parse --short HEAD)-$(date +%Y%m%d)
 CLUSTER_ARCHIVE=<PATH_TO_DOWNLOADED_cluster-probe-*.tar.gz>
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh \
   --kind qa-pilot-g1 --project-id "$PROJECT_ID" --branch "$BRANCH" \
-  --commit "$COMMIT" --docker-image-id "$DOCKER_IMAGE_ID" \
+  --commit "$COMMIT" \
   --gate-artifact "$CLUSTER_ARCHIVE" --run-id "$RUN_ID"
 ```
 
@@ -382,7 +375,7 @@ mkdir -p "outputs/datasphere-results/$RUN_ID"
 
 | Failure | Required action |
 |---|---|
-| Docker build fails | Исправить pins/build, commit+push, собрать новый resource. Не чинить packages внутри Job. |
+| Docker build fails | Исправить pins/build, commit+push, дождаться нового digest. Не чинить packages внутри Job. |
 | Preflight fails | Не выделять V100. Исправить runtime и повторить только CPU preflight. |
 | Exact relation schema fails | Не запускать three-QA/full pilot и не делать parser repair. |
 | KGGen cluster/verifier/real-reference probe fails | Сохранить diagnostics, исправить точную границу, повторить bounded probe. |
@@ -397,8 +390,8 @@ mkdir -p "outputs/datasphere-results/$RUN_ID"
 
 - `cmd` в `bash -lc` и валидный shell syntax;
 - `flags: [attach-project-disk]`;
-- `env.docker` с immutable resource ID и отсутствие `env.python`;
-- запись Docker ID в runtime metadata;
+- `env.docker.image` с immutable OCI digest (или optional project resource ID) и отсутствие `env.python`;
+- запись immutable image identity в runtime metadata;
 - отсутствие runtime `pip install` и model downloads;
 - отсутствие shell forms, которые DataSphere CLI ошибочно интерпретирует как
   undeclared YAML variables.

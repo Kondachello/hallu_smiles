@@ -14,7 +14,7 @@
   read-only и ничего туда не записывает.
 - `HF_TOKEN` нужен только для одноразового staging в CPU Jupyter. Он не нужен
   и не передаётся ни в CPU preflight, ни в GPU Jobs.
-- Среда Job — неизменяемый DataSphere Project Docker resource. В Job запрещены
+- Среда Job — public OCI image, неизменяемо закреплённый digest’ом. В Job запрещены
   `pip install`, скачивание модели и сборка окружения.
 - Docker image разделяет несовместимые роли:
   `/opt/hallu/server` содержит vLLM `0.8.5.post1+cu118`,
@@ -38,7 +38,7 @@
 ```text
 push полного commit SHA
         │
-        ├── remote build immutable Project Docker resource
+        ├── remote build + public immutable OCI digest
         │
         └── CPU preflight (c1.4)
                   │ SUCCESS
@@ -92,33 +92,31 @@ git merge-base --is-ancestor "$COMMIT" origin/new-metrics
 
 Не используйте сокращённый SHA в `--commit`.
 
-## 2. Создать immutable Project Docker resource
+## 2. Дождаться immutable remote runtime
 
-Рендер привязывает Dockerfile к уже запушенному commit:
+Push в `new-metrics` запускает `.github/workflows/datasphere-runtime-image.yml`.
+GitHub-hosted Linux runner рендерит Dockerfile по exact SHA, собирает `linux/amd64`
+image и публикует его в public GHCR. На ноутбук не скачиваются ни Docker layers,
+ни модель. Дождитесь зелёного workflow:
 
 ```bash
-mkdir -p datasphere/docker/rendered
-.venv-datasphere/bin/python scripts/render_datasphere_dockerfile.py \
-  --commit "$COMMIT" \
-  --branch new-metrics \
-  --output "datasphere/docker/rendered/Dockerfile-$COMMIT"
+gh run list --repo Kondachello/hallu_smiles --branch new-metrics \
+  --workflow datasphere-runtime-image.yml --limit 1
 ```
 
-В интерфейсе существующего DataSphere Project создайте Docker resource из
-этого файла и дождитесь успешной remote build. Не добавляйте локальный checkout,
-shared model directory или RAGTruth в build context: Dockerfile получает только
-три маленьких build-файла из публичного GitHub по точному SHA. После сборки
-сохраните immutable resource ID формата `b` + 19 lowercase букв/цифр:
+Проверить и получить exact digest можно без Docker daemon:
 
 ```bash
-DOCKER_IMAGE_ID=<bxxxxxxxxxxxxxxxxxxx>
+.venv-datasphere/bin/python scripts/resolve_datasphere_runtime_image.py \
+  --commit "$COMMIT"
 ```
 
 Image содержит `/opt/hallu/runtime-manifest.json`, `server.freeze.txt`,
 `client.freeze.txt` и offline S-BERT snapshot. CPU preflight потребует, чтобы
-`runtime-manifest.json.source_commit` строго совпал с `--commit`. После любого
-изменения Docker requirements, runtime adapter или проверяемого commit нужен
-новый resource; старый ID нельзя переиспользовать с другим SHA.
+`runtime-manifest.json.source_commit` строго совпал с `--commit`. Submit helper
+сам разрешает commit tag в `image@sha256:...` и отказывается от mutable tag.
+Опционально по-прежнему можно передать уже созданный DataSphere Project resource
+через `--docker-image-id b...`, но основной CLI-only path не требует UI или ID.
 
 ## 3. CPU preflight
 
@@ -127,18 +125,17 @@ PROJECT_ID=bt1i64odluitglbaj5st
 BRANCH=new-metrics
 RUN_ID=preflight-$(git rev-parse --short HEAD)-$(date +%Y%m%d)
 
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh \
   --kind preflight \
   --project-id "$PROJECT_ID" \
   --branch "$BRANCH" \
   --commit "$COMMIT" \
-  --docker-image-id "$DOCKER_IMAGE_ID" \
   --run-id "$RUN_ID"
 ```
 
-Helper сначала проверяет, что SHA содержится в `origin/new-metrics`, затем
+Helper сам добавляет `.tools/yc` в `PATH`, использует `.venv-datasphere`,
+проверяет, что SHA содержится в `origin/new-metrics`, разрешает immutable GHCR
+digest, затем
 рендерит и валидирует YAML, проверяет существующий Project и только после этого
 вызывает `datasphere project job execute --async`. Он не создаёт Project,
 секреты или Docker resource.
@@ -163,14 +160,11 @@ Preflight успешен только при terminal `SUCCESS` и наличи�
 RUN_ID=cluster-probe-$(git rev-parse --short HEAD)-$(date +%Y%m%d)
 PREFLIGHT_ARCHIVE=<PATH_TO_DOWNLOADED_preflight-*.tar.gz>
 
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh \
   --kind cluster-probe-g1 \
   --project-id "$PROJECT_ID" \
   --branch "$BRANCH" \
   --commit "$COMMIT" \
-  --docker-image-id "$DOCKER_IMAGE_ID" \
   --gate-artifact "$PREFLIGHT_ARCHIVE" \
   --run-id "$RUN_ID"
 ```
@@ -200,14 +194,11 @@ utilisation подтверждают работу inference; нулевой GPU 
 RUN_ID=qa-pilot-$(git rev-parse --short HEAD)-$(date +%Y%m%d)
 CLUSTER_ARCHIVE=<PATH_TO_DOWNLOADED_cluster-probe-*.tar.gz>
 
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh \
   --kind qa-pilot-g1 \
   --project-id "$PROJECT_ID" \
   --branch "$BRANCH" \
   --commit "$COMMIT" \
-  --docker-image-id "$DOCKER_IMAGE_ID" \
   --gate-artifact "$CLUSTER_ARCHIVE" \
   --run-id "$RUN_ID"
 ```
@@ -264,7 +255,8 @@ QA archive должен содержать как минимум `runtime-manife
 
 | Симптом | Проверка и действие |
 |---|---|
-| `--docker-image-id` отклонён локально | Нужен immutable Project Docker resource ID, строго `b[a-z0-9]{19}`. |
+| Runtime image не найден | Дождитесь remote workflow для exact commit; mutable tag использовать нельзя. |
+| `--docker-image-id` отклонён локально | Для optional Project resource нужен ID строго `b[a-z0-9]{19}`. |
 | Preflight: runtime built from another commit | Dockerfile был отрендерен не из текущего полного SHA. Соберите новый resource и повторите только CPU preflight. |
 | Preflight: dependency/schema/S-BERT error | Не запускайте GPU. Исправьте Docker requirements/build, запушьте commit, соберите новый resource, повторите preflight. |
 | vLLM не проходит healthcheck | Смотрите `gpu-runtime.json` и `vllm.log`; не переходите к probe/pilot. |

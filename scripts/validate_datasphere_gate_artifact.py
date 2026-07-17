@@ -9,6 +9,11 @@ import tarfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+try:
+    from datasphere_runtime_image import require_runtime_image
+except ImportError:  # pragma: no cover - package import in unit tests
+    from scripts.datasphere_runtime_image import require_runtime_image
+
 
 MAX_JSON_BYTES = 5 * 1024 * 1024
 RUNTIME_PROTOCOL = "hallu-datasphere-vllm085-cu118-v1"
@@ -154,9 +159,16 @@ def main() -> None:
     parser.add_argument("--gate", choices=("preflight", "cluster-probe-g1"), required=True)
     parser.add_argument("--artifact", required=True)
     parser.add_argument("--commit", required=True)
-    parser.add_argument("--docker-image-id", required=True)
+    image = parser.add_mutually_exclusive_group(required=True)
+    image.add_argument("--docker-image-id")
+    image.add_argument("--docker-image")
     parser.add_argument("--model-id", required=True)
     args = parser.parse_args()
+    runtime_image = args.docker_image_id or args.docker_image
+    try:
+        require_runtime_image(runtime_image, registry=args.docker_image is not None)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     artifact_path = Path(args.artifact)
     if not artifact_path.is_file():
         raise SystemExit(f"gate artifact does not exist: {artifact_path}")
@@ -164,11 +176,11 @@ def main() -> None:
     try:
         if args.gate == "preflight":
             result = _validate_preflight(
-                artifact, commit=args.commit, image_id=args.docker_image_id, model_id=args.model_id
+                artifact, commit=args.commit, image_id=runtime_image, model_id=args.model_id
             )
         else:
             result = _validate_cluster_probe(
-                artifact, commit=args.commit, image_id=args.docker_image_id, model_id=args.model_id
+                artifact, commit=args.commit, image_id=runtime_image, model_id=args.model_id
             )
     finally:
         artifact.close()

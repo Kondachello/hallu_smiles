@@ -1,0 +1,73 @@
+name: Build DataSphere runtime image
+
+on:
+  push:
+    branches:
+      - new-metrics
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: datasphere-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Kondachello/hallu_smiles'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out the exact source commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 1
+
+      - name: Render the commit-pinned Dockerfile
+        run: |
+          python3 scripts/render_datasphere_dockerfile.py \
+            --commit "$GITHUB_SHA" \
+            --branch new-metrics \
+            --output datasphere/docker/rendered/Dockerfile
+
+      - name: Authenticate to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | \
+            docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and publish the amd64 runtime
+        id: publish
+        run: |
+          image_name="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hallu-smiles-datasphere"
+          metadata="$RUNNER_TEMP/datasphere-runtime-metadata.json"
+          docker buildx create --name hallu-datasphere-builder --driver docker-container --use
+          docker buildx build \
+            --platform linux/amd64 \
+            --file datasphere/docker/rendered/Dockerfile \
+            --tag "$image_name:$GITHUB_SHA" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --provenance=false \
+            --push \
+            --metadata-file "$metadata" \
+            .
+          digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["containerimage.digest"])' "$metadata")"
+          case "$digest" in
+            sha256:[0-9a-f][0-9a-f]*) ;;
+            *) echo "Invalid published digest: $digest" >&2; exit 1 ;;
+          esac
+          test "${#digest}" -eq 71
+          runtime_image="$image_name@$digest"
+          echo "runtime_image=$runtime_image" >> "$GITHUB_OUTPUT"
+          printf 'Immutable runtime: `%s`\n' "$runtime_image" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify anonymous immutable pull
+        env:
+          RUNTIME_IMAGE: ${{ steps.publish.outputs.runtime_image }}
+        run: |
+          docker logout ghcr.io
+          docker buildx imagetools inspect "$RUNTIME_IMAGE"

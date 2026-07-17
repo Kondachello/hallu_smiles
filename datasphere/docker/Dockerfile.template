@@ -1,5 +1,5 @@
 # Render with scripts/render_datasphere_dockerfile.py from a pushed Git commit.
-# The build is performed remotely by DataSphere. It never includes Llama,
+# The build is performed by remote Linux CI for use by DataSphere. It never includes Llama,
 # RAGTruth, the local checkout, or the project-storage root in its context.
 FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
 

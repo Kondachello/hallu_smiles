@@ -39,7 +39,7 @@ cmd: >-
   set -e;
   exit "$job_status"'
 env:
-  docker: __DOCKER_IMAGE_ID__
+__DOCKER_ENV_BLOCK__
 outputs:
   - qa-pilot-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
 flags:

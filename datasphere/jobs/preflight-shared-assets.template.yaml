@@ -26,7 +26,7 @@ cmd: >-
   cp /opt/hallu/runtime-manifest.json /opt/hallu/manifests/server.freeze.txt /opt/hallu/manifests/client.freeze.txt "$ARTIFACT_DIR/";
   tar -C "$(dirname "$ARTIFACT_DIR")" -czf "${ARTIFACT_ARCHIVE}" "$(basename "$ARTIFACT_DIR")"'
 env:
-  docker: __DOCKER_IMAGE_ID__
+__DOCKER_ENV_BLOCK__
 outputs:
   - preflight-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
 flags:

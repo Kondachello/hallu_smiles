@@ -120,10 +120,12 @@ python run.py --stage all --relation-mode support \
 
 The laptop only renders and submits Jobs. Llama 3.1 8B inference runs on `127.0.0.1` inside a
 DataSphere `g1.1` Job; no model or GPU runtime is installed locally. The model and RAGTruth are
-staged once in read-only Project storage, while an immutable Project Docker resource supplies the
+staged once in read-only Project storage, while an immutable public OCI image supplies the
 runtime. Jobs neither download weights nor install Python packages.
 
-The Docker resource is built remotely from a rendered Dockerfile pinned to a pushed Git commit.
+GitHub Actions builds the runtime remotely from a rendered Dockerfile pinned to every pushed
+`new-metrics` commit and publishes it to GHCR. The submitter resolves the commit tag to its
+content digest and puts only the immutable `image@sha256:...` reference in Job YAML.
 It contains two isolated environments: `/opt/hallu/server` for vLLM/XGrammar and
 `/opt/hallu/client` for KGGen/DSPy/scoring. It also embeds the exact offline S-BERT snapshot at
 `/opt/hallu/models/all-MiniLM-L6-v2`. The 8B model itself is never copied into the image.
@@ -137,39 +139,33 @@ export DS_SHARED_ROOT="$PWD/shared"
 python scripts/stage_datasphere_shared_assets.py --shared-root "$DS_SHARED_ROOT" \
   --model-id meta-llama/Meta-Llama-3.1-8B-Instruct
 
-# Locally, render the Dockerfile from an already-pushed full commit SHA. Build it as a
-# DataSphere Project Docker resource, then record the immutable resource ID (b + 19 chars).
+# Locally, push the exact source commit and wait for the remote runtime build.
+# No Docker daemon, model weights or image layers are stored on the laptop.
 COMMIT=$(git rev-parse HEAD)
-.venv-datasphere/bin/python scripts/render_datasphere_dockerfile.py \
-  --commit "$COMMIT" --branch new-metrics \
-  --output datasphere/docker/rendered/Dockerfile-$COMMIT
-DOCKER_IMAGE_ID=<IMMUTABLE_PROJECT_DOCKER_RESOURCE_ID>
+git push origin new-metrics
+gh run watch --repo Kondachello/hallu_smiles \
+  "$(gh run list --repo Kondachello/hallu_smiles --branch new-metrics \
+      --workflow datasphere-runtime-image.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 
 # Submit the CPU preflight with that exact commit and image. The helper refuses an unpushed
 # commit, validates the rendered YAML, and never creates a project or secret.
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh --kind preflight --project-id <PROJECT_ID> \
-  --commit "$COMMIT" --docker-image-id "$DOCKER_IMAGE_ID" \
+  --commit "$COMMIT" \
   --run-id preflight-20260717 --branch new-metrics
 
 # Download the successful preflight output first. The submitter validates its
 # commit/image/model/runtime identity before it can create a GPU Job.
 PREFLIGHT_ARCHIVE=<PATH_TO_DOWNLOADED_preflight-*.tar.gz>
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh --kind cluster-probe-g1 --project-id <PROJECT_ID> \
-  --commit "$COMMIT" --docker-image-id "$DOCKER_IMAGE_ID" \
+  --commit "$COMMIT" \
   --gate-artifact "$PREFLIGHT_ARCHIVE" \
   --run-id cluster-probe-20260717 --branch new-metrics
 
 # Download the successful 3-QA output. The submitter checks all probe reports,
 # the empty failure log and exact identity before it can create the full Job.
 CLUSTER_ARCHIVE=<PATH_TO_DOWNLOADED_cluster-probe-*.tar.gz>
-PYTHON_BIN=.venv-datasphere/bin/python \
-DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh --kind qa-pilot-g1 --project-id <PROJECT_ID> \
-  --commit "$COMMIT" --docker-image-id "$DOCKER_IMAGE_ID" \
+  --commit "$COMMIT" \
   --gate-artifact "$CLUSTER_ARCHIVE" \
   --run-id new-metrics-20260717 --branch new-metrics
 ```
@@ -186,7 +182,7 @@ The submitter also refuses to create a second non-terminal HalluGraph GPU Job in
 
 The GPU configuration is one `g1.1` V100 in FP16 with `max-model-len=8192` and a hard three-hour
 limit (777,600 units plus at most 60 seconds graceful shutdown). See
-[the team DataSphere runbook](docs/datasphere-team-runbook.md) for Docker-resource creation,
+[the team DataSphere runbook](docs/datasphere-team-runbook.md) for remote image creation,
 gate criteria, the shared-storage contract, and monitoring.
 
 ## 5. Outputs (`results/`)

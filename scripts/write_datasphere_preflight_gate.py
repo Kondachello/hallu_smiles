@@ -50,6 +50,7 @@ def main() -> None:
         "mode": "preflight",
         "source_commit": args.source_commit,
         "datasphere_docker_image_id": args.docker_image_id,
+        "runtime_image": args.docker_image_id,
         "model_id": args.model_id,
         "model_revision": shared.get("model_revision"),
         "runtime_protocol": manifest.get("runtime_protocol"),

@@ -14,11 +14,15 @@ from pathlib import Path
 
 import yaml
 
+try:
+    from datasphere_runtime_image import is_oci_digest_image, is_project_docker_image
+except ImportError:  # pragma: no cover - package import in unit tests
+    from scripts.datasphere_runtime_image import is_oci_digest_image, is_project_docker_image
+
 
 SHELL_PREFIX = "bash -lc '"
 SHELL_VAR = re.compile(r"\$\{([^}]+)\}")
 ALLOWED_DATASPHERE_VARS = {"ARTIFACT_ARCHIVE"}
-DOCKER_IMAGE_ID_RE = re.compile(r"^b[a-z0-9]{19}$")
 
 
 def _require(condition: bool, message: str) -> None:
@@ -53,14 +57,26 @@ def validate_job(path: Path, repo_root: Path) -> dict:  # noqa: ARG001 - stable 
     env = document.get("env")
     _require(isinstance(env, dict), "Job must define env.docker")
     _require("python" not in env, "Docker Job must not also define env.python")
-    docker_image_id = env.get("docker")
+    docker = env.get("docker")
+    if isinstance(docker, str):
+        _require(
+            is_project_docker_image(docker),
+            "string env.docker must be an immutable DataSphere project Docker resource ID",
+        )
+        runtime_image = docker
+    else:
+        _require(
+            isinstance(docker, dict) and set(docker) == {"image"},
+            "mapping env.docker must contain only a public immutable image",
+        )
+        runtime_image = docker.get("image")
+        _require(
+            isinstance(runtime_image, str) and is_oci_digest_image(runtime_image),
+            "env.docker.image must be pinned by @sha256; mutable registry tags are forbidden",
+        )
     _require(
-        isinstance(docker_image_id, str) and DOCKER_IMAGE_ID_RE.fullmatch(docker_image_id),
-        "env.docker must be an immutable DataSphere project Docker resource ID",
-    )
-    _require(
-        f'DATASPHERE_DOCKER_IMAGE_ID="{docker_image_id}"' in body,
-        "Job must record its DataSphere Docker resource ID in the runtime metadata",
+        f'DATASPHERE_DOCKER_IMAGE_ID="{runtime_image}"' in body,
+        "Job must record its immutable Docker runtime identity in the runtime metadata",
     )
     if "g1.1" in document.get("cloud-instance-types", []):
         _require(
