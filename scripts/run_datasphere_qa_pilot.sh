@@ -21,9 +21,10 @@ MODEL_MAX_MODEL_LEN="${MODEL_MAX_MODEL_LEN:-8192}"
 # for the selected short QA contexts and bounds an 8B model from returning a
 # huge entity list which makes KGGen's dynamic Pydantic schemas CPU-bound.
 KGGEN_MAX_TOKENS="${KGGEN_MAX_TOKENS:-256}"
-# Raw triples are retained when this guard is exceeded; only KGGen's optional
-# LLM canonicalisation is skipped.  The repository default remains unbounded.
-KGGEN_CLUSTER_MAX_ITEMS="${KGGEN_CLUSTER_MAX_ITEMS:-48}"
+# The official QA method keeps KGGen LLM clustering enabled and unbounded.
+# Supplying a positive cap is reserved for an explicitly labelled diagnostic,
+# never for the final strict/support comparison.
+KGGEN_CLUSTER_MAX_ITEMS="${KGGEN_CLUSTER_MAX_ITEMS:-}"
 # KGGen 0.4 and DSPy share mutable state inside a backend instance.  Nested
 # chunk/response thread pools produced a local-vLLM deadlock and hours of idle
 # V100 time.  The Job is intentionally serial; vLLM remains the only GPU work.
@@ -44,6 +45,7 @@ GPU_LOG="$RUN_ROOT/gpu.csv"
 METADATA="$RUN_ROOT/run_metadata.json"
 UNITS_PER_SECOND="${DATASPHERE_UNITS_PER_SECOND:-}"
 GPU_TIME_LIMIT_SECONDS="${GPU_TIME_LIMIT_SECONDS:-}"
+QA_PILOT_LIMIT="${QA_PILOT_LIMIT:-}"
 VLLM_PID=""
 GPU_PID=""
 
@@ -107,18 +109,25 @@ Path(sys.argv[1]).write_text(json.dumps({
 PY
 
 export OPENAI_API_KEY="${OPENAI_API_KEY:-local-datasphere-key}"
-"$PYTHON_BIN" "$ROOT/scripts/make_datasphere_runtime_config.py" \
-  --base-config "$ROOT/config.yaml" \
-  --output "$RUNTIME_CONFIG" \
-  --model-id "$MODEL_ID" \
-  --api-base "http://127.0.0.1:${PORT}/v1" \
-  --data-dir "$DATA_DIR" \
-  --max-tokens "$KGGEN_MAX_TOKENS" \
-  --cluster-max-items "$KGGEN_CLUSTER_MAX_ITEMS" \
-  --disable-clustering \
-  --concurrency "$KGGEN_CONCURRENCY" \
-  --serial-chunking \
+runtime_config_args=(
+  --base-config "$ROOT/config.yaml"
+  --output "$RUNTIME_CONFIG"
+  --model-id "$MODEL_ID"
+  --api-base "http://127.0.0.1:${PORT}/v1"
+  --data-dir "$DATA_DIR"
+  --max-tokens "$KGGEN_MAX_TOKENS"
+  --concurrency "$KGGEN_CONCURRENCY"
+  --serial-chunking
   --work-dir "$RUN_ROOT"
+)
+if [[ -n "$KGGEN_CLUSTER_MAX_ITEMS" ]]; then
+  [[ "$KGGEN_CLUSTER_MAX_ITEMS" =~ ^[1-9][0-9]*$ ]] || { echo "KGGEN_CLUSTER_MAX_ITEMS must be positive when set." >&2; exit 2; }
+  runtime_config_args+=(--cluster-max-items "$KGGEN_CLUSTER_MAX_ITEMS")
+fi
+if [[ -n "$QA_PILOT_LIMIT" ]]; then
+  [[ "$QA_PILOT_LIMIT" =~ ^[1-9][0-9]*$ ]] || { echo "QA_PILOT_LIMIT must be positive when set." >&2; exit 2; }
+fi
+"$PYTHON_BIN" "$ROOT/scripts/make_datasphere_runtime_config.py" "${runtime_config_args[@]}"
 
 vllm serve "$MODEL_PATH" \
   --served-model-name "$MODEL_ID" \
@@ -144,16 +153,16 @@ nvidia-smi --query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used,
 GPU_PID=$!
 
 # A plain completion is not enough: KGGen calls vLLM through DSPy's typed
-# output adapter. The local Llama profile deliberately keeps raw triples and
-# disables KGGen's optional LLM clustering after a verified Pydantic stall in
-# that upstream path, so this probe exercises the same non-clustered path.
-# GNU timeout protects the budget if the client blocks.
+# output adapter and optional LLM clustering. Both are required for a faithful
+# KGGen run, so the probe keeps clustering on. GNU timeout protects the budget
+# if the client blocks.
 echo "[probe] checking KGGen/DSPy structured extraction before the QA pilot."
 timeout --signal=TERM --kill-after=30s "${KGGEN_PROBE_TIMEOUT_SECONDS:-180}" \
   "$PYTHON_BIN" "$ROOT/scripts/check_datasphere_kggen_probe.py" \
   --port "$PORT" --model-id "$MODEL_ID" \
   --timeout "${KGGEN_PROBE_REQUEST_TIMEOUT_SECONDS:-60}" \
   --max-tokens "${KGGEN_PROBE_MAX_TOKENS:-256}" \
+  --cluster \
   --report "$RUN_ROOT/kggen-probe.json"
 
 # The synthetic probe above validates the typed-output protocol.  This second
@@ -206,9 +215,41 @@ run_extraction_with_gpu_watchdog() {
 
 start_epoch="$(date +%s)"
 echo "[watchdog] strict KG extraction will abort after ${GPU_IDLE_ABORT_SECONDS:-600}s without GPU activity."
-run_extraction_with_gpu_watchdog "$PYTHON_BIN" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage extract \
-  --relation-mode strict --qa-pilot --qa-pilot-manifest-out "$MANIFEST" \
-  --output-dir "$STRICT_OUT"
+extract_args=(
+  --config "$RUNTIME_CONFIG" --stage extract --relation-mode strict --qa-pilot
+  --qa-pilot-manifest-out "$MANIFEST" --output-dir "$STRICT_OUT"
+)
+if [[ -n "$QA_PILOT_LIMIT" ]]; then
+  extract_args+=(--qa-pilot-limit "$QA_PILOT_LIMIT")
+fi
+run_extraction_with_gpu_watchdog "$PYTHON_BIN" "$ROOT/run.py" "${extract_args[@]}"
+if [[ -n "$QA_PILOT_LIMIT" ]]; then
+  end_epoch="$(date +%s)"
+  "$PYTHON_BIN" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$QA_PILOT_LIMIT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+units_per_second = float(sys.argv[7]) if sys.argv[7] else None
+wall_clock_seconds = int(sys.argv[3])
+Path(sys.argv[1]).write_text(json.dumps({
+    "started_at_utc": sys.argv[2],
+    "state": "completed",
+    "mode": "cluster-runtime-probe",
+    "qa_pilot_limit": int(sys.argv[9]),
+    "wall_clock_seconds": wall_clock_seconds,
+    "model_id": sys.argv[4],
+    "configured_units_per_second": units_per_second,
+    "estimated_units_spent": wall_clock_seconds * units_per_second if units_per_second else None,
+    "shared_model_path": sys.argv[5],
+    "model_revision": sys.argv[6],
+    "gpu_time_limit_seconds": int(sys.argv[8]) if sys.argv[8] else None,
+    "runs": ["strict-extract"],
+}, indent=2) + "\n", encoding="utf-8")
+PY
+  echo "[done] cluster runtime probe extracted ${QA_PILOT_LIMIT} fixed QA rows; strict/support scoring was intentionally not run."
+  exit 0
+fi
 "$PYTHON_BIN" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
   --relation-mode strict --qa-pilot-manifest "$MANIFEST" \
   --output-dir "$STRICT_OUT"

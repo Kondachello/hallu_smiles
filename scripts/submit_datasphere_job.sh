@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/submit_datasphere_job.sh --kind preflight|qa-pilot-g1 --project-id ID --run-id ID [options]
+Usage: scripts/submit_datasphere_job.sh --kind preflight|cluster-probe-g1|qa-pilot-g1 --project-id ID --run-id ID [options]
 
 Options:
   --branch NAME       Remote branch that must contain the selected commit (default: current branch)
@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$KIND" == "preflight" || "$KIND" == "qa-pilot-g1" ]] || { echo "--kind is required" >&2; exit 2; }
+[[ "$KIND" == "preflight" || "$KIND" == "cluster-probe-g1" || "$KIND" == "qa-pilot-g1" ]] || { echo "--kind is required" >&2; exit 2; }
 [[ -n "$PROJECT_ID" && -n "$RUN_ID" && -n "$BRANCH" ]] || { echo "--project-id, --run-id, and a branch are required" >&2; exit 2; }
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "--commit must be a lowercase full SHA" >&2; exit 2; }
 command -v "$PYTHON_BIN" >/dev/null || { echo "Python not found: $PYTHON_BIN" >&2; exit 2; }

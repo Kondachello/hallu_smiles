@@ -83,7 +83,7 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["llm"]["concurrency"] == 1
     assert config["llm"]["request_timeout_s"] == 90
     assert config["extraction"]["serial_chunking"] is True
-    assert config["extraction"]["cluster_max_items"] == 48
+    assert config["extraction"]["cluster_max_items"] is None
 
     subprocess.run([
         sys.executable, str(SCRIPTS / "make_datasphere_runtime_config.py"),
@@ -125,8 +125,8 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "check_datasphere_qa_reference_probe.py" in runner
     assert "KGGEN_MAX_TOKENS" in runner
     assert "KGGEN_CLUSTER_MAX_ITEMS" in runner
-    assert "--disable-clustering" in runner
-    assert '"--cluster"' not in runner
+    assert "--disable-clustering" not in runner
+    assert "  --cluster \\\n  --report" in runner
     assert "KGGEN_CONCURRENCY" in runner
     assert "--serial-chunking" in runner
     assert "--guided-decoding-backend" in runner
@@ -156,6 +156,21 @@ def test_cpu_preflight_uses_the_same_locked_runtime_and_import_check(tmp_path):
     ).read_text(encoding="utf-8")
 
 
+def test_cluster_probe_is_bounded_but_keeps_kggen_clustering(tmp_path):
+    rendered = tmp_path / "cluster-probe.yaml"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_job.py"),
+        "--kind", "cluster-probe-g1", "--commit", "f" * 40,
+        "--run-id", "cluster-probe-20260717", "--output", str(rendered),
+    ], check=True)
+    config = yaml.safe_load(rendered.read_text(encoding="utf-8"))
+    assert config["cloud-instance-types"] == ["g1.1"]
+    assert "export QA_PILOT_LIMIT=3" in config["cmd"]
+    assert "timeout --signal=TERM --kill-after=60s 3600" in config["cmd"]
+    assert "--disable-clustering" not in config["cmd"]
+    assert config["outputs"] == [{"cluster-probe-cluster-probe-20260717.tar.gz": "ARTIFACT_ARCHIVE"}]
+
+
 def test_gpu_job_archives_artifacts_when_cancelled(tmp_path):
     rendered = tmp_path / "qa-pilot.yaml"
     subprocess.run([
@@ -171,7 +186,7 @@ def test_gpu_job_archives_artifacts_when_cancelled(tmp_path):
 
 
 def test_rendered_jobs_pass_local_cli_guardrails(tmp_path):
-    for kind in ("preflight", "qa-pilot-g1"):
+    for kind in ("preflight", "cluster-probe-g1", "qa-pilot-g1"):
         rendered = tmp_path / f"{kind}.yaml"
         subprocess.run([
             sys.executable, str(SCRIPTS / "render_datasphere_job.py"),

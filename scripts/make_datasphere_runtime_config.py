@@ -24,10 +24,10 @@ def main() -> None:
     parser.add_argument(
         "--cluster-max-items",
         type=int,
-        default=48,
+        default=None,
         help=(
-            "Maximum entity/predicate candidates for KGGen's optional LLM clustering; "
-            "raw triples are kept when this local-runtime safety bound is exceeded."
+            "Optional maximum entity/predicate candidates for KGGen LLM clustering. "
+            "Omit it for the faithful, unbounded KGGen clustering path."
         ),
     )
     parser.add_argument(
@@ -67,7 +67,7 @@ def main() -> None:
         raise ValueError("--max-tokens must be positive")
     if args.concurrency <= 0:
         raise ValueError("--concurrency must be positive")
-    if args.cluster_max_items <= 0:
+    if args.cluster_max_items is not None and args.cluster_max_items <= 0:
         raise ValueError("--cluster-max-items must be positive")
 
     with open(args.base_config, encoding="utf-8") as handle:

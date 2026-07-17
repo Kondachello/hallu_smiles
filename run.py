@@ -366,7 +366,7 @@ def _select_instances(args, cfg, out_dir: Path) -> list[Instance]:
     if args.qa_pilot_manifest:
         selected = load_manifest_instances(args.qa_pilot_manifest, all_instances)
         print(f"[pilot] loaded {len(selected)} fixed QA rows from {args.qa_pilot_manifest}")
-        return selected
+        return _limit_qa_pilot(selected, args.qa_pilot_limit)
     if args.qa_pilot:
         selected = select_qa_pilot(
             all_instances, seed=args.sample_seed,
@@ -379,10 +379,27 @@ def _select_instances(args, cfg, out_dir: Path) -> list[Instance]:
             train_sources=args.qa_pilot_train_sources, test_sources=args.qa_pilot_test_sources,
         )
         print(f"[pilot] selected {len(selected)} QA rows -> {manifest_path}")
-        return selected
+        return _limit_qa_pilot(selected, args.qa_pilot_limit)
     if args.limit:
         return all_instances[: args.limit]
     return all_instances
+
+
+def _limit_qa_pilot(instances: list[Instance], limit: int | None) -> list[Instance]:
+    """Cap a fixed pilot only for a bounded runtime compatibility probe.
+
+    The full manifest is written before this cap is applied, so the probe and
+    the later 20-record evaluation use exactly the same deterministic prefix.
+    It is never used for metric tuning or evaluation.
+    """
+    if limit is None:
+        return instances
+    if limit <= 0:
+        raise SystemExit("--qa-pilot-limit must be positive")
+    if limit > len(instances):
+        raise SystemExit(f"--qa-pilot-limit={limit} exceeds the fixed pilot size {len(instances)}")
+    print(f"[pilot] runtime probe cap: {limit}/{len(instances)} fixed QA rows")
+    return instances[:limit]
 
 
 def main() -> None:
@@ -397,6 +414,10 @@ def main() -> None:
     parser.add_argument("--qa-pilot", action="store_true", help="create a fixed 20-source QA pilot")
     parser.add_argument("--qa-pilot-manifest", default=None, help="reuse an existing QA pilot manifest")
     parser.add_argument("--qa-pilot-manifest-out", default=None, help="where a new pilot manifest is written")
+    parser.add_argument(
+        "--qa-pilot-limit", type=int, default=None,
+        help="extract only a deterministic prefix of a fixed QA pilot (runtime probes only)",
+    )
     parser.add_argument("--qa-pilot-train-sources", type=int, default=16)
     parser.add_argument("--qa-pilot-test-sources", type=int, default=4)
     parser.add_argument("--sample-seed", type=int, default=42)

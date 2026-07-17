@@ -33,8 +33,8 @@
 - Локальный vLLM намеренно ограничен 8 192 токенами на V100. Поэтому KGGen
   должен получить `llm.max_tokens: 256`: его дефолт 16 000 переполняет окно
   ещё до генерации. Скрипт делает дешёвый completion smoke-check и затем
-  KGGen/DSPy typed-output probe с timeout 180 секунд, прежде чем
-  запускать все 20 QA.
+  KGGen/DSPy typed-output **и clustering** probe с timeout 180 секунд,
+  прежде чем запускать все 20 QA. Кластеризация — часть KGGen, не fallback.
 - Для vLLM 0.6.3 выбран `--guided-decoding-backend lm-format-enforcer`
   (`lm-format-enforcer==0.10.6`). Не возвращайте default `outlines`: его
   dependency `pyairports==0.0.1` в этой среде ставится без Python-модуля.
@@ -46,12 +46,20 @@ qa-sample-test ── baseline-прогоны
         │
         └── new-metrics ── строгий baseline + новая support-гипотеза
                  │
-                 └── ваша ветка → push commit → CPU preflight → GPU QA Job
+                 └── ваша ветка → push commit → CPU preflight
                                                      │
-                                                     └── download archive → отчёт
+                                      cluster-probe (3 QA, при смене runtime)
+                                                     │
+                                                     └── GPU QA Job → archive → отчёт
 ```
 
-Один GPU Job запускает этапы в одном процессе: сначала strict baseline,
+После новой зависимости или зависания сначала запустите `cluster-probe-g1`:
+он поднимает ту же Llama, но извлекает и **кластеризует** только первые три
+записи фиксированного manifest. Это дешёвая проверка границы, на которой
+раньше возникал stall. Успешный probe не является метрикой и не заменяет
+полный пилот.
+
+Один полный GPU Job запускает этапы в одном процессе: сначала strict baseline,
 затем support-вариант. Они используют **одинаковые** 20 `(C,Q,A)`, один
 selection manifest, KG cache и запущенный vLLM. Поэтому не создавайте две
 GPU Job «для baseline и new metrics» — это будет дороже и исказит сравнение.
@@ -272,7 +280,7 @@ shared assets и не влияет на отдельные Jobs.
 | Completion smoke-check отвечает `500`, в `vllm.log` — `cannot import name 'LogitsWarper'` | Плавающий `transformers>=...` поставил версию 4.57, несовместимую с `lm-format-enforcer==0.10.6`. | Нужен точный, а не диапазонный pin: `transformers==4.45.2`; затем заново пройти CPU preflight. |
 | `kggen-probe.json` не появляется или Job завершается до QA | DSPy 3.x/LiteLLM drift совместим по import, но не по KGGen structured-output path. | Сохранить locked `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`; probe должен пройти до extraction. |
 | Несовместимость Python-зависимостей обнаружена до GPU | CPU preflight импортирует ровно тот же набор requirements и пишет `runtime-dependencies.json`. | Не запускать GPU, пока оба отчёта preflight имеют `status: ready`; исправить pin, запушить commit и повторить только CPU preflight. |
-| GPU остаётся 0% на KG extraction | Запрос не попал в vLLM либо KGGen/DSPy застыл между вызовами. | Проверить `qa-reference-probe.json` и `vllm.log`. Для локальной Llama profile сохраняет raw triples и отключает только необязательный KGGen LLM-clustering: именно в нём был воспроизведён Pydantic stall. Сохранить pins `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`, `pydantic==2.10.6`, LLM timeout и serial KGGen. Watchdog завершит только extraction через 600 секунд сплошного нулевого GPU; после этого читать diagnostics, а не перезапускать вслепую. |
+| GPU остаётся 0% на KG extraction | Клиент KGGen/DSPy мог застыть после ответа vLLM при обработке cluster-процедуры. | Проверить `qa-reference-probe.json` и `vllm.log`; кластеризацию не отключать в официальном запуске. Сохранить pins `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`, `pydantic==2.10.6`, LLM timeout и serial KGGen. Сначала пройти `cluster-probe-g1` на трёх фиксированных QA. Watchdog завершит только extraction через 600 секунд сплошного нулевого GPU; после этого читать diagnostics, а не перезапускать вслепую. |
 | В error Job нет `vllm.log` / archive | При аварийном выходе DataSphere не передал путь output archive в shell. | Template задаёт fallback `ARTIFACT_ARCHIVE` до trap. Не удалять его: частичный archive должен собираться и при error/cancel. |
 | Логи `attach` шумные или пустые | Локальный macOS gRPC клиент нестабилен. | Смотреть `job get` и Launch history; архив скачивать после terminal. |
 | Повторная загрузка модели / нехватка диска | GPU Job пытается staging/download. | GPU Job только читает ready-marker; staging — лишь одноразово на c1.4. |

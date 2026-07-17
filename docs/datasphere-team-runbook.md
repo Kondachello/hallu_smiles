@@ -169,7 +169,7 @@ V100 32 GB. Для KGGen в Job обязательно выставляется 
 без него KGGen 0.4 допускает до 16k output tokens, и vLLM отклоняет запросы с
 `ContextWindowExceededError`. Сразу после `/health` Job выполняет один
 двухтокенный `/v1/chat/completions` smoke-check, а затем отдельный маленький
-**KGGen/DSPy probe** с typed-output в том же raw-triple режиме. Второй probe проверяет
+**KGGen/DSPy probe** с typed-output и LLM-clustering. Второй probe проверяет
 именно тот путь, который использует extractor; если он зависнет или
 завершится ошибкой, QA-pilot не начнётся. Внешний `timeout` probe ограничен
 180 секундами, поэтому несовместимость не превратится в три часа оплачиваемого
@@ -201,14 +201,16 @@ adapter, `litellm`, `dspy` и `kg_gen`, а затем сохраняет
 свой внутренний pool при `chunk_size`; совместно с внешним response pool он
 разделяет один DSPy client и может зависнуть после части запросов. Serial режим
 сохраняет split и aggregate, но устраняет nested concurrency. В профиле
-DataSphere дополнительно выключен необязательный KGGen LLM-clustering:
-после двух успешных reference-графов был воспроизведён Pydantic stall именно в
-cluster path. Все raw entities и triples сохраняются, а entity/relation
-normalisation для strict RP по-прежнему делает matching (`normalize`,
-substring и SBERT). Это отличие runtime-конфига обязательно указывается в
-отчёте эксперимента. Если `vllm.log`/`gpu.csv` показывают несколько
-минут 0% utilisation после завершённых запросов, отменяйте конкретную Job:
-такой простой не является полезным вычислением.
+DataSphere сохраняет KGGen LLM-clustering включённой: это часть метода,
+канонизирующая entity/predicate aliases, и raw-only граф не считается
+воспроизводимым результатом. После двух успешных reference-графов был
+воспроизведён Pydantic stall в client-side обработке одного cluster response.
+Поэтому перед полным 20-QA запуском используется отдельный `cluster-probe-g1`:
+тот же vLLM, те же pins и clustering, но лишь первые три записи fixed manifest
+и лимит 1 час. Только его успех разрешает полный pilot. Если `vllm.log`/
+`gpu.csv` показывают несколько минут 0% utilisation после завершённых
+запросов, отменяйте конкретную Job: такой простой не является полезным
+вычислением.
 
 ## Что именно pre-submit проверяет
 

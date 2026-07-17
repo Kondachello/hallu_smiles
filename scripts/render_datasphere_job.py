@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = {
     "preflight": ROOT / "datasphere/jobs/preflight-shared-assets.template.yaml",
+    "cluster-probe-g1": ROOT / "datasphere/jobs/qa-cluster-probe-g1.template.yaml",
     "qa-pilot-g1": ROOT / "datasphere/jobs/qa-pilot-g1.template.yaml",
 }
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
