@@ -53,6 +53,10 @@ def _validate_gpu_requirements(path: Path) -> None:
         "lm-format-enforcer==0.10.6" in lines,
         "g1.1 vLLM runtime requires the pinned lm-format-enforcer guided-decoding backend",
     )
+    _require(
+        "pydantic==2.10.6" in lines,
+        "KGGen/DSPy local-vLLM path requires the tested pydantic==2.10.6 pin",
+    )
 
 
 def _validate_preflight_requirements(path: Path, repo_root: Path) -> None:

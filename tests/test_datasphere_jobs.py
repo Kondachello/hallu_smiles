@@ -85,6 +85,15 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["extraction"]["serial_chunking"] is True
     assert config["extraction"]["cluster_max_items"] == 48
 
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "make_datasphere_runtime_config.py"),
+        "--base-config", str(ROOT / "config.yaml"), "--output", str(output),
+        "--model-id", MODEL_ID, "--api-base", "http://127.0.0.1:8000/v1",
+        "--data-dir", "/read-only/ragtruth", "--work-dir", str(work_dir),
+        "--disable-clustering",
+    ], check=True)
+    assert yaml.safe_load(output.read_text(encoding="utf-8"))["extraction"]["cluster"] is False
+
 
 def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path):
     rendered = tmp_path / "qa-pilot.yaml"
@@ -103,6 +112,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "vllm==0.6.3.post1" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
     assert "transformers==4.45.2" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
     assert "lm-format-enforcer==0.10.6" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
+    assert "pydantic==2.10.6" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
 
     runner = (SCRIPTS / "run_datasphere_qa_pilot.sh").read_text(encoding="utf-8")
     assert "huggingface-cli download" not in runner
@@ -115,6 +125,8 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "check_datasphere_qa_reference_probe.py" in runner
     assert "KGGEN_MAX_TOKENS" in runner
     assert "KGGEN_CLUSTER_MAX_ITEMS" in runner
+    assert "--disable-clustering" in runner
+    assert '"--cluster"' not in runner
     assert "KGGEN_CONCURRENCY" in runner
     assert "--serial-chunking" in runner
     assert "--guided-decoding-backend" in runner
@@ -122,7 +134,6 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "LITELLM_LOCAL_MODEL_COST_MAP" in runner
     assert "run_extraction_with_gpu_watchdog" in runner
     assert "GPU_IDLE_ABORT_SECONDS" in runner
-    assert "DATASPHERE_DEBUG_STACK" in runner
     assert "--stage extract" in runner
     assert "--relation-mode strict --qa-pilot-manifest \"$MANIFEST\"" in runner
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)

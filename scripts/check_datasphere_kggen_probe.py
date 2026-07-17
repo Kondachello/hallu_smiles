@@ -5,8 +5,9 @@ The usual OpenAI-compatible completion smoke test only proves a plain chat
 request.  KGGen additionally goes through DSPy's typed-output adapter, which
 is where an incompatible DSPy/LiteLLM combination can otherwise consume a GPU
 Job without ever advancing the first graph.  This deliberately tiny graph
-uses the same model name, API base, timeouts and clustering code as the pilot,
-but runs before the 20 QA records are touched.
+uses the same model name, API base, timeouts and raw-triple extraction mode as
+the pilot, but runs before the 20 QA records are touched. Optional KGGen LLM
+clustering can be requested explicitly for a separate diagnostic.
 """
 from __future__ import annotations
 
@@ -29,7 +30,9 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def run_probe(*, model_id: str, api_base: str, timeout_s: float, max_tokens: int) -> dict[str, Any]:
+def run_probe(
+    *, model_id: str, api_base: str, timeout_s: float, max_tokens: int, cluster: bool = False
+) -> dict[str, Any]:
     if timeout_s <= 0:
         raise ValueError("timeout must be positive")
     if max_tokens <= 0:
@@ -51,7 +54,10 @@ def run_probe(*, model_id: str, api_base: str, timeout_s: float, max_tokens: int
     # match KGExtractor so the probe and pilot have the same failure boundary.
     backend.lm.kwargs["timeout"] = timeout_s
     backend.lm.num_retries = 0
-    graph = backend.generate(input_data=PROBE_TEXT, cluster=True)
+    # The pilot deliberately keeps raw KGGen triples on the local Llama
+    # profile. Exercise that exact code path here: clustering is an optional
+    # post-processing LLM pass, not part of relation extraction.
+    graph = backend.generate(input_data=PROBE_TEXT, cluster=cluster)
     return {
         "checked_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "status": "ready",
@@ -60,7 +66,7 @@ def run_probe(*, model_id: str, api_base: str, timeout_s: float, max_tokens: int
         "api_base": api_base,
         "timeout_s": timeout_s,
         "max_tokens": max_tokens,
-        "cluster": True,
+        "cluster": cluster,
         "versions": {
             "kg-gen": metadata.version("kg-gen"),
             "dspy": metadata.version("dspy"),
@@ -77,6 +83,11 @@ def main() -> None:
     parser.add_argument("--model-id", required=True)
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument(
+        "--cluster",
+        action="store_true",
+        help="Also exercise optional KGGen LLM clustering (off for the local pilot).",
+    )
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
     if args.port <= 0:
@@ -86,6 +97,7 @@ def main() -> None:
         api_base=f"http://127.0.0.1:{args.port}/v1",
         timeout_s=args.timeout,
         max_tokens=args.max_tokens,
+        cluster=args.cluster,
     )
     _atomic_json(Path(args.report), report)
     print(json.dumps(report, sort_keys=True))

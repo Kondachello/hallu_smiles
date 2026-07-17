@@ -21,6 +21,7 @@ EXPECTED_VERSIONS = {
     "kg-gen": "0.4.0",
     "dspy": "2.6.27",
     "litellm": "1.60.4",
+    "pydantic": "2.10.6",
     "vllm": "0.6.3.post1",
     "transformers": "4.45.2",
     "lm-format-enforcer": "0.10.6",

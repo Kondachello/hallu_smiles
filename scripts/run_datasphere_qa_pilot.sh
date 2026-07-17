@@ -35,10 +35,6 @@ GUIDED_DECODING_BACKEND="${GUIDED_DECODING_BACKEND:-lm-format-enforcer}"
 # import. Jobs need no cost pricing to call localhost, and an unreachable
 # external endpoint must never block KGGen before the first real request.
 export LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-true}"
-# On an extraction watchdog trip, run.py prints all Python thread stacks before
-# it is terminated.  This makes an upstream client-side stall diagnosable from
-# the standard DataSphere stderr download.
-export DATASPHERE_DEBUG_STACK="${DATASPHERE_DEBUG_STACK:-1}"
 RUNTIME_CONFIG="$RUN_ROOT/runtime_config.yaml"
 MANIFEST="$RUN_ROOT/qa_pilot_manifest.json"
 STRICT_OUT="$RUN_ROOT/strict"
@@ -119,6 +115,7 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-local-datasphere-key}"
   --data-dir "$DATA_DIR" \
   --max-tokens "$KGGEN_MAX_TOKENS" \
   --cluster-max-items "$KGGEN_CLUSTER_MAX_ITEMS" \
+  --disable-clustering \
   --concurrency "$KGGEN_CONCURRENCY" \
   --serial-chunking \
   --work-dir "$RUN_ROOT"
@@ -147,9 +144,10 @@ nvidia-smi --query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used,
 GPU_PID=$!
 
 # A plain completion is not enough: KGGen calls vLLM through DSPy's typed
-# output adapter and (optionally) its clustering sequence.  Fail before the
-# 20-record pilot if this exact path is not healthy.  GNU timeout protects the
-# budget even if an upstream client blocks below its HTTP timeout layer.
+# output adapter. The local Llama profile deliberately keeps raw triples and
+# disables KGGen's optional LLM clustering after a verified Pydantic stall in
+# that upstream path, so this probe exercises the same non-clustered path.
+# GNU timeout protects the budget if the client blocks.
 echo "[probe] checking KGGen/DSPy structured extraction before the QA pilot."
 timeout --signal=TERM --kill-after=30s "${KGGEN_PROBE_TIMEOUT_SECONDS:-180}" \
   "$PYTHON_BIN" "$ROOT/scripts/check_datasphere_kggen_probe.py" \
@@ -198,8 +196,6 @@ run_extraction_with_gpu_watchdog() {
       END { exit !(samples >= need && !active) }
     '; then
       echo "[watchdog] no GPU activity for ${idle_limit_seconds}s during KG extraction; terminating extraction." >&2
-      kill -USR1 "$child_pid" 2>/dev/null || true
-      sleep 3
       kill -TERM "$child_pid" 2>/dev/null || true
       wait "$child_pid" || true
       return 124

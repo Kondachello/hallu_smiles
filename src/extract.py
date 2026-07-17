@@ -88,10 +88,16 @@ class UsageLogger:
                     if usage:
                         self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
                         self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
+                    # A localhost vLLM deployment has no meaningful USD price.
+                    # LiteLLM 1.60's generic cost calculator serialises its
+                    # OpenAI-compatible response through Pydantic. Some guided
+                    # JSON responses from a local 8B model can spin there after
+                    # vLLM has already completed, leaving the paid GPU idle.
+                    # Preserve an explicitly supplied provider cost, but never
+                    # invoke the calculator merely for telemetry.
                     cost = kwargs.get("response_cost")
-                    if cost is None:
-                        cost = litellm.completion_cost(completion_response=completion_response)
-                    self.cost += float(cost or 0.0)
+                    if cost is not None:
+                        self.cost += float(cost)
                 except Exception:
                     pass
 

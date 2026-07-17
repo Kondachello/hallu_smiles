@@ -31,6 +31,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--disable-clustering",
+        action="store_true",
+        help=(
+            "Keep raw KGGen entities/triples and skip KGGen's optional LLM clustering. "
+            "Used only for the local DataSphere Llama runtime after a verified cluster-side Pydantic stall."
+        ),
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=1,
@@ -75,6 +83,8 @@ def main() -> None:
     config["llm"]["concurrency"] = args.concurrency
     config["extraction"]["serial_chunking"] = args.serial_chunking
     config["extraction"]["cluster_max_items"] = args.cluster_max_items
+    if args.disable_clustering:
+        config["extraction"]["cluster"] = False
     config["data"]["dir"] = args.data_dir
     # DataSphere mounts project storage read-only in Jobs.  Every mutable file
     # therefore belongs to the job-local output directory, never DS_PROJECT_HOME.

@@ -159,17 +159,17 @@ driver. Также сохраняйте точный `transformers==4.45.2`: э�
 
 Нельзя оставлять плавающими и KGGen-клиентские зависимости: для текущей
 ветки зафиксированы `kg-gen==0.4.0`, `dspy==2.6.27` и
-`litellm==1.60.4`. DSPy 3.x проходит простой import-check, но меняет
+`litellm==1.60.4`, `pydantic==2.10.6`. DSPy 3.x проходит простой import-check, но меняет
 typed-output path; на практике после нескольких запросов KGGen переставал
 подавать новые запросы в vLLM, а V100 простаивал. CPU preflight проверяет
 всю эту матрицу именно как lock, а не только как набор импортируемых пакетов.
 
 `max-model-len=8192` — сознательный лимит, позволяющий Llama 8B работать на
-V100 32 GB. Для KGGen в Job обязательно выставляется `llm.max_tokens=1024`:
+V100 32 GB. Для KGGen в Job обязательно выставляется `llm.max_tokens=256`:
 без него KGGen 0.4 допускает до 16k output tokens, и vLLM отклоняет запросы с
 `ContextWindowExceededError`. Сразу после `/health` Job выполняет один
 двухтокенный `/v1/chat/completions` smoke-check, а затем отдельный маленький
-**KGGen/DSPy probe** с typed-output и clustering. Второй probe проверяет
+**KGGen/DSPy probe** с typed-output в том же raw-triple режиме. Второй probe проверяет
 именно тот путь, который использует extractor; если он зависнет или
 завершится ошибкой, QA-pilot не начнётся. Внешний `timeout` probe ограничен
 180 секундами, поэтому несовместимость не превратится в три часа оплачиваемого
@@ -200,8 +200,13 @@ adapter, `litellm`, `dspy` и `kg_gen`, а затем сохраняет
 `llm.concurrency: 1` и `extraction.serial_chunking: true`. KGGen 0.4 создаёт
 свой внутренний pool при `chunk_size`; совместно с внешним response pool он
 разделяет один DSPy client и может зависнуть после части запросов. Serial режим
-сохраняет алгоритм KGGen — тот же split, aggregate и final cluster, — но
-устраняет nested concurrency. Если `vllm.log`/`gpu.csv` показывают несколько
+сохраняет split и aggregate, но устраняет nested concurrency. В профиле
+DataSphere дополнительно выключен необязательный KGGen LLM-clustering:
+после двух успешных reference-графов был воспроизведён Pydantic stall именно в
+cluster path. Все raw entities и triples сохраняются, а entity/relation
+normalisation для strict RP по-прежнему делает matching (`normalize`,
+substring и SBERT). Это отличие runtime-конфига обязательно указывается в
+отчёте эксперимента. Если `vllm.log`/`gpu.csv` показывают несколько
 минут 0% utilisation после завершённых запросов, отменяйте конкретную Job:
 такой простой не является полезным вычислением.
 

@@ -31,9 +31,9 @@
   завершался HTTP 500. Transformers 5.x дополнительно несовместим с PyTorch
   2.4 ещё до старта vLLM.
 - Локальный vLLM намеренно ограничен 8 192 токенами на V100. Поэтому KGGen
-  должен получить `llm.max_tokens: 1024`: его дефолт 16 000 переполняет окно
+  должен получить `llm.max_tokens: 256`: его дефолт 16 000 переполняет окно
   ещё до генерации. Скрипт делает дешёвый completion smoke-check и затем
-  KGGen/DSPy typed-output+cluster probe с timeout 180 секунд, прежде чем
+  KGGen/DSPy typed-output probe с timeout 180 секунд, прежде чем
   запускать все 20 QA.
 - Для vLLM 0.6.3 выбран `--guided-decoding-backend lm-format-enforcer`
   (`lm-format-enforcer==0.10.6`). Не возвращайте default `outlines`: его
@@ -267,12 +267,12 @@ shared assets и не влияет на отдельные Jobs.
 | Аргумент `--shared-root` стал отдельной командой | Некорректный folded YAML/отступ. | Не редактировать сгенерированную shell-команду; helper её валидирует. |
 | vLLM не стартует: driver/CUDA too old | Установилась новая несовместимая версия vLLM. | Не использовать `>=`; сохранить `vllm==0.6.3.post1` и смотреть `gpu-runtime.json`. |
 | vLLM ждёт healthcheck, а в логе `cannot import name 'DTensor'` | Resolver поставил Transformers 5.x, несовместимый с PyTorch 2.4. | Сохранить прямой pin `transformers==4.45.2`; не убирать его при обновлении requirements. |
-| `/v1/chat/completions` отвечает `400`, а `failed_extractions.jsonl` содержит `ContextWindowExceededError` | KGGen без явного лимита просит до 16 000 output tokens, но vLLM для V100 ограничен 8 192. | Сохранить `llm.max_tokens: 1024` в runtime config и completion smoke-check до QA. |
+| `/v1/chat/completions` отвечает `400`, а `failed_extractions.jsonl` содержит `ContextWindowExceededError` | KGGen без явного лимита просит до 16 000 output tokens, но vLLM для V100 ограничен 8 192. | Сохранить `llm.max_tokens: 256` в runtime config и completion smoke-check до QA. |
 | Completion smoke-check отвечает `500`, в `vllm.log` — `ModuleNotFoundError: pyairports` | Default guided-decoding backend `outlines` импортирует дефектный `pyairports==0.0.1`. | Использовать `--guided-decoding-backend lm-format-enforcer` и pin `lm-format-enforcer==0.10.6`. |
 | Completion smoke-check отвечает `500`, в `vllm.log` — `cannot import name 'LogitsWarper'` | Плавающий `transformers>=...` поставил версию 4.57, несовместимую с `lm-format-enforcer==0.10.6`. | Нужен точный, а не диапазонный pin: `transformers==4.45.2`; затем заново пройти CPU preflight. |
 | `kggen-probe.json` не появляется или Job завершается до QA | DSPy 3.x/LiteLLM drift совместим по import, но не по KGGen structured-output path. | Сохранить locked `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`; probe должен пройти до extraction. |
 | Несовместимость Python-зависимостей обнаружена до GPU | CPU preflight импортирует ровно тот же набор requirements и пишет `runtime-dependencies.json`. | Не запускать GPU, пока оба отчёта preflight имеют `status: ready`; исправить pin, запушить commit и повторить только CPU preflight. |
-| GPU остаётся 0% на KG extraction | Запрос не попал в vLLM либо KGGen/DSPy застыл между вызовами. | Проверить `kggen-probe.json`: до 20 QA он выполняет реальный typed-output+cluster путь. Сохранить pins `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`, LLM timeout и serial KGGen. Watchdog завершит только extraction через 600 секунд сплошного нулевого GPU; после этого читать archive (`vllm.log`, `gpu.csv`) и diagnostics, а не перезапускать вслепую. |
+| GPU остаётся 0% на KG extraction | Запрос не попал в vLLM либо KGGen/DSPy застыл между вызовами. | Проверить `qa-reference-probe.json` и `vllm.log`. Для локальной Llama profile сохраняет raw triples и отключает только необязательный KGGen LLM-clustering: именно в нём был воспроизведён Pydantic stall. Сохранить pins `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`, `pydantic==2.10.6`, LLM timeout и serial KGGen. Watchdog завершит только extraction через 600 секунд сплошного нулевого GPU; после этого читать diagnostics, а не перезапускать вслепую. |
 | В error Job нет `vllm.log` / archive | При аварийном выходе DataSphere не передал путь output archive в shell. | Template задаёт fallback `ARTIFACT_ARCHIVE` до trap. Не удалять его: частичный archive должен собираться и при error/cancel. |
 | Логи `attach` шумные или пустые | Локальный macOS gRPC клиент нестабилен. | Смотреть `job get` и Launch history; архив скачивать после terminal. |
 | Повторная загрузка модели / нехватка диска | GPU Job пытается staging/download. | GPU Job только читает ready-marker; staging — лишь одноразово на c1.4. |
