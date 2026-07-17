@@ -38,6 +38,28 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _inspection_payload(completed: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    """Return the checker payload while tolerating dependency logs on stdout."""
+    for line in reversed(completed.stdout.splitlines()):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(payload, dict)
+            and isinstance(payload.get("versions"), dict)
+            and isinstance(payload.get("modules"), list)
+            and "torch_cuda" in payload
+        ):
+            return payload
+    stdout_tail = completed.stdout[-4000:]
+    stderr_tail = completed.stderr[-4000:]
+    raise RuntimeError(
+        "runtime inspection emitted no valid JSON payload; "
+        f"stdout_tail={stdout_tail!r}; stderr_tail={stderr_tail!r}"
+    )
+
+
 def _inspect(
     python: str,
     expected: dict[str, str],
@@ -56,7 +78,7 @@ def _inspect(
     completed = subprocess.run(
         [python, "-c", program], check=True, text=True, capture_output=True, timeout=120
     )
-    payload = json.loads(completed.stdout)
+    payload = _inspection_payload(completed)
     mismatches = {
         name: {"expected": version, "installed": payload["versions"].get(name)}
         for name, version in expected.items()
