@@ -118,10 +118,15 @@ python run.py --stage all --relation-mode support \
 
 ### DataSphere batch job
 
-DataSphere Jobs mount Project storage for reads.  Therefore Llama 3.1 8B is staged **once**
-from a cheap `c1.4` Jupyter session into shared storage, and GPU Jobs never download it or install
-packages at runtime.  The strict and support modes then run sequentially under one vLLM server on
-the same 20-QA manifest and job-local KG/verdict caches.
+The laptop only renders and submits Jobs. Llama 3.1 8B inference runs on `127.0.0.1` inside a
+DataSphere `g1.1` Job; no model or GPU runtime is installed locally. The model and RAGTruth are
+staged once in read-only Project storage, while an immutable Project Docker resource supplies the
+runtime. Jobs neither download weights nor install Python packages.
+
+The Docker resource is built remotely from a rendered Dockerfile pinned to a pushed Git commit.
+It contains two isolated environments: `/opt/hallu/server` for vLLM/XGrammar and
+`/opt/hallu/client` for KGGen/DSPy/scoring. It also embeds the exact offline S-BERT snapshot at
+`/opt/hallu/models/all-MiniLM-L6-v2`. The 8B model itself is never copied into the image.
 
 ```bash
 # In DataSphere Jupyter. Start at the Jupyter Project directory, then use the
@@ -132,25 +137,57 @@ export DS_SHARED_ROOT="$PWD/shared"
 python scripts/stage_datasphere_shared_assets.py --shared-root "$DS_SHARED_ROOT" \
   --model-id meta-llama/Meta-Llama-3.1-8B-Instruct
 
-# Locally, pin, validate and submit a read-only preflight followed by the one-GPU pilot.
-# The helper refuses an unpushed commit and catches DataSphere CLI/YAML mistakes before
-# it creates a cloud Job.  Use a Python environment that contains the `datasphere` package.
+# Locally, render the Dockerfile from an already-pushed full commit SHA. Build it as a
+# DataSphere Project Docker resource, then record the immutable resource ID (b + 19 chars).
+COMMIT=$(git rev-parse HEAD)
+.venv-datasphere/bin/python scripts/render_datasphere_dockerfile.py \
+  --commit "$COMMIT" --branch new-metrics \
+  --output datasphere/docker/rendered/Dockerfile-$COMMIT
+DOCKER_IMAGE_ID=<IMMUTABLE_PROJECT_DOCKER_RESOURCE_ID>
+
+# Submit the CPU preflight with that exact commit and image. The helper refuses an unpushed
+# commit, validates the rendered YAML, and never creates a project or secret.
 PYTHON_BIN=.venv-datasphere/bin/python \
 DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh --kind preflight --project-id <PROJECT_ID> \
-  --run-id preflight-20260716 --branch new-metrics
+  --commit "$COMMIT" --docker-image-id "$DOCKER_IMAGE_ID" \
+  --run-id preflight-20260717 --branch new-metrics
 
+# Download the successful preflight output first. The submitter validates its
+# commit/image/model/runtime identity before it can create a GPU Job.
+PREFLIGHT_ARCHIVE=<PATH_TO_DOWNLOADED_preflight-*.tar.gz>
+PYTHON_BIN=.venv-datasphere/bin/python \
+DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
+bash scripts/submit_datasphere_job.sh --kind cluster-probe-g1 --project-id <PROJECT_ID> \
+  --commit "$COMMIT" --docker-image-id "$DOCKER_IMAGE_ID" \
+  --gate-artifact "$PREFLIGHT_ARCHIVE" \
+  --run-id cluster-probe-20260717 --branch new-metrics
+
+# Download the successful 3-QA output. The submitter checks all probe reports,
+# the empty failure log and exact identity before it can create the full Job.
+CLUSTER_ARCHIVE=<PATH_TO_DOWNLOADED_cluster-probe-*.tar.gz>
 PYTHON_BIN=.venv-datasphere/bin/python \
 DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh --kind qa-pilot-g1 --project-id <PROJECT_ID> \
-  --run-id new-metrics-20260716 --branch new-metrics
+  --commit "$COMMIT" --docker-image-id "$DOCKER_IMAGE_ID" \
+  --gate-artifact "$CLUSTER_ARCHIVE" \
+  --run-id new-metrics-20260717 --branch new-metrics
 ```
 
-The GPU configuration is one `g1.1` V100 in FP16, with `max-model-len=8192` and a hard
-three-hour limit (777,600 units plus at most 60 seconds of graceful shutdown).  Per-run outputs
-contain the strict/support reports, comparison, audits, vLLM log, GPU utilization trace, and
-metadata.  See [the team DataSphere runbook](docs/datasphere-team-runbook.md) for the shared-storage
-contract and monitoring procedure.
+The server receives the exact closed JSON Schema through native OpenAI
+`response_format: {type: json_schema, ...}` and uses XGrammar constrained decoding with fallback
+disabled. Before any three-QA extraction, the runner checks the real KGGen relation schema once, the official KGGen
+typed-output plus LLM-clustering path, the support verifier schema, and the first selected
+RAGTruth reference graph. The full Job then runs strict and support on one manifest, stops vLLM,
+and repeats both runs with `--cache-only`; missing cache entries, any live call, changed cache
+hashes, or non-identical `metrics.csv` fails the Job.
+
+The submitter also refuses to create a second non-terminal HalluGraph GPU Job in the Project.
+
+The GPU configuration is one `g1.1` V100 in FP16 with `max-model-len=8192` and a hard three-hour
+limit (777,600 units plus at most 60 seconds graceful shutdown). See
+[the team DataSphere runbook](docs/datasphere-team-runbook.md) for Docker-resource creation,
+gate criteria, the shared-storage contract, and monitoring.
 
 ## 5. Outputs (`results/`)
 
@@ -168,10 +205,10 @@ contract and monitoring procedure.
 ## Reproducibility & determinism
 
 - `temperature: 0.0` everywhere; fixed `eval.seed`.
-- **Disk cache** keyed by `sha256(model + prompt_params + input_text)` at `.cache/kg/`.
-  A warm cache makes **zero API calls** and reproduces **byte-identical** `metrics.csv`
-  (verified: only `usage.jsonl` / the API-usage line of `report.md` differ, since they honestly
-  report that 0 calls were made on the cached run).
+- **Disk caches** are namespaced by model revision, runtime fingerprint, structured-output
+  contract, extraction parameters, and input content. In DataSphere, the full pilot proves the
+  archive by stopping vLLM and rerunning strict/support with `--cache-only`: the replay must make
+  **zero live calls**, leave cache hashes unchanged, and reproduce byte-identical `metrics.csv`.
 - Cache writes are atomic (`os.replace`) with **per-writer unique temp names**, so concurrent
   extraction of identical texts (RAGTruth has duplicate responses) is crash-safe and race-free.
 - **`G_c` is extracted once per `source_id`** (see `unique_sources` in `run.py`), reused across

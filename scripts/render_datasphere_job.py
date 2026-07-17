@@ -15,6 +15,7 @@ TEMPLATES = {
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+DOCKER_IMAGE_ID_RE = re.compile(r"^b[a-z0-9]{19}$")
 DEFAULT_MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 
@@ -25,6 +26,7 @@ def main() -> None:
     parser.add_argument("--run-id", required=True, help="Lowercase, dash-separated output/job suffix.")
     parser.add_argument("--output", required=True)
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help="HF model ID selected for this Job.")
+    parser.add_argument("--docker-image-id", required=True, help="Immutable project Docker resource ID.")
     args = parser.parse_args()
 
     if not COMMIT_RE.fullmatch(args.commit):
@@ -33,11 +35,14 @@ def main() -> None:
         raise SystemExit("--run-id must match [a-z0-9][a-z0-9-]{0,47}")
     if not MODEL_ID_RE.fullmatch(args.model_id):
         raise SystemExit("--model-id must look like an organization/model Hugging Face ID")
+    if not DOCKER_IMAGE_ID_RE.fullmatch(args.docker_image_id):
+        raise SystemExit("--docker-image-id must match b[a-z0-9]{19}")
     rendered = TEMPLATES[args.kind].read_text(encoding="utf-8")
     rendered = (
         rendered.replace("__GIT_COMMIT__", args.commit)
         .replace("__RUN_ID__", args.run_id)
         .replace("__MODEL_ID__", args.model_id)
+        .replace("__DOCKER_IMAGE_ID__", args.docker_image_id)
     )
     if "__" in rendered:
         raise RuntimeError("unresolved placeholder in Job template")

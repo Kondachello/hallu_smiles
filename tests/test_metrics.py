@@ -72,6 +72,35 @@ def test_empty_edges_cfi_reduces_to_eg():
     assert res.h(0.5) == 0.0
 
 
+def test_strict_only_edges_do_not_fabricate_support_score():
+    g_a = Graph({"france", "paris"}, {("france", "has capital", "paris")})
+    res = score_response(g_a, ref(), Graph.empty(), Graph.empty(), verifier=None)
+
+    assert res.Ea == 1 and res.support_verified is False
+    assert res.RP_support is None and res.RP_support_defined is False
+    assert res.cfi_for_mode(0.7, "support") is None
+    assert res.h_for_mode(0.7, "support") is None
+
+
+def test_strict_report_suppresses_support_detector_even_without_edges():
+    from run import build_rows
+
+    result = score_response(
+        Graph({"paris"}, set()), ref(), Graph.empty(), Graph.empty(), verifier=None
+    )
+    rows = build_rows([
+        {
+            "response_id": "r1", "source_id": "s1", "task": "QA",
+            "gen_model": "fixture", "split": "test", "y": 0,
+            "context_len": 1, "score": result.to_dict(),
+        }
+    ], 0.7, 0.7, "strict")
+
+    assert rows[0]["H_strict"] == 0.0
+    assert rows[0]["CFI_support"] is None
+    assert rows[0]["H_support"] is None
+
+
 # --------------------------------------------------------------------------------------
 # Degenerate: |V_a| = 0 -> unscorable
 # --------------------------------------------------------------------------------------

@@ -73,7 +73,10 @@ class ScoreResult:
             return None
         rp = self.rp_for_mode(mode)
         if not self.rp_defined_for_mode(mode) or rp is None:
-            return self.EG  # no answer edges: edge-aware reduction to EG
+            # Edge-aware reduction is valid only when the answer graph truly
+            # has no edges.  A strict-only run with Ea>0 has not measured
+            # support RP and must not publish a fabricated H_support=1-EG.
+            return self.EG if self.Ea == 0 else None
         return alpha * self.EG + (1.0 - alpha) * rp
 
     def h_for_mode(

@@ -18,6 +18,7 @@ import numpy as np
 from tqdm import tqdm
 
 from src.audit import build_audit_record, write_audit
+from src.cache import CacheOnlyMissError, config_value
 from src.config import load_config
 from src.data import Instance, load_instances, unique_sources
 from src.evaluate import run_evaluation
@@ -29,23 +30,49 @@ from src.tune import alpha_cv, h_array, prf_at_threshold, select_f1_threshold
 from src.verifier import FakeRelationVerifier, RelationVerifier
 
 
-def get_extractor(cfg, fake: bool, usage: UsageLogger) -> KGExtractor:
-    return KGExtractor(cfg, backend=FakeKGGen() if fake else None, usage=usage)
+def get_extractor(
+    cfg, fake: bool, usage: UsageLogger, *, cache_only: bool = False
+) -> KGExtractor:
+    return KGExtractor(
+        cfg, backend=FakeKGGen() if fake else None, usage=usage, cache_only=cache_only
+    )
 
 
-def get_embedder(cfg, fake: bool) -> Embedder:
-    return DictEmbedder(dim=16) if fake else SBERTEmbedder(cfg.matching.embedding_model)
+def get_embedder(cfg, fake: bool, *, cache_only: bool = False) -> Embedder:
+    if fake:
+        return DictEmbedder(dim=16)
+    matching = cfg.matching
+    return SBERTEmbedder(
+        matching.embedding_model,
+        model_revision=config_value(matching, "embedding_model_revision"),
+        model_path=config_value(matching, "embedding_model_path"),
+        # Cache-only replay may recompute CPU similarity scores, but it must
+        # never claim vLLM's GPU or resolve an asset through the Hub even if a
+        # stale runtime config says otherwise.
+        device="cpu" if cache_only else str(config_value(matching, "embedding_device", "cpu")),
+        local_files_only=(
+            True if cache_only else bool(config_value(matching, "local_files_only", True))
+        ),
+    )
 
 
-def get_verifier(cfg, fake: bool, usage: UsageLogger, relation_mode: str):
+def get_verifier(
+    cfg,
+    fake: bool,
+    usage: UsageLogger,
+    relation_mode: str,
+    *,
+    cache_only: bool = False,
+):
     if relation_mode == "strict":
         return None
     if fake:
         # Fake extraction is only a plumbing check; all text-grounded toy edges
         # receive a deterministic verdict without importing LiteLLM.
         return FakeRelationVerifier(default="entailed")
-    usage.try_hook_litellm()
-    return RelationVerifier(cfg, usage=usage)
+    if not cache_only:
+        usage.try_hook_litellm()
+    return RelationVerifier(cfg, usage=usage, cache_only=cache_only)
 
 
 # --------------------------------------------------------------------------------------
@@ -68,6 +95,8 @@ def extract_all(
             graphs = extractor.extract_reference(inst.context, inst.query)
             print(f"[extract] reference:done source_id={source_id}", flush=True)
             return source_id, graphs, None
+        except CacheOnlyMissError:
+            raise
         except Exception as exc:  # noqa: BLE001
             print(f"[extract] reference:error source_id={source_id} error={exc!r}", flush=True)
             return source_id, None, {"stage": "reference", "source_id": source_id, "error": repr(exc)}
@@ -98,6 +127,8 @@ def extract_all(
                 flush=True,
             )
             return inst.response_id, graph, None
+        except CacheOnlyMissError:
+            raise
         except Exception as exc:  # noqa: BLE001
             print(
                 f"[extract] response:error source_id={inst.source_id} "
@@ -219,7 +250,11 @@ def build_rows(
     for record in scored:
         result = ScoreResult.from_dict(record["score"])
         h_strict = result.h_for_mode(alpha_strict, "strict")
-        h_support = result.h_for_mode(alpha_support, "support")
+        h_support = (
+            result.h_for_mode(alpha_support, "support")
+            if relation_mode == "support"
+            else None
+        )
         primary_h = h_support if relation_mode == "support" else h_strict
         primary_rp_h = result.support_rp_only_h() if relation_mode == "support" else result.rp_only_h()
         statuses = [entry.get("status") for entry in result.relation_audits if entry.get("status")]
@@ -239,7 +274,11 @@ def build_rows(
             "unscorable": result.unscorable, "ref_empty": result.ref_empty,
             "CFI_strict": result.cfi_for_mode(alpha_strict, "strict"),
             "H_strict": h_strict,
-            "CFI_support": result.cfi_for_mode(alpha_support, "support"),
+            "CFI_support": (
+                result.cfi_for_mode(alpha_support, "support")
+                if relation_mode == "support"
+                else None
+            ),
             "H_support": h_support,
             "H": primary_h,
             "H_eg": result.eg_only_h(), "H_rp": primary_rp_h,
@@ -420,6 +459,14 @@ def _limit_qa_pilot(instances: list[Instance], limit: int | None) -> list[Instan
     return instances[:limit]
 
 
+def _assert_cache_only_no_live_calls(cache_only: bool, usage: UsageLogger) -> None:
+    """Turn the replay's zero-live-call promise into a checked invariant."""
+    if cache_only and usage.calls != 0:
+        raise RuntimeError(
+            f"cache-only replay recorded {usage.calls} live inference call(s)"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="HalluGraph-KGGen on RAGTruth")
     parser.add_argument("--config", default="config.yaml")
@@ -440,6 +487,16 @@ def main() -> None:
     parser.add_argument("--qa-pilot-test-sources", type=int, default=4)
     parser.add_argument("--sample-seed", type=int, default=42)
     parser.add_argument("--fake-extractor", action="store_true", help="offline FakeKGGen/DictEmbedder/FakeVerifier")
+    parser.add_argument(
+        "--cache-only",
+        action="store_true",
+        help="require warm KG/verifier caches and forbid every live inference call",
+    )
+    parser.add_argument(
+        "--kg-cache-only",
+        action="store_true",
+        help="require warm KG caches while allowing live support-verifier calls",
+    )
     parser.add_argument("--no-audit", action="store_true", help="skip writing per-response audit JSON")
     args = parser.parse_args()
 
@@ -448,7 +505,11 @@ def main() -> None:
     out_dir = Path(args.output_dir or cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
-    print(f"[cfg] model={cfg.llm.model} mode={args.relation_mode} fake={args.fake_extractor} stage={args.stage}")
+    print(
+        f"[cfg] model={cfg.llm.model} mode={args.relation_mode} "
+        f"fake={args.fake_extractor} cache_only={args.cache_only} "
+        f"kg_cache_only={args.kg_cache_only} stage={args.stage}"
+    )
     if not args.fake_extractor and "PLACEHOLDER" in str(cfg.llm.model):
         print("[!] llm.model is PLACEHOLDER; configure it before a live run.")
 
@@ -457,9 +518,15 @@ def main() -> None:
     n_test = sum(inst.split == "test" for inst in instances)
     print(f"[data] {len(instances)} responses (train={n_train}, test={n_test})")
     usage = UsageLogger(out_dir / "usage.jsonl")
-    extractor = get_extractor(cfg, args.fake_extractor, usage)
-    embedder = get_embedder(cfg, args.fake_extractor)
-    verifier = get_verifier(cfg, args.fake_extractor, usage, args.relation_mode)
+    extractor = get_extractor(
+        cfg, args.fake_extractor, usage, cache_only=args.cache_only or args.kg_cache_only
+    )
+    embedder = get_embedder(
+        cfg, args.fake_extractor, cache_only=args.cache_only or args.kg_cache_only
+    )
+    verifier = get_verifier(
+        cfg, args.fake_extractor, usage, args.relation_mode, cache_only=args.cache_only
+    )
     scored_path = out_dir / "scored.jsonl"
     tuning_path = out_dir / "tuning.json"
 
@@ -472,6 +539,7 @@ def main() -> None:
         ref_graphs, resp_graphs, failures = extract_all(cfg, instances, extractor, out_dir)
         print(f"[extract] refs={len(ref_graphs)} responses={len(resp_graphs)} failures={len(failures)}")
     if args.stage == "extract":
+        _assert_cache_only_no_live_calls(args.cache_only, usage)
         print(f"[done] extract only; elapsed={time.perf_counter() - start:.1f}s")
         return
 
@@ -481,6 +549,7 @@ def main() -> None:
             relation_mode=args.relation_mode, verifier=verifier,
         )
         persist_scored(scored_path, instances, results, args.relation_mode)
+        _assert_cache_only_no_live_calls(args.cache_only, usage)
         print(f"[done] score only; wrote {len(results)} rows -> {scored_path}")
         return
 
@@ -497,6 +566,7 @@ def main() -> None:
             raise SystemExit("tuning.json relation mode differs from --relation-mode")
 
     if args.stage == "tune":
+        _assert_cache_only_no_live_calls(args.cache_only, usage)
         print(f"[done] tune only; elapsed={time.perf_counter() - start:.1f}s")
         return
 
@@ -527,6 +597,7 @@ def main() -> None:
             results = {record["response_id"]: ScoreResult.from_dict(record["score"]) for record in scored}
         write_all_audits(instances, results, info, float(cfg.metrics.empty_response_impute_h), out_dir)
         print(f"[audit] wrote {len(results)} records -> {out_dir / 'audit'}")
+    _assert_cache_only_no_live_calls(args.cache_only, usage)
     print(f"[done] stage={args.stage}; elapsed={time.perf_counter() - start:.1f}s usage={usage.summary()}")
 
 

@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 REVISION = "a" * 40
+DOCKER_IMAGE_ID = "b" + "1" * 19
+RUNTIME_FINGERPRINT = "test-runtime-fingerprint"
 
 
 def _shared_assets(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -73,6 +75,7 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
         sys.executable, str(SCRIPTS / "make_datasphere_runtime_config.py"),
         "--base-config", str(ROOT / "config.yaml"), "--output", str(output),
         "--model-id", MODEL_ID, "--api-base", "http://127.0.0.1:8000/v1",
+        "--model-revision", REVISION, "--runtime-fingerprint", RUNTIME_FINGERPRINT,
         "--data-dir", "/read-only/ragtruth", "--work-dir", str(work_dir),
     ], check=True)
     config = yaml.safe_load(output.read_text(encoding="utf-8"))
@@ -83,13 +86,21 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["llm"]["concurrency"] == 1
     assert config["llm"]["request_timeout_s"] == 90
     assert config["llm"]["vllm_guided_json"] is False
+    assert config["llm"]["structured_output_transport"] == "response_format"
+    assert config["llm"]["structured_output_backend"] == "xgrammar"
+    assert config["llm"]["model_revision"] == REVISION
+    assert config["llm"]["runtime_fingerprint"] == RUNTIME_FINGERPRINT
     assert config["extraction"]["serial_chunking"] is True
     assert config["extraction"]["cluster_max_items"] is None
+    assert config["matching"]["embedding_model_path"] == "/opt/hallu/models/all-MiniLM-L6-v2"
+    assert config["matching"]["embedding_device"] == "cpu"
+    assert config["matching"]["local_files_only"] is True
 
     subprocess.run([
         sys.executable, str(SCRIPTS / "make_datasphere_runtime_config.py"),
         "--base-config", str(ROOT / "config.yaml"), "--output", str(output),
         "--model-id", MODEL_ID, "--api-base", "http://127.0.0.1:8000/v1",
+        "--model-revision", REVISION, "--runtime-fingerprint", RUNTIME_FINGERPRINT,
         "--data-dir", "/read-only/ragtruth", "--work-dir", str(work_dir),
         "--disable-clustering",
     ], check=True)
@@ -99,14 +110,16 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
         sys.executable, str(SCRIPTS / "make_datasphere_runtime_config.py"),
         "--base-config", str(ROOT / "config.yaml"), "--output", str(output),
         "--model-id", MODEL_ID, "--api-base", "http://127.0.0.1:8000/v1",
+        "--model-revision", REVISION, "--runtime-fingerprint", RUNTIME_FINGERPRINT,
         "--data-dir", "/read-only/ragtruth", "--work-dir", str(work_dir),
         "--explicit-clustering",
-        "--vllm-guided-json",
     ], check=True)
-    explicit = yaml.safe_load(output.read_text(encoding="utf-8"))["extraction"]
+    explicit_config = yaml.safe_load(output.read_text(encoding="utf-8"))
+    explicit = explicit_config["extraction"]
     assert explicit["cluster"] is True
     assert explicit["explicit_clustering"] is True
-    assert yaml.safe_load(output.read_text(encoding="utf-8"))["llm"]["vllm_guided_json"] is True
+    assert explicit_config["llm"]["structured_output_transport"] == "response_format"
+    assert explicit_config["llm"]["vllm_guided_json"] is False
 
 
 def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path):
@@ -114,6 +127,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     subprocess.run([
         sys.executable, str(SCRIPTS / "render_datasphere_job.py"),
         "--kind", "qa-pilot-g1", "--commit", "f" * 40,
+        "--docker-image-id", DOCKER_IMAGE_ID,
         "--run-id", "new-metrics-20260716", "--output", str(rendered),
     ], check=True)
     text = rendered.read_text(encoding="utf-8")
@@ -121,13 +135,21 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "__" not in text
     assert config["cloud-instance-types"] == ["g1.1"]
     assert config["working-storage"]["size"] == "100Gb"
+    assert config["env"] == {"docker": DOCKER_IMAGE_ID}
     assert "timeout --signal=TERM --kill-after=60s 10800" in config["cmd"]
     assert config["outputs"] == [{"qa-pilot-new-metrics-20260716.tar.gz": "ARTIFACT_ARCHIVE"}]
-    assert "vllm==0.6.3.post1" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
-    assert "transformers==4.45.2" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
-    assert "lm-format-enforcer==0.10.6" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
-    assert "outlines==0.0.46" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
-    assert "pydantic==2.10.6" in (ROOT / "requirements.datasphere.txt").read_text(encoding="utf-8")
+    server_requirements = (ROOT / "datasphere/docker/server.requirements.txt").read_text(encoding="utf-8")
+    client_requirements = (ROOT / "datasphere/docker/client.requirements.txt").read_text(encoding="utf-8")
+    assert "vllm-0.8.5.post1%2Bcu118-cp38-abi3" in server_requirements
+    assert "torch-2.6.0%2Bcu118-cp311" in server_requirements
+    assert "torchvision-0.21.0%2Bcu118-cp311" in server_requirements
+    assert "torchaudio-2.6.0%2Bcu118-cp311" in server_requirements
+    assert "xformers-0.0.29.post2-cp311" in server_requirements
+    assert "transformers==4.51.3" in server_requirements
+    assert "xgrammar==0.1.18" in server_requirements
+    assert "kg-gen==0.4.0" in client_requirements
+    assert "dspy==2.6.27" in client_requirements
+    assert "jsonschema==4.23.0" in client_requirements
 
     runner = (SCRIPTS / "run_datasphere_qa_pilot.sh").read_text(encoding="utf-8")
     assert "huggingface-cli download" not in runner
@@ -135,35 +157,42 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "--relation-mode strict" in runner
     assert "--relation-mode support" in runner
     assert "check_datasphere_gpu_runtime.py" in runner
+    assert "--expected-torch-cuda 11.8 --expected-device-substring V100" in runner
     assert "check_datasphere_vllm_completion.py" in runner
     assert "check_datasphere_vllm_guided_json.py" in runner
-    assert "patch_datasphere_lmfe_bool_schema.py" in runner
-    assert "check_datasphere_outlines_backend.py" in runner
     assert "check_datasphere_kggen_probe.py" in runner
+    assert "check_datasphere_verifier_probe.py" in runner
     assert "check_datasphere_qa_reference_probe.py" in runner
     assert "KGGEN_MAX_TOKENS" in runner
     assert "KGGEN_CLUSTER_MAX_ITEMS" in runner
     assert "--disable-clustering" not in runner
     assert "--explicit-clustering" in runner
     assert "  --cluster \\" in runner
-    assert "  --vllm-guided-json \\" in runner
     assert "KGGEN_CONCURRENCY" in runner
     assert "--serial-chunking" in runner
     assert "--guided-decoding-backend" in runner
-    assert "--vllm-guided-json" in runner
+    assert "--structured-output-transport response_format" in runner
+    assert "--structured-output-backend" in runner
     assert "require_complete_extraction" in runner
-    assert 'GUIDED_DECODING_BACKEND="${GUIDED_DECODING_BACKEND:-outlines}"' in runner
-    assert "lm-format-enforcer" in runner
-    assert "datasphere/runtime_shims" in runner
+    assert 'GUIDED_DECODING_BACKEND="xgrammar:no-fallback"' in runner
+    assert "lm-format-enforcer" not in runner
+    assert "datasphere/runtime_shims" not in runner
     assert "LITELLM_LOCAL_MODEL_COST_MAP" in runner
     assert "run_extraction_with_gpu_watchdog" in runner
     assert "GPU_IDLE_ABORT_SECONDS" in runner
     assert 'MODEL_PATH="${MODEL_PATH:-}"' in runner
     assert "MODEL_PATH_RESOLVE_TIMEOUT_SECONDS" in runner
-    assert '"$PYTHON_BIN" -S "$ROOT/scripts/resolve_datasphere_shared_model.py"' in runner
+    assert '"$CLIENT_PYTHON" -S "$ROOT/scripts/resolve_datasphere_shared_model.py"' in runner
+    assert 'CLIENT_PYTHON="${CLIENT_PYTHON:-/opt/hallu/client/bin/python}"' in runner
+    assert 'VLLM_BIN="${VLLM_BIN:-/opt/hallu/server/bin/vllm}"' in runner
     assert "export MODEL_PATH=\"$(python source/scripts/resolve_datasphere_shared_model.py" not in text
     assert "--stage extract" in runner
     assert "--relation-mode strict --qa-pilot-manifest \"$MANIFEST\"" in runner
+    assert "--cache-only" in runner
+    assert "--kg-cache-only" in runner
+    assert "kg-cache-before-support.sha256" in runner
+    assert "EXPECTED_SOURCE_COMMIT" in runner
+    assert 'cmp "$STRICT_OUT/metrics.csv" "$REPLAY_STRICT/metrics.csv"' in runner
     assert "[extract] response:start" in (ROOT / "run.py").read_text(encoding="utf-8")
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)
 
@@ -240,44 +269,66 @@ def test_cpu_preflight_uses_the_same_locked_runtime_and_import_check(tmp_path):
     subprocess.run([
         sys.executable, str(SCRIPTS / "render_datasphere_job.py"),
         "--kind", "preflight", "--commit", "f" * 40,
+        "--docker-image-id", DOCKER_IMAGE_ID,
         "--run-id", "new-metrics-20260717", "--output", str(rendered),
     ], check=True)
     config = yaml.safe_load(rendered.read_text(encoding="utf-8"))
     assert config["cloud-instance-types"] == ["c1.4"]
-    assert config["working-storage"]["size"] == "100Gb"
-    assert "check_datasphere_runtime_dependencies.py" in config["cmd"]
+    assert "working-storage" not in config
+    assert config["env"] == {"docker": DOCKER_IMAGE_ID}
+    assert "check_datasphere_docker_runtime.py" in config["cmd"]
     assert "LITELLM_LOCAL_MODEL_COST_MAP=true" in config["cmd"]
-    dependency_check = (SCRIPTS / "check_datasphere_runtime_dependencies.py").read_text(encoding="utf-8")
-    assert '"lm-format-enforcer": "0.10.6"' in dependency_check
-    assert "JsonSchemaParser" in dependency_check
-    assert '"additionalProperties": False' in dependency_check
-    assert "patch_datasphere_lmfe_bool_schema.py" in config["cmd"]
-    assert "check_datasphere_outlines_backend.py" in config["cmd"]
-    assert "datasphere/runtime_shims" in config["cmd"]
+    dependency_check = (SCRIPTS / "check_datasphere_docker_runtime.py").read_text(encoding="utf-8")
+    assert '"xgrammar": "0.1.18"' in dependency_check
+    assert '"vllm": "0.8.5.post1+cu118"' in dependency_check
+    assert 'expected_torch_cuda="11.8"' in dependency_check
+    assert "Grammar.from_json_schema" in dependency_check
+    assert "SentenceTransformer" in dependency_check
+    assert "local_files_only=True" in dependency_check
+    assert "runtime source commit and embedded asset identity" in dependency_check
+    assert "/opt/hallu/server/bin/python" in config["cmd"]
+    assert "/opt/hallu/client/bin/python" in config["cmd"]
+    assert "/opt/hallu/runtime-manifest.json" in config["cmd"]
     assert "if printenv PYTHONPATH >/dev/null" in config["cmd"]
-    assert (ROOT / "requirements.datasphere.preflight.txt").read_text(encoding="utf-8") == (
-        ROOT / "requirements.datasphere.txt"
-    ).read_text(encoding="utf-8")
+    assert "write_datasphere_preflight_gate.py" in config["cmd"]
+    assert "gate_metadata.json" in config["cmd"]
 
 
-def test_outlines_backend_uses_the_checked_in_pyairports_compatibility_shim():
-    shim = ROOT / "datasphere" / "runtime_shims" / "pyairports" / "airports.py"
-    checker = (SCRIPTS / "check_datasphere_outlines_backend.py").read_text(encoding="utf-8")
+def test_remote_dockerfile_is_commit_pinned_and_contains_no_large_local_context(tmp_path):
+    rendered = tmp_path / "Dockerfile"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_dockerfile.py"),
+        "--commit", "f" * 40, "--skip-pushed-check", "--output", str(rendered),
+    ], check=True)
+    dockerfile = rendered.read_text(encoding="utf-8")
+    assert "__GIT_COMMIT__" not in dockerfile
+    assert "ARG SOURCE_COMMIT=" + "f" * 40 in dockerfile
+    assert "FROM nvidia/cuda:11.8.0-devel-ubuntu22.04" in dockerfile
+    assert "torch.__version__ == '2.6.0+cu118'" in dockerfile
+    assert "torch.version.cuda == '11.8'" in dockerfile
+    assert "torch.__version__ == '2.6.0+cpu'" in dockerfile
+    assert "/opt/hallu/server/bin/python" in dockerfile
+    assert "/opt/hallu/client/bin/python" in dockerfile
+    assert "ln -sf /opt/hallu/client/bin/pip /usr/local/bin/pip" in dockerfile
+    assert "useradd --create-home --shell /bin/bash --uid 1000 jupyter" in dockerfile
+    assert "/opt/hallu/models/all-MiniLM-L6-v2" in dockerfile
+    assert "runtime-manifest.json" in dockerfile
+    assert "COPY " not in dockerfile
+    assert "meta-llama/" not in dockerfile.lower()
+    assert "huggingface-cli download" not in dockerfile.lower()
+    assert "allow_patterns=" in dockerfile
 
-    assert shim.is_file()
-    assert "AIRPORT_LIST" in shim.read_text(encoding="utf-8")
-    assert 'EXPECTED_OUTLINES_VERSION = "0.0.46"' in checker
-    assert "from pyairports.airports import AIRPORT_LIST" in checker
-    assert "from outlines.integrations.vllm import JSONLogitsProcessor" in checker
-    assert "compile canonical nested KGGen Relation schema" in checker
 
-
-def test_vllm_guided_json_probe_uses_the_real_nested_relation_contract():
+def test_structured_output_probe_uses_real_nested_relation_contract():
     checker = (SCRIPTS / "check_datasphere_vllm_guided_json.py").read_text(encoding="utf-8")
 
     assert "fallback_extraction_sig" in checker
-    assert '"subject", "predicate", "object"' in checker
-    assert "canonicalize_vllm_guided_json_schema" in checker
+    assert 'SWISS_SOURCE_ID = "15138"' in checker
+    assert "json_schema_response_format" in checker
+    assert '"request_parameter": "response_format"' in checker
+    assert "validate_json_document" in checker
+    assert "two-fact contract returned only" in checker
+    assert "canonicalize_vllm_guided_json_schema" not in checker
 
 
 def test_cluster_probe_is_bounded_but_keeps_kggen_clustering(tmp_path):
@@ -285,11 +336,13 @@ def test_cluster_probe_is_bounded_but_keeps_kggen_clustering(tmp_path):
     subprocess.run([
         sys.executable, str(SCRIPTS / "render_datasphere_job.py"),
         "--kind", "cluster-probe-g1", "--commit", "f" * 40,
+        "--docker-image-id", DOCKER_IMAGE_ID,
         "--run-id", "cluster-probe-20260717", "--output", str(rendered),
     ], check=True)
     config = yaml.safe_load(rendered.read_text(encoding="utf-8"))
     assert config["cloud-instance-types"] == ["g1.1"]
     assert "export QA_PILOT_LIMIT=3" in config["cmd"]
+    assert "export EXPECTED_SOURCE_COMMIT=" in config["cmd"]
     assert "timeout --signal=TERM --kill-after=60s 3600" in config["cmd"]
     assert "--disable-clustering" not in config["cmd"]
     assert 'pilot.stdout.log' in config["cmd"]
@@ -302,6 +355,7 @@ def test_gpu_job_archives_artifacts_when_cancelled(tmp_path):
     subprocess.run([
         sys.executable, str(SCRIPTS / "render_datasphere_job.py"),
         "--kind", "qa-pilot-g1", "--commit", "f" * 40,
+        "--docker-image-id", DOCKER_IMAGE_ID,
         "--run-id", "new-metrics-20260717", "--output", str(rendered),
     ], check=True)
     command = yaml.safe_load(rendered.read_text(encoding="utf-8"))["cmd"]
@@ -319,6 +373,7 @@ def test_rendered_jobs_pass_local_cli_guardrails(tmp_path):
         subprocess.run([
             sys.executable, str(SCRIPTS / "render_datasphere_job.py"),
             "--kind", kind, "--commit", "f" * 40,
+            "--docker-image-id", DOCKER_IMAGE_ID,
             "--run-id", "new-metrics-20260717", "--output", str(rendered),
         ], check=True)
         checked = subprocess.run([
@@ -328,6 +383,12 @@ def test_rendered_jobs_pass_local_cli_guardrails(tmp_path):
         assert "safe for DataSphere CLI submission" in checked.stdout
 
     subprocess.run(["bash", "-n", str(SCRIPTS / "submit_datasphere_job.sh")], check=True)
+    submitter = (SCRIPTS / "submit_datasphere_job.sh").read_text(encoding="utf-8")
+    assert "--gate-artifact" in submitter
+    assert "validate_datasphere_gate_artifact.py" in submitter
+    assert "check_datasphere_active_jobs.py" in submitter
+    assert 'GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-native}"' in submitter
+    assert "project job list" in submitter
 
 
 def test_stager_defaults_to_gated_llama_and_uses_model_specific_storage():

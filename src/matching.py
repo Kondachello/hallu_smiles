@@ -14,6 +14,7 @@ Embeddings go through an injectable ``Embedder`` so tests / offline runs avoid t
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import string
 from dataclasses import dataclass
@@ -61,8 +62,20 @@ class Embedder:
 class SBERTEmbedder(Embedder):
     """Lazy sentence-transformers backend with an in-memory cache."""
 
-    def __init__(self, model_name: str):
+    def __init__(
+        self,
+        model_name: str,
+        *,
+        model_revision: str | None = None,
+        model_path: str | None = None,
+        device: str = "cpu",
+        local_files_only: bool = True,
+    ):
         self.model_name = model_name
+        self.model_revision = model_revision
+        self.model_path = model_path
+        self.device = device
+        self.local_files_only = bool(local_files_only)
         self._model = None
         self._cache: dict[str, np.ndarray] = {}
 
@@ -70,7 +83,17 @@ class SBERTEmbedder(Embedder):
         if self._model is None:
             from sentence_transformers import SentenceTransformer  # lazy
 
-            self._model = SentenceTransformer(self.model_name)
+            target = self.model_path or self.model_name
+            kwargs = {
+                "device": self.device,
+                "local_files_only": self.local_files_only,
+            }
+            # A local snapshot path is already revision-specific.  Passing a
+            # Hub revision alongside it is at best ignored and at worst causes
+            # older sentence-transformers releases to consult the network.
+            if self.model_revision and not self.model_path:
+                kwargs["revision"] = self.model_revision
+            self._model = SentenceTransformer(target, **kwargs)
         return self._model
 
     def encode(self, texts: Sequence[str]) -> np.ndarray:
@@ -101,8 +124,10 @@ class DictEmbedder(Embedder):
     def _vec(self, t: str) -> np.ndarray:
         if t in self._map:
             return self._map[t]
-        h = abs(hash(("emb", t))) % (2**32)
-        rng = np.random.default_rng(h)
+        # Do not use Python's process-randomised ``hash`` here: fake/offline
+        # runs must reproduce vectors even when PYTHONHASHSEED was not exported.
+        digest = hashlib.sha256(f"emb\x00{t}".encode("utf-8")).digest()
+        rng = np.random.default_rng(int.from_bytes(digest[:8], "big"))
         v = rng.standard_normal(self.dim).astype(np.float32)
         v /= np.linalg.norm(v) or 1.0
         return v

@@ -26,7 +26,23 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-PROBE_TEXT = "Ada Lovelace wrote notes about Charles Babbage's Analytical Engine."
+PROBE_TEXT = (
+    "Ada Lovelace wrote notes about Charles Babbage's Analytical Engine. "
+    "Marie Curie was born in Warsaw."
+)
+
+
+def _has_endpoints(relations: set[Any], left: str, right: str) -> bool:
+    left = left.casefold()
+    right = right.casefold()
+    for relation in relations:
+        if not isinstance(relation, (tuple, list)) or len(relation) != 3:
+            continue
+        subject = str(relation[0]).casefold()
+        obj = str(relation[2]).casefold()
+        if (left in subject and right in obj) or (left in obj and right in subject):
+            return True
+    return False
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -43,7 +59,7 @@ def run_probe(
     timeout_s: float,
     max_tokens: int,
     cluster: bool = False,
-    vllm_guided_json: bool = False,
+    structured_output_transport: str = "response_format",
 ) -> dict[str, Any]:
     if timeout_s <= 0:
         raise ValueError("timeout must be positive")
@@ -66,18 +82,45 @@ def run_probe(
     # match KGExtractor so the probe and pilot have the same failure boundary.
     backend.lm.kwargs["timeout"] = timeout_s
     backend.lm.num_retries = 0
-    # The pilot deliberately keeps raw KGGen triples on the local Llama
-    # profile. Exercise that exact code path here: clustering is an optional
-    # post-processing LLM pass, not part of relation extraction.
-    if vllm_guided_json:
+    from src.dspy_adapter import install_dspy_completion_guard
+
+    install_dspy_completion_guard(backend.lm)
+    # Exercise the same strict adapter as the pilot.  When ``cluster`` is set,
+    # KGGen also runs its official LLM clustering pass under that adapter;
+    # raw relation extraction remains the first observable failure boundary.
+    if structured_output_transport != "none":
         import dspy
 
-        from src.dspy_adapter import vllm_guided_json_adapter
+        from src.dspy_adapter import strict_json_schema_adapter, vllm_guided_json_adapter
 
-        with dspy.context(lm=backend.lm, adapter=vllm_guided_json_adapter()):
+        adapter = (
+            strict_json_schema_adapter()
+            if structured_output_transport == "response_format"
+            else vllm_guided_json_adapter()
+        )
+        with dspy.context(lm=backend.lm, adapter=adapter):
             graph = backend.generate(input_data=PROBE_TEXT, cluster=cluster)
     else:
         graph = backend.generate(input_data=PROBE_TEXT, cluster=cluster)
+    entities = set(getattr(graph, "entities", set()))
+    relations = set(getattr(graph, "relations", set()))
+    entities_count = len(entities)
+    relations_count = len(relations)
+    if entities_count < 4:
+        raise RuntimeError(
+            f"synthetic KGGen probe extracted only {entities_count} entities; expected at least four"
+        )
+    if relations_count < 2:
+        raise RuntimeError(
+            f"synthetic KGGen probe extracted only {relations_count} relations; expected at least two"
+        )
+    if not (
+        _has_endpoints(relations, "Ada Lovelace", "Analytical Engine")
+        or _has_endpoints(relations, "Ada Lovelace", "Charles Babbage")
+    ):
+        raise RuntimeError("synthetic KGGen probe omitted the Ada-Lovelace fact")
+    if not _has_endpoints(relations, "Marie Curie", "Warsaw"):
+        raise RuntimeError("synthetic KGGen probe omitted the Marie-Curie/Warsaw fact")
     return {
         "checked_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "status": "ready",
@@ -87,14 +130,18 @@ def run_probe(
         "timeout_s": timeout_s,
         "max_tokens": max_tokens,
         "cluster": cluster,
-        "vllm_guided_json": vllm_guided_json,
+        "structured_output_transport": structured_output_transport,
         "versions": {
             "kg-gen": metadata.version("kg-gen"),
             "dspy": metadata.version("dspy"),
             "litellm": metadata.version("litellm"),
         },
-        "entities": len(getattr(graph, "entities", set())),
-        "relations": len(getattr(graph, "relations", set())),
+        "entities": entities_count,
+        "relations": relations_count,
+        "semantic_anchors": {
+            "ada_lovelace": True,
+            "marie_curie_warsaw": True,
+        },
     }
 
 
@@ -107,12 +154,13 @@ def main() -> None:
     parser.add_argument(
         "--cluster",
         action="store_true",
-        help="Also exercise optional KGGen LLM clustering (off for the local pilot).",
+        help="Also exercise KGGen's official LLM clustering pass.",
     )
     parser.add_argument(
-        "--vllm-guided-json",
-        action="store_true",
-        help="Use vLLM's native guided_json schema transport, like the local pilot.",
+        "--structured-output-transport",
+        choices=("none", "response_format", "guided_json"),
+        default="response_format",
+        help="Structured-output transport used by the target pilot runtime.",
     )
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
@@ -124,7 +172,7 @@ def main() -> None:
         timeout_s=args.timeout,
         max_tokens=args.max_tokens,
         cluster=args.cluster,
-        vllm_guided_json=args.vllm_guided_json,
+        structured_output_transport=args.structured_output_transport,
     )
     _atomic_json(Path(args.report), report)
     print(json.dumps(report, sort_keys=True))

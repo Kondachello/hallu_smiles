@@ -60,6 +60,21 @@ def _cluster_stack_dump_timeout() -> float | None:
     return timeout
 
 
+def _contains_chard_anchor(relations: Any) -> bool:
+    for relation in relations or ():
+        if not isinstance(relation, (tuple, list)) or len(relation) != 3:
+            continue
+        subject = str(relation[0]).casefold()
+        obj = str(relation[2]).casefold()
+        if (
+            "chard" in subject and ("spinach" in obj or "beet" in obj)
+        ) or (
+            "chard" in obj and ("spinach" in subject or "beet" in subject)
+        ):
+            return True
+    return False
+
+
 def run_probe(config_path: str | Path) -> dict[str, Any]:
     # Imported lazily so offline test/import paths stay dependency-light.
     from kg_gen.models import Graph as KGGenGraph
@@ -76,6 +91,10 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
     if not selected:
         raise RuntimeError("QA pilot selection unexpectedly returned no records")
     inst = selected[0]
+    if str(inst.source_id) != "15138":
+        raise RuntimeError(
+            f"reference contract expects first source_id=15138, got {inst.source_id!r}"
+        )
     text = (inst.context or "").strip()
     if not text:
         raise RuntimeError(f"selected QA source {inst.source_id} has an empty context")
@@ -86,6 +105,10 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
     cache_key = extractor._cache_key(text)  # Same cache contract as the pilot.
     cached = extractor._load_cache(cache_key)
     if cached is not None:
+        if len(cached.entities) < 2 or not cached.relations:
+            raise RuntimeError("cached Swiss-chard reference graph is unscorable")
+        if not _contains_chard_anchor(cached.relations):
+            raise RuntimeError("cached Swiss-chard reference graph lacks its semantic anchor")
         _emit(
             "cache_hit",
             source_id=inst.source_id,
@@ -117,10 +140,20 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
         )
         entities = get_entities(text)
         _emit("entities:done", count=len(entities), elapsed_seconds=round(time.perf_counter() - started, 3))
+        if len(entities) < 2:
+            raise RuntimeError(
+                f"Swiss-chard reference extracted only {len(entities)} entities"
+            )
 
         _emit("relations:start", entity_count=len(entities))
         relations = get_relations(text, entities)
         _emit("relations:done", count=len(relations), elapsed_seconds=round(time.perf_counter() - started, 3))
+        if not relations:
+            raise RuntimeError("Swiss-chard reference extracted no relations")
+        if not _contains_chard_anchor(relations):
+            raise RuntimeError(
+                "Swiss-chard reference omitted the chard/spinach-or-beet relation"
+            )
 
     raw_graph = KGGenGraph(
         entities=set(entities),
@@ -142,7 +175,7 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
             faulthandler.enable(file=sys.stderr)
             faulthandler.dump_traceback_later(dump_after, repeat=False, exit=False)
         try:
-            graph = backend.cluster(raw_graph)
+            graph = extractor._cluster_backend_graph(backend, raw_graph)
         finally:
             if dump_after is not None:
                 faulthandler.cancel_dump_traceback_later()
@@ -169,6 +202,14 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
             if isinstance(relation, (tuple, list)) and len(relation) == 3
         },
     )
+    if len(extracted.entities) < 2 or not extracted.relations:
+        raise RuntimeError(
+            "Swiss-chard reference became unscorable after KGGen clustering"
+        )
+    if not _contains_chard_anchor(extracted.relations):
+        raise RuntimeError(
+            "Swiss-chard relation anchor disappeared during KGGen clustering"
+        )
     extractor._save_cache(cache_key, extracted)
     return {
         "checked_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

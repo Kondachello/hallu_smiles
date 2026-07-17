@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Validate a rendered DataSphere Job before submitting it to the service.
 
-The DataSphere CLI parses ``cmd`` before it creates a Job.  A shell entrypoint
-therefore has a few non-obvious constraints: it must start with an executable,
-not ``set``; shell variables must not look like DataSphere substitutions; and a
-manual Python environment needs explicit local paths.  Catch those errors on a
-laptop, before allocating a CPU or GPU instance.
+The DataSphere CLI parses ``cmd`` before it creates a Job.  Catch shell/YAML
+errors and accidental fallback to a paid manual environment on the laptop,
+before allocating a CPU or GPU instance.
 """
 from __future__ import annotations
 
@@ -20,6 +18,7 @@ import yaml
 SHELL_PREFIX = "bash -lc '"
 SHELL_VAR = re.compile(r"\$\{([^}]+)\}")
 ALLOWED_DATASPHERE_VARS = {"ARTIFACT_ARCHIVE"}
+DOCKER_IMAGE_ID_RE = re.compile(r"^b[a-z0-9]{19}$")
 
 
 def _require(condition: bool, message: str) -> None:
@@ -27,53 +26,7 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _validate_requirements(path: Path) -> None:
-    _require(path.is_file(), f"requirements file is absent: {path}")
-    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        line = raw.strip()
-        # The DataSphere CLI's manual-environment parser accepts only direct
-        # PEP 508 requirements; comments and -r inclusions fail before submit.
-        _require(
-            not line.startswith("#") and not line.startswith("-r"),
-            f"{path}:{number}: DataSphere manual requirements must not use comments or -r includes",
-        )
-
-
-def _validate_gpu_requirements(path: Path) -> None:
-    lines = {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
-    _require(
-        "vllm==0.6.3.post1" in lines,
-        "g1.1 requires the driver-compatible vllm==0.6.3.post1 pin; do not use a floating vLLM range",
-    )
-    _require(
-        "transformers==4.45.2" in lines,
-        "vllm==0.6.3.post1 + lm-format-enforcer==0.10.6 require the tested transformers==4.45.2 pin",
-    )
-    _require(
-        "lm-format-enforcer==0.10.6" in lines,
-        "g1.1 vLLM runtime requires the pinned lm-format-enforcer guided-decoding backend",
-    )
-    _require(
-        "pydantic==2.10.6" in lines,
-        "KGGen/DSPy local-vLLM path requires the tested pydantic==2.10.6 pin",
-    )
-    _require(
-        "outlines==0.0.46" in lines,
-        "g1.1 requires the tested outlines==0.0.46 structured-decoding backend pin",
-    )
-
-
-def _validate_preflight_requirements(path: Path, repo_root: Path) -> None:
-    runtime_path = repo_root / "requirements.datasphere.txt"
-    runtime_lines = [line.strip() for line in runtime_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    preflight_lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    _require(
-        preflight_lines == runtime_lines,
-        "CPU preflight requirements must exactly match the GPU runtime requirements",
-    )
-
-
-def validate_job(path: Path, repo_root: Path) -> dict:
+def validate_job(path: Path, repo_root: Path) -> dict:  # noqa: ARG001 - stable public helper
     try:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
@@ -97,28 +50,27 @@ def validate_job(path: Path, repo_root: Path) -> dict:
 
     flags = document.get("flags", [])
     _require("attach-project-disk" in flags, "Job must attach the shared Project storage")
-    python = document.get("env", {}).get("python", {})
-    _require(isinstance(python, dict) and python.get("type") == "manual", "Job must use a manual Python environment")
-    _require(python.get("local-paths"), "manual shell Job requires non-empty env.python.local-paths")
-    requirements = python.get("requirements-file")
-    _require(isinstance(requirements, str), "manual Job requires env.python.requirements-file")
-    requirements_path = repo_root / requirements
-    _validate_requirements(requirements_path)
-
-    if "outlines==0.0.46" in requirements_path.read_text(encoding="utf-8"):
-        shim = repo_root / "datasphere" / "runtime_shims" / "pyairports" / "airports.py"
+    env = document.get("env")
+    _require(isinstance(env, dict), "Job must define env.docker")
+    _require("python" not in env, "Docker Job must not also define env.python")
+    docker_image_id = env.get("docker")
+    _require(
+        isinstance(docker_image_id, str) and DOCKER_IMAGE_ID_RE.fullmatch(docker_image_id),
+        "env.docker must be an immutable DataSphere project Docker resource ID",
+    )
+    _require(
+        f'DATASPHERE_DOCKER_IMAGE_ID="{docker_image_id}"' in body,
+        "Job must record its DataSphere Docker resource ID in the runtime metadata",
+    )
+    if "g1.1" in document.get("cloud-instance-types", []):
         _require(
-            shim.is_file(),
-            "Outlines requires the checked-in pyairports runtime shim; do not submit without it",
+            re.search(r'EXPECTED_SOURCE_COMMIT="[0-9a-f]{40}"', body) is not None,
+            "GPU Job must require the Docker runtime to match its exact Git commit",
         )
 
     lowered = body.lower()
     _require("huggingface-cli download" not in lowered, "GPU/CPU Job must not download model weights")
     _require("pip install" not in lowered, "GPU/CPU Job must not install packages at runtime")
-    if document.get("cloud-instance-types") == ["g1.1"]:
-        _validate_gpu_requirements(requirements_path)
-    if document.get("cloud-instance-types") == ["c1.4"]:
-        _validate_preflight_requirements(requirements_path, repo_root)
     return document
 
 

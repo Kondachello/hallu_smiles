@@ -11,6 +11,8 @@ cmd: >-
   git -C source checkout --detach FETCH_HEAD;
   actual_commit="$(git -C source rev-parse HEAD)";
   test "$actual_commit" = "__GIT_COMMIT__";
+  export EXPECTED_SOURCE_COMMIT="__GIT_COMMIT__";
+  export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE_ID__";
   export MODEL_ID="__MODEL_ID__";
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
   export MODEL_DTYPE=half;
@@ -40,12 +42,7 @@ cmd: >-
   set -e;
   exit "$job_status"'
 env:
-  python:
-    type: manual
-    version: "3.11"
-    requirements-file: requirements.datasphere.txt
-    local-paths:
-      - scripts
+  docker: __DOCKER_IMAGE_ID__
 outputs:
   - cluster-probe-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
 flags:

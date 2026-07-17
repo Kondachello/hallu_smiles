@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
+from .cache import config_value, evaluation_runtime_metadata
 from .tune import prf_at_threshold, safe_auc
 
 
@@ -309,6 +310,7 @@ def run_evaluation(
 
     summary = {
         "relation_mode": relation_mode,
+        "runtime": evaluation_runtime_metadata(cfg),
         "alpha": alpha, "theta": theta,
         "tau_e": float(cfg.matching.entity_sim_threshold if tau_e is None else tau_e),
         "tau_r": float(cfg.matching.relation_sim_threshold if tau_r is None else tau_r),
@@ -331,17 +333,20 @@ def run_evaluation(
     return summary
 
 
-def _flatten_summary(s: dict[str, Any]) -> dict[str, Any]:
-    out = {}
+def _flatten_summary(
+    s: dict[str, Any], prefix: str = ""
+) -> dict[str, Any]:
+    """Flatten nested runtime/metric metadata into stable CSV columns."""
+    out: dict[str, Any] = {}
     for k, v in s.items():
+        key = f"{prefix}.{k}" if prefix else k
         if isinstance(v, dict):
-            for k2, v2 in v.items():
-                out[f"{k}.{k2}"] = v2
+            out.update(_flatten_summary(v, key))
         elif isinstance(v, (list, tuple)):
             seq = list(v) + [None, None]
-            out[f"{k}_lo"], out[f"{k}_hi"] = seq[0], seq[1]
+            out[f"{key}_lo"], out[f"{key}_hi"] = seq[0], seq[1]
         else:
-            out[k] = v
+            out[key] = v
     return out
 
 
@@ -352,8 +357,28 @@ def _write_report(out_dir, cfg, summary, auc_task, auc_model, prf_task, ablation
     A = L.append
     A("# HalluGraph-KGGen — RAGTruth evaluation report\n")
     A(f"- **LLM model:** `{cfg.llm.model}`")
+    A(f"- **LLM revision:** `{config_value(cfg.llm, 'model_revision') or 'unrecorded'}`")
+    A(
+        "- **Runtime fingerprint:** "
+        f"`{config_value(cfg.llm, 'runtime_fingerprint') or 'unrecorded'}`"
+    )
+    A(
+        "- **Structured output:** "
+        f"`{config_value(cfg.llm, 'structured_output_transport', 'none')}` / "
+        f"`{config_value(cfg.llm, 'structured_output_backend', 'none')}`"
+    )
     A(f"- **relation detector mode:** `{summary['relation_mode']}`")
     A(f"- **Embedding model:** `{cfg.matching.embedding_model}`")
+    A(
+        "- **Embedding revision:** "
+        f"`{config_value(cfg.matching, 'embedding_model_revision') or 'unrecorded'}`"
+    )
+    A(
+        "- **Embedding runtime:** "
+        f"path=`{config_value(cfg.matching, 'embedding_model_path') or 'Hub cache'}`, "
+        f"device=`{config_value(cfg.matching, 'embedding_device', 'cpu')}`, "
+        f"local-files-only=`{bool(config_value(cfg.matching, 'local_files_only', True))}`"
+    )
     A(f"- **alpha (tuned on train):** {summary['alpha']}")
     A(f"- **theta / decision threshold (tuned on train F1):** {summary['theta']:.4f}")
     A(f"- **tau_e / tau_r:** {summary['tau_e']} / {summary['tau_r']}")

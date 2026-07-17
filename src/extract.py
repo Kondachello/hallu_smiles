@@ -25,7 +25,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
+
+from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
+from .dspy_adapter import (
+    install_dspy_completion_guard,
+    is_retryable_llm_exception,
+    structured_output_settings,
+)
 
 
 # --------------------------------------------------------------------------------------
@@ -59,6 +66,10 @@ class Graph:
 
 class ExtractionError(RuntimeError):
     pass
+
+
+class ClusteringCollapseError(ExtractionError):
+    """KGGen clustering discarded more of a probe graph than allowed."""
 
 
 # --------------------------------------------------------------------------------------
@@ -145,7 +156,14 @@ class UsageLogger:
 # Extractor
 # --------------------------------------------------------------------------------------
 class KGExtractor:
-    def __init__(self, cfg, backend: Any | None = None, usage: UsageLogger | None = None):
+    def __init__(
+        self,
+        cfg,
+        backend: Any | None = None,
+        usage: UsageLogger | None = None,
+        *,
+        cache_only: bool = False,
+    ):
         self.cfg = cfg
         self.model = cfg.llm.model
         self.temperature = cfg.llm.temperature
@@ -168,6 +186,23 @@ class KGExtractor:
         )
         if self.cluster_max_items is not None and self.cluster_max_items <= 0:
             raise ValueError("extraction.cluster_max_items must be positive or null")
+        raw_min_retention = config_value(
+            cfg.extraction, "cluster_min_retention_ratio", None
+        )
+        self.cluster_min_retention_ratio = (
+            float(raw_min_retention) if raw_min_retention is not None else None
+        )
+        if self.cluster_min_retention_ratio is not None and not (
+            0.0 <= self.cluster_min_retention_ratio <= 1.0
+        ):
+            raise ValueError(
+                "extraction.cluster_min_retention_ratio must be between 0 and 1 or null"
+            )
+        self.cluster_retention_min_items = int(
+            config_value(cfg.extraction, "cluster_retention_min_items", 5)
+        )
+        if self.cluster_retention_min_items <= 0:
+            raise ValueError("extraction.cluster_retention_min_items must be positive")
         self.chunk_chars = cfg.extraction.context_chunk_chars
         self.serial_chunking = (
             cfg.extraction.get("serial_chunking", False)
@@ -179,15 +214,12 @@ class KGExtractor:
             if hasattr(cfg.extraction, "get")
             else getattr(cfg.extraction, "explicit_clustering", False)
         )
-        # ``guided_json`` is a DataSphere/vLLM transport detail, not a second
-        # model setting.  It makes DSPy send its existing typed-output schema
-        # through vLLM 0.6.3's native constrained-decoding API.  Leave the
-        # normal DSPy adapter untouched unless the runtime explicitly opts in.
-        self.vllm_guided_json = (
-            cfg.llm.get("vllm_guided_json", False)
-            if hasattr(cfg.llm, "get")
-            else getattr(cfg.llm, "vllm_guided_json", False)
-        )
+        # Structured output is a transport/runtime property; ``llm.model``
+        # remains the sole model slug.  ``guided_json`` is retained only as a
+        # deprecated compatibility route for old caches and is never selected
+        # by the research DataSphere profile.
+        self.structured_output = structured_output_settings(cfg.llm)
+        self.vllm_guided_json = self.structured_output.transport == "guided_json"
         raw_dump_after = os.environ.get("DATASPHERE_KGGEN_DUMP_AFTER_SECONDS", "")
         self.debug_dump_after_s = float(raw_dump_after) if raw_dump_after else None
         if self.debug_dump_after_s is not None and self.debug_dump_after_s <= 0:
@@ -202,12 +234,25 @@ class KGExtractor:
         if self.request_timeout_s <= 0:
             raise ValueError("llm.request_timeout_s must be positive")
         self.cache_dir = Path(cfg.cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_only = bool(cache_only)
+        if not self.cache_only:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._backend = backend  # if None, lazily construct KGGen on first use
+        # Never let an offline FakeKGGen smoke artifact masquerade as a live
+        # KGGen graph.  A cache-only production replay uses ``backend=None``
+        # and therefore receives the same stable ``kggen`` namespace as the
+        # original live extraction without constructing that backend.
+        self.backend_fingerprint = (
+            "kggen"
+            if backend is None
+            else f"{type(backend).__module__}.{type(backend).__qualname__}"
+        )
         self.usage = usage or UsageLogger(None)
 
     # -- backend --------------------------------------------------------------
     def _get_backend(self):
+        if self.cache_only:
+            raise RuntimeError("cache-only mode forbids constructing a KGGen/LLM backend")
         if self._backend is None:
             from kg_gen import KGGen  # lazy import; not needed for offline tests
             from .config import resolve_api_key
@@ -231,21 +276,27 @@ class KGExtractor:
             if lm is not None:
                 lm.kwargs["timeout"] = self.request_timeout_s
                 lm.num_retries = 0
+                install_dspy_completion_guard(lm)
             self.usage.try_hook_litellm()
         return self._backend
 
     # -- cache ----------------------------------------------------------------
     def _cache_key(self, text: str) -> str:
         params = {
-            "model": self.model,
-            "temperature": self.temperature,
+            "v": 8,
+            "extractor_protocol": "kggen-0.4-strict-cache-v2",
+            "backend": self.backend_fingerprint,
+            "llm": llm_runtime_fingerprint(self.cfg),
+            "api_base": config_value(self.cfg.llm, "api_base"),
             "max_tokens": self.max_tokens,
             "cluster": self.cluster,
+            "cluster_max_items": self.cluster_max_items,
+            "cluster_min_retention_ratio": self.cluster_min_retention_ratio,
+            "cluster_retention_min_items": self.cluster_retention_min_items,
             "chunk_chars": self.chunk_chars,
             "serial_chunking": self.serial_chunking,
             "explicit_clustering": self.explicit_clustering,
             "vllm_guided_json": self.vllm_guided_json,
-            "v": 5,  # guided transport can change valid extraction outputs
         }
         payload = json.dumps(params, sort_keys=True) + "\x00" + text
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -257,7 +308,28 @@ class KGExtractor:
         p = self._cache_path(key)
         if p.exists():
             try:
-                return Graph.from_dict(json.loads(p.read_text(encoding="utf-8")))
+                envelope = json.loads(p.read_text(encoding="utf-8"))
+                if not isinstance(envelope, dict) or set(envelope) != {
+                    "protocol", "cache_key", "graph", "graph_sha256"
+                }:
+                    return None
+                if envelope["protocol"] != "hallu-kg-cache-v2" or envelope["cache_key"] != key:
+                    return None
+                graph_payload = envelope["graph"]
+                if not isinstance(graph_payload, dict) or set(graph_payload) != {
+                    "entities", "relations"
+                }:
+                    return None
+                canonical = json.dumps(
+                    graph_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+                if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != envelope["graph_sha256"]:
+                    return None
+                graph = Graph.from_dict(graph_payload)
+                # Round-tripping catches malformed/dropped relation rows.
+                if graph.to_dict() != graph_payload:
+                    return None
+                return graph
             except Exception:
                 return None
         return None
@@ -269,8 +341,21 @@ class KGExtractor:
         # tmp + atomic os.replace makes concurrent writes of the same key safe and idempotent.
         import os
 
+        graph_payload = graph.to_dict()
+        canonical = json.dumps(
+            graph_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        envelope = {
+            "protocol": "hallu-kg-cache-v2",
+            "cache_key": key,
+            "graph": graph_payload,
+            "graph_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        }
         tmp = dest.with_name(f"{key}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps(graph.to_dict(), ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(
+            json.dumps(envelope, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         os.replace(tmp, dest)  # atomic -> crash-safe / resumable
 
     # -- generation -----------------------------------------------------------
@@ -317,18 +402,55 @@ class KGExtractor:
         if not self._should_cluster_backend_graph(graph):
             return graph
         entities = getattr(graph, "entities", set()) or set()
-        edges = getattr(graph, "edges", set()) or set()
+        raw_relations = getattr(graph, "relations", set()) or set()
+        edges = getattr(graph, "edges", set()) or {
+            relation[1] for relation in raw_relations
+            if isinstance(relation, (tuple, list)) and len(relation) == 3
+        }
         print(
-            f"[kg] cluster:start entities={len(entities)} predicates={len(edges)}",
+            f"[kg] cluster:start entities={len(entities)} "
+            f"predicates={len(edges)} relations={len(raw_relations)}",
             flush=True,
         )
         clustered = backend.cluster(graph)
         clustered_entities = getattr(clustered, "entities", set()) or set()
-        clustered_edges = getattr(clustered, "edges", set()) or set()
+        clustered_relations = getattr(clustered, "relations", set()) or set()
+        clustered_edges = getattr(clustered, "edges", set()) or {
+            relation[1] for relation in clustered_relations
+            if isinstance(relation, (tuple, list)) and len(relation) == 3
+        }
+        entity_retention = len(clustered_entities) / len(entities) if entities else 1.0
+        predicate_retention = len(clustered_edges) / len(edges) if edges else 1.0
         print(
-            f"[kg] cluster:done entities={len(clustered_entities)} predicates={len(clustered_edges)}",
+            f"[kg] cluster:done entities={len(clustered_entities)} "
+            f"predicates={len(clustered_edges)} relations={len(clustered_relations)}",
             flush=True,
         )
+        print(
+            "[kg] cluster:retention "
+            f"entities={len(clustered_entities)}/{len(entities)} "
+            f"({entity_retention:.6f}) predicates={len(clustered_edges)}/{len(edges)} "
+            f"({predicate_retention:.6f}) relations={len(clustered_relations)}/{len(raw_relations)}",
+            flush=True,
+        )
+        if self.cluster_min_retention_ratio is not None:
+            failures: list[str] = []
+            if raw_relations and not clustered_relations:
+                failures.append("all relations disappeared")
+            if (
+                len(entities) >= self.cluster_retention_min_items
+                and entity_retention < self.cluster_min_retention_ratio
+            ):
+                failures.append(f"entity retention={entity_retention:.6f}")
+            if (
+                len(edges) >= self.cluster_retention_min_items
+                and predicate_retention < self.cluster_min_retention_ratio
+            ):
+                failures.append(f"predicate retention={predicate_retention:.6f}")
+            if failures:
+                raise ClusteringCollapseError(
+                    "KGGen clustering retention gate failed: " + "; ".join(failures)
+                )
         return clustered
 
     @contextmanager
@@ -339,17 +461,24 @@ class KGExtractor:
         context is additive, so this outer block retains the adapter during
         raw extraction *and* official KGGen LLM clustering.
         """
-        if not self.vllm_guided_json:
+        if self.structured_output.transport == "none":
             yield
             return
         import dspy
 
-        from .dspy_adapter import vllm_guided_json_adapter
+        from .dspy_adapter import strict_json_schema_adapter, vllm_guided_json_adapter
 
         lm = getattr(backend, "lm", None)
         if lm is None:
-            raise RuntimeError("vllm_guided_json requires a KGGen backend with a DSPy LM")
-        with dspy.context(lm=lm, adapter=vllm_guided_json_adapter()):
+            raise RuntimeError(
+                f"{self.structured_output.transport} requires a KGGen backend with a DSPy LM"
+            )
+        adapter = (
+            strict_json_schema_adapter()
+            if self.structured_output.transport == "response_format"
+            else vllm_guided_json_adapter()
+        )
+        with dspy.context(lm=lm, adapter=adapter):
             yield
 
     def _call_backend(self, text: str) -> Graph:
@@ -374,7 +503,9 @@ class KGExtractor:
                 # profile so a client-side stall can be distinguished from a vLLM
                 # generation stall. A finite cap also needs raw triples first.
                 explicit_cluster_phase = self.cluster and (
-                    self.explicit_clustering or self.cluster_max_items is not None
+                    self.explicit_clustering
+                    or self.cluster_max_items is not None
+                    or self.cluster_min_retention_ratio is not None
                 )
                 gen_kwargs: dict[str, Any] = {
                     "input_data": text,
@@ -408,13 +539,15 @@ class KGExtractor:
         if cached is not None:
             self.usage.record_call(kind, key, 0.0, cached=True)
             return cached
+        if self.cache_only:
+            raise CacheOnlyMissError(kind, key, self._cache_path(key))
 
         start = time.perf_counter()
         graph: Graph | None = None
         for attempt in Retrying(
             stop=stop_after_attempt(self.max_retries),
             wait=wait_exponential(multiplier=self.backoff_base),
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception(is_retryable_llm_exception),
             reraise=True,
         ):
             with attempt:

@@ -13,6 +13,8 @@ def main() -> None:
     parser.add_argument("--base-config", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--model-id", required=True)
+    parser.add_argument("--model-revision", required=True)
+    parser.add_argument("--runtime-fingerprint", required=True)
     parser.add_argument("--api-base", required=True)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument(
@@ -55,6 +57,30 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--structured-output-transport",
+        choices=("response_format", "guided_json", "none"),
+        default="response_format",
+    )
+    parser.add_argument(
+        "--structured-output-backend",
+        choices=("xgrammar", "guidance"),
+        default="xgrammar",
+    )
+    parser.add_argument(
+        "--embedding-model-path",
+        default="/opt/hallu/models/all-MiniLM-L6-v2",
+    )
+    parser.add_argument(
+        "--embedding-model-revision",
+        default="1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    )
+    parser.add_argument(
+        "--cluster-min-retention-ratio",
+        type=float,
+        default=None,
+        help="Probe-only clustering collapse threshold; omit for the full pilot.",
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=1,
@@ -85,11 +111,19 @@ def main() -> None:
         raise ValueError("--concurrency must be positive")
     if args.cluster_max_items is not None and args.cluster_max_items <= 0:
         raise ValueError("--cluster-max-items must be positive")
+    if args.cluster_min_retention_ratio is not None and not (
+        0.0 <= args.cluster_min_retention_ratio <= 1.0
+    ):
+        raise ValueError("--cluster-min-retention-ratio must be between 0 and 1")
+    if args.vllm_guided_json and args.structured_output_transport != "guided_json":
+        raise ValueError("--vllm-guided-json conflicts with --structured-output-transport")
 
     with open(args.base_config, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     work_dir = Path(args.work_dir)
     config["llm"]["model"] = f"openai/{args.model_id}"
+    config["llm"]["model_revision"] = args.model_revision
+    config["llm"]["runtime_fingerprint"] = args.runtime_fingerprint
     config["llm"]["api_base"] = args.api_base
     config["llm"]["api_key_env"] = "OPENAI_API_KEY"
     # KGGen 0.4 otherwise defaults to 16k completion tokens.  The g1.1
@@ -97,9 +131,16 @@ def main() -> None:
     # default makes every extraction request fail before generation begins.
     config["llm"]["max_tokens"] = args.max_tokens
     config["llm"]["concurrency"] = args.concurrency
+    config["llm"]["structured_output_transport"] = args.structured_output_transport
+    config["llm"]["structured_output_backend"] = args.structured_output_backend
     config["llm"]["vllm_guided_json"] = args.vllm_guided_json
     config["extraction"]["serial_chunking"] = args.serial_chunking
     config["extraction"]["cluster_max_items"] = args.cluster_max_items
+    config["extraction"]["cluster_min_retention_ratio"] = args.cluster_min_retention_ratio
+    config["matching"]["embedding_model_path"] = args.embedding_model_path
+    config["matching"]["embedding_model_revision"] = args.embedding_model_revision
+    config["matching"]["embedding_device"] = "cpu"
+    config["matching"]["local_files_only"] = True
     if args.disable_clustering:
         config["extraction"]["cluster"] = False
     if args.explicit_clustering:

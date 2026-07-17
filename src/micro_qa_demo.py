@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from .cache import config_value
 from .config import load_config
 from .data import Instance, load_instances
 from .extract import Graph, KGExtractor, UsageLogger
@@ -357,7 +358,14 @@ def audit_micro_graphs(
     if not 0.0 <= alpha <= 1.0:
         raise ValueError(f"audit alpha must be in [0, 1], got {alpha!r}.")
     if embedder is None:
-        embedder = SBERTEmbedder(cfg.matching.embedding_model)
+        matching = cfg.matching
+        embedder = SBERTEmbedder(
+            matching.embedding_model,
+            model_revision=config_value(matching, "embedding_model_revision"),
+            model_path=config_value(matching, "embedding_model_path"),
+            device=str(config_value(matching, "embedding_device", "cpu")),
+            local_files_only=bool(config_value(matching, "local_files_only", True)),
+        )
     ref_graph = RefGraph(
         graphs["G_ref"].entities,
         graphs["G_ref"].relations,

@@ -11,32 +11,28 @@ cmd: >-
   git -C source checkout --detach FETCH_HEAD;
   actual_commit="$(git -C source rev-parse HEAD)";
   test "$actual_commit" = "__GIT_COMMIT__";
+  export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE_ID__";
   export LITELLM_LOCAL_MODEL_COST_MAP=true;
-  if printenv PYTHONPATH >/dev/null; then export PYTHONPATH="$PWD/source/datasphere/runtime_shims:$PYTHONPATH"; else export PYTHONPATH="$PWD/source/datasphere/runtime_shims"; fi;
-  python source/scripts/resolve_datasphere_shared_model.py --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared" --model-id "__MODEL_ID__" > "$ARTIFACT_DIR/model-path.txt";
-  python source/scripts/check_datasphere_shared_assets.py --model-path "$(cat "$ARTIFACT_DIR/model-path.txt")" --data-dir "$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth" --model-id "__MODEL_ID__" --report "$ARTIFACT_DIR/preflight.json";
-  python source/scripts/patch_datasphere_lmfe_bool_schema.py --report "$ARTIFACT_DIR/lmfe-bool-schema-patch.json";
-  python source/scripts/check_datasphere_runtime_dependencies.py --report "$ARTIFACT_DIR/runtime-dependencies.json";
-  python source/scripts/check_datasphere_outlines_backend.py --report "$ARTIFACT_DIR/outlines-backend.json";
+  export PYTHONHASHSEED=42;
+  export HF_HUB_OFFLINE=1;
+  export TRANSFORMERS_OFFLINE=1;
+  if printenv PYTHONPATH >/dev/null; then export PYTHONPATH="$PWD/source:$PYTHONPATH"; else export PYTHONPATH="$PWD/source"; fi;
+  export CLIENT_PYTHON=/opt/hallu/client/bin/python;
+  export SERVER_PYTHON=/opt/hallu/server/bin/python;
+  "$CLIENT_PYTHON" -S source/scripts/resolve_datasphere_shared_model.py --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared" --model-id "__MODEL_ID__" > "$ARTIFACT_DIR/model-path.txt";
+  "$CLIENT_PYTHON" source/scripts/check_datasphere_shared_assets.py --model-path "$(cat "$ARTIFACT_DIR/model-path.txt")" --data-dir "$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth" --model-id "__MODEL_ID__" --report "$ARTIFACT_DIR/preflight.json";
+  "$CLIENT_PYTHON" source/scripts/check_datasphere_docker_runtime.py --server-python "$SERVER_PYTHON" --client-python "$CLIENT_PYTHON" --runtime-manifest /opt/hallu/runtime-manifest.json --embedding-path /opt/hallu/models/all-MiniLM-L6-v2 --expected-source-commit __GIT_COMMIT__ --report "$ARTIFACT_DIR/runtime-dependencies.json";
+  "$CLIENT_PYTHON" source/scripts/write_datasphere_preflight_gate.py --runtime-report "$ARTIFACT_DIR/runtime-dependencies.json" --shared-assets-report "$ARTIFACT_DIR/preflight.json" --source-commit __GIT_COMMIT__ --docker-image-id __DOCKER_IMAGE_ID__ --model-id "__MODEL_ID__" --output "$ARTIFACT_DIR/gate_metadata.json";
+  cp /opt/hallu/runtime-manifest.json /opt/hallu/manifests/server.freeze.txt /opt/hallu/manifests/client.freeze.txt "$ARTIFACT_DIR/";
   tar -C "$(dirname "$ARTIFACT_DIR")" -czf "${ARTIFACT_ARCHIVE}" "$(basename "$ARTIFACT_DIR")"'
 env:
-  python:
-    type: manual
-    version: "3.11"
-    requirements-file: requirements.datasphere.preflight.txt
-    # The CLI requires an explicit local source path for shell entrypoints.
-    # The Job itself still clones and verifies the pinned public Git commit.
-    local-paths:
-      - scripts
+  docker: __DOCKER_IMAGE_ID__
 outputs:
   - preflight-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
 flags:
   - attach-project-disk
 cloud-instance-types:
   - c1.4
-working-storage:
-  type: SSD
-  size: 100Gb
 graceful-shutdown:
   signal: SIGTERM
   timeout: 30s

@@ -7,6 +7,7 @@ scipy                    # Wilcoxon signed-rank
 numpy
 pandas
 tenacity                 # retries with backoff
+jsonschema>=4.23,<5      # independent validation of every structured LLM response
 tqdm
 
 # --- Reporting ---

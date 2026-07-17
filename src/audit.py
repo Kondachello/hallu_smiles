@@ -25,8 +25,14 @@ def build_audit_record(
     alpha_support = alpha if alpha_support is None else alpha_support
     cfi = res.cfi_for_mode(alpha, "strict")
     h = res.h_for_mode(alpha, "strict", impute=impute_h)
-    cfi_support = res.cfi_for_mode(alpha_support, "support")
-    h_support = res.h_for_mode(alpha_support, "support", impute=impute_h)
+    cfi_support = (
+        res.cfi_for_mode(alpha_support, "support") if relation_mode == "support" else None
+    )
+    h_support = (
+        res.h_for_mode(alpha_support, "support", impute=impute_h)
+        if relation_mode == "support"
+        else None
+    )
     return {
         "response_id": inst.response_id,
         "source_id": inst.source_id,

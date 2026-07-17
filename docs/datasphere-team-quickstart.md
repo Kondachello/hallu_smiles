@@ -1,328 +1,282 @@
-# DataSphere: памятка команде — запуск с первой попытки
+# DataSphere: памятка команде — безопасный запуск `new-metrics`
 
-> **Контекст работы.** Базовые прогоны я выполнял в ветке `qa-sample-test`.
-> Новая проверяемая гипотеза находится в `new-metrics`: она сопоставляет
-> исходную строгую графовую метрику с поддержкой отношения текстовым evidence
-> и verifier. Любую новую экспериментальную ветку создаём от актуального
-> `new-metrics`.
+Эта памятка описывает актуальный путь от локальной ветки до 20-QA отчёта.
+Ноутбук только рендерит и отправляет DataSphere Jobs. Llama 3.1 8B работает
+локально относительно удалённой GPU Job — через vLLM на `127.0.0.1:8000` — и
+не устанавливается на ноутбук.
 
-Эта инструкция — практический путь от локальной ветки до сохранённого отчёта.
-Она написана после реальных ошибок первого запуска; не заменяйте шаги
-«короткими» ручными командами. Полная техническая справка находится в
-[datasphere-team-runbook.md](datasphere-team-runbook.md), а этот файл можно
-целиком переслать исполнителю.
+Полная техническая справка: [datasphere-team-runbook.md](datasphere-team-runbook.md).
 
-## Что уже подготовлено и что нельзя трогать
+## Что уже подготовлено и что нельзя менять
 
-- Общие **Llama 3.1 8B** и **RAGTruth** уже лежат в общем Project storage.
-  Их один раз подготовили CPU-сессией; каждый GPU Job читает эти файлы
-  read-only и **не скачивает модель повторно**.
-- В `shared/models` и `shared/ragtruth` разрешено хранить только модель,
-  датасет и их manifests. Не удаляйте и не редактируйте их из рабочей Job.
-- `HF_TOKEN` нужен только для редкого одноразового staging модели. В GPU Job,
-  конфиги, git, логи и скриншоты он не попадает.
-- Закреплённый `vllm==0.6.3.post1` менять нельзя без отдельной проверки:
-  именно эта версия совместима с CUDA driver V100 `g1.1`. Диапазон вида
-  `vllm>=...` может молча поставить несовместимую версию и потратить GPU-время
-  до первой полезной операции.
-- Пара `vllm==0.6.3.post1` и `lm-format-enforcer==0.10.6` требует ровно
-  `transformers==4.45.2`. Это проверенная связка: плавающий диапазон поставил
-  4.57, где удален `LogitsWarper`; сервер стартовал, но первый completion
-  завершался HTTP 500. Transformers 5.x дополнительно несовместим с PyTorch
-  2.4 ещё до старта vLLM. `outlines==0.0.46` закреплён отдельно: это
-  constrained-decoding backend для полного вложенного JSON Schema KGGen.
-- Локальный vLLM намеренно ограничен 8 192 токенами на V100. Поэтому KGGen
-  должен получить `llm.max_tokens: 256`: его дефолт 16 000 переполняет окно
-  ещё до генерации. Скрипт делает дешёвый completion smoke-check и затем
-  KGGen/DSPy typed-output **и clustering** probe с timeout 180 секунд,
-  прежде чем запускать все 20 QA. Кластеризация — часть KGGen, не fallback.
-- Для vLLM 0.6.3 выбран `--guided-decoding-backend outlines`: перед запросом
-  DSPy разворачивает локальные `$defs`/`$ref` и отбрасывает только
-  несемантические служебные поля `__dspy_*`/`desc` в **эквивалентном полном
-  inline JSON Schema** KGGen, включая вложенный `relations: list[Relation]`. У
-  `lm-format-enforcer==0.10.6` после успешного
-  простого probe была подтверждена ошибка на реальном nested schema: он мог
-  вернуть один bare `{"subject", "predicate", "object"}` вместо корневого
-  `{"relations": [...]}`. Это не исправляют постобработкой и не обходят
-  отключением typed extraction или LLM clustering.
+- Модель `meta-llama/Meta-Llama-3.1-8B-Instruct` и RAGTruth уже находятся в
+  Project storage под `$DS_PROJECT_HOME/hallu_smiles/shared`. Job читает их
+  read-only и ничего туда не записывает.
+- `HF_TOKEN` нужен только для одноразового staging в CPU Jupyter. Он не нужен
+  и не передаётся ни в CPU preflight, ни в GPU Jobs.
+- Среда Job — неизменяемый DataSphere Project Docker resource. В Job запрещены
+  `pip install`, скачивание модели и сборка окружения.
+- Docker image разделяет несовместимые роли:
+  `/opt/hallu/server` содержит vLLM `0.8.5.post1+cu118`,
+  PyTorch `2.6.0+cu118`, Transformers и
+  XGrammar; `/opt/hallu/client` содержит KGGen, DSPy, LiteLLM, verifier,
+  scoring и CPU-only PyTorch.
+- CUDA 11.8 выбрана намеренно: сохранённый runtime probe на реальном `g1.1`
+  подтвердил V100 и driver API 12.2; CUDA 12.4 на этом узле уже падала до
+  запуска модели. Оба preflight-а проверяют exact CUDA build fail-closed.
+- S-BERT `sentence-transformers/all-MiniLM-L6-v2` с точной revision встроен в
+  image по пути `/opt/hallu/models/all-MiniLM-L6-v2`. Клиент загружает его с
+  `local_files_only=True`, `HF_HUB_OFFLINE=1` и `CUDA_VISIBLE_DEVICES=""`.
+- KGGen LLM-clustering остаётся включённой. Full 20-QA pilot не ограничивает
+  число элементов кластеризации и не подменяет её эвристикой.
+- Structured output передаётся только нативным OpenAI-compatible полем
+  `response_format` типа `json_schema`; сервер использует XGrammar. Bare
+  relation object не оборачивается постфактум в `{"relations": [...]}`.
 
-  `outlines==0.0.46` требует `pyairports==0.0.1`, а этот PyPI distribution не
-  содержит импортируемого Python-модуля. Поэтому Job добавляет в `PYTHONPATH`
-  проверенный репозиторный shim `datasphere/runtime_shims/pyairports` с пустым
-  неиспользуемым списком аэропортов. CPU preflight импортирует именно этот shim
-  и `outlines.integrations.vllm.JSONLogitsProcessor` до выделения V100.
-  `patch_datasphere_lmfe_bool_schema.py` остаётся обязательным audit-патчем
-  точного pinned dependency vLLM: он применяет upstream five-line fix только в
-  ephemeral Job venv и проверяет closed schema. Он не меняет schema, KGGen или
-  кластеризацию.
-
-## Короткая схема
+## Обязательная последовательность gates
 
 ```text
-qa-sample-test ── baseline-прогоны
+push полного commit SHA
         │
-        └── new-metrics ── строгий baseline + новая support-гипотеза
-                 │
-                 └── ваша ветка → push commit → CPU preflight
-                                                     │
-                                      cluster-probe (3 QA, при смене runtime)
-                                                     │
-                                                     └── GPU QA Job → archive → отчёт
+        ├── remote build immutable Project Docker resource
+        │
+        └── CPU preflight (c1.4)
+                  │ SUCCESS
+                  └── exact relation/verifier/real-reference probes
+                              + bounded extraction первых 3 QA (g1.1)
+                                      │ SUCCESS, failed_extractions пуст
+                                      └── full 20 QA (g1.1)
+                                              └── server stopped
+                                                  cache-only strict/support replay
 ```
 
-После новой зависимости или зависания сначала запустите `cluster-probe-g1`:
-он поднимает ту же Llama, но извлекает и **кластеризует** только первые три
-записи фиксированного manifest. Это дешёвая проверка границы, на которой
-раньше возникал stall. Успешный probe не является метрикой и не заменяет
-полный пилот. В логе probe должны быть пары `cluster:start` / `cluster:done`;
-если один вызов зависнет, появится Python thread dump, а Job остановится через
-180 секунд нулевого GPU вместо десятиминутного простоя полного pilot.
+Нельзя переходить через неуспешный gate. `cluster-probe-g1` не считает AUC и
+не является экспериментальным результатом.
 
-Один полный GPU Job запускает этапы в одном процессе: сначала strict baseline,
-затем support-вариант. Они используют **одинаковые** 20 `(C,Q,A)`, один
-selection manifest, KG cache и запущенный vLLM. Поэтому не создавайте две
-GPU Job «для baseline и new metrics» — это будет дороже и исказит сравнение.
-
-## 0. Локальная подготовка (делается один раз на ноутбук)
+## 0. Настроить CLI на ноутбуке
 
 Из корня репозитория:
 
 ```bash
 python3.12 -m venv .venv-datasphere
 .venv-datasphere/bin/python -m pip install --upgrade pip datasphere
-# Установить YC CLI по официальной инструкции Yandex Cloud.
-# Если он уже лежит в репозитории, достаточно:
-export PATH="$PWD/.tools/yc:$PATH"
+# Установить Yandex Cloud CLI официальным способом, затем:
 yc init
 ```
 
-Для выданного/federated аккаунта запускайте **обычный** `yc init`, без
-`--username`. Если после входа CLI пишет, что доступных cloud нет, **не
-создавайте cloud и новый DataSphere Project**. Это ожидаемо для этого типа
-доступа: проверка прав делается так (ID берём у координатора проекта):
+Для federated аккаунта используйте обычный `yc init`, без `--username`. Если
+CLI не показывает доступных clouds, не создавайте новый cloud или Project.
+Проверяйте доступ к уже существующему проекту:
 
 ```bash
 .venv-datasphere/bin/datasphere --profile default project get --id <PROJECT_ID>
 ```
 
-Если команда возвращает проект, доступ настроен. Ни токены, ни секреты,
-ни вывод `yc` не отправляем в чат, Git или screenshots.
+Не сохраняйте OAuth token, `HF_TOKEN` или другие секреты в Git, YAML, логи и
+скриншоты.
 
-## 1. Подготовить свою ветку
+## 1. Зафиксировать и опубликовать код
+
+Job клонирует публичный репозиторий по полному SHA. Незакоммиченный или только
+локальный код никогда не попадёт в запуск.
 
 ```bash
-git fetch origin
 git switch new-metrics
-git pull --ff-only origin new-metrics
-git switch -c <your-branch>
-# правки + тесты
+git status --short
 git add <только-нужные-файлы>
-git commit -m "..."
-git push -u origin <your-branch>
-git rev-parse HEAD
+git commit -m "Describe the DataSphere runtime change"
+git push origin new-metrics
+COMMIT=$(git rev-parse HEAD)
+git merge-base --is-ancestor "$COMMIT" origin/new-metrics
 ```
 
-DataSphere клонирует только commit, уже опубликованный в GitHub. Не начинайте
-от `main`, старого `qa-sample-test` или локального незапушенного состояния.
-Для каждого запуска выбирайте уникальный lowercase `RUN_ID` без `/`, например
-`my-hypothesis-a1b2c3d-20260717`.
+Не используйте сокращённый SHA в `--commit`.
 
-## 2. Обязательный бесплатный CPU preflight
+## 2. Создать immutable Project Docker resource
 
-Это проверяет доступ к общей модели и данным **до** аренды GPU. Он должен
-первым находить неправильную ветку, отсутствующий ready-marker, неверный
-model SHA и данные. Запускать GPU без успешного preflight нельзя.
+Рендер привязывает Dockerfile к уже запушенному commit:
 
 ```bash
-PROJECT_ID=<PROJECT_ID>
-BRANCH=<your-branch>
-RUN_ID=preflight-<your-branch>-<date>
+mkdir -p datasphere/docker/rendered
+.venv-datasphere/bin/python scripts/render_datasphere_dockerfile.py \
+  --commit "$COMMIT" \
+  --branch new-metrics \
+  --output "datasphere/docker/rendered/Dockerfile-$COMMIT"
+```
+
+В интерфейсе существующего DataSphere Project создайте Docker resource из
+этого файла и дождитесь успешной remote build. Не добавляйте локальный checkout,
+shared model directory или RAGTruth в build context: Dockerfile получает только
+три маленьких build-файла из публичного GitHub по точному SHA. После сборки
+сохраните immutable resource ID формата `b` + 19 lowercase букв/цифр:
+
+```bash
+DOCKER_IMAGE_ID=<bxxxxxxxxxxxxxxxxxxx>
+```
+
+Image содержит `/opt/hallu/runtime-manifest.json`, `server.freeze.txt`,
+`client.freeze.txt` и offline S-BERT snapshot. CPU preflight потребует, чтобы
+`runtime-manifest.json.source_commit` строго совпал с `--commit`. После любого
+изменения Docker requirements, runtime adapter или проверяемого commit нужен
+новый resource; старый ID нельзя переиспользовать с другим SHA.
+
+## 3. CPU preflight
+
+```bash
+PROJECT_ID=bt1i64odluitglbaj5st
+BRANCH=new-metrics
+RUN_ID=preflight-$(git rev-parse --short HEAD)-$(date +%Y%m%d)
 
 PYTHON_BIN=.venv-datasphere/bin/python \
 DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh \
-  --kind preflight --project-id "$PROJECT_ID" --branch "$BRANCH" --run-id "$RUN_ID"
+  --kind preflight \
+  --project-id "$PROJECT_ID" \
+  --branch "$BRANCH" \
+  --commit "$COMMIT" \
+  --docker-image-id "$DOCKER_IMAGE_ID" \
+  --run-id "$RUN_ID"
 ```
 
-Сохраните выданный `JOB_ID`, дождитесь `SUCCESS` и проверьте JSON preflight:
-`status: ready`, HF revision и ненулевой `model_bytes_checked`.
+Helper сначала проверяет, что SHA содержится в `origin/new-metrics`, затем
+рендерит и валидирует YAML, проверяет существующий Project и только после этого
+вызывает `datasphere project job execute --async`. Он не создаёт Project,
+секреты или Docker resource.
 
-## 3. Единственная команда GPU-прогона
+Preflight успешен только при terminal `SUCCESS` и наличии в архиве:
 
-Только после `SUCCESS` preflight:
+- `preflight.json` со `status: ready`, точной model revision и ненулевым
+  `model_bytes_checked`;
+- `runtime-dependencies.json` со `status: ready`;
+- `preflight-schemas.json`, успешно скомпилированного XGrammar для relation,
+  verifier и clustering enum schemas;
+- `runtime-manifest.json`, `server.freeze.txt`, `client.freeze.txt`;
+- `gate_metadata.json`, связывающий exact source commit, Docker ID, model
+  revision и runtime fingerprint;
+- успешного offline CPU encode встроенным S-BERT.
+
+## 4. Bounded three-QA probe
+
+Только после успешного CPU preflight и скачивания его tar:
 
 ```bash
-RUN_ID=<your-branch>-<short-sha>-<date>
+RUN_ID=cluster-probe-$(git rev-parse --short HEAD)-$(date +%Y%m%d)
+PREFLIGHT_ARCHIVE=<PATH_TO_DOWNLOADED_preflight-*.tar.gz>
 
 PYTHON_BIN=.venv-datasphere/bin/python \
 DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
 bash scripts/submit_datasphere_job.sh \
-  --kind qa-pilot-g1 --project-id "$PROJECT_ID" --branch "$BRANCH" --run-id "$RUN_ID"
+  --kind cluster-probe-g1 \
+  --project-id "$PROJECT_ID" \
+  --branch "$BRANCH" \
+  --commit "$COMMIT" \
+  --docker-image-id "$DOCKER_IMAGE_ID" \
+  --gate-artifact "$PREFLIGHT_ARCHIVE" \
+  --run-id "$RUN_ID"
 ```
 
-Не редактируйте `datasphere/jobs/*.template.yaml` ради одного запуска и не
-пишите руками `datasphere project job execute`. Helper сам:
+Перед extraction трёх фиксированных QA runner обязан по порядку пройти:
 
-1. проверяет, что commit опубликован в выбранной GitHub-ветке;
-2. рендерит YAML;
-3. валидирует shell/YAML/requirements локально;
-4. создаёт Job только после этих проверок.
+1. `/health` и короткий completion smoke-check.
+2. Точный реальный KGGen relation prompt/schema один раз через native
+   `response_format`; ответ имеет корень `{"relations": [...]}` и проходит
+   локальную JSON Schema validation.
+3. KGGen/DSPy typed extraction и официальную LLM-clustering.
+4. Закрытую verifier schema с единственным verdict.
+5. Первый выбранный RAGTruth reference graph.
+6. Полную extraction reference/answer pairs для трёх manifest rows.
 
-Если helper завершился ошибкой, Job не создан и GPU units не потрачены.
-Исправляем проблему в ветке, коммитим, пушим и повторяем ту же команду.
+Проверьте `vllm-response-format-probe.json`, `kggen-probe.json`,
+`verifier-probe.json`, `qa-reference-probe.json`, `run_metadata.json` и
+`strict/failed_extractions.jsonl`. Последний файл должен быть пустым. Пики GPU
+utilisation подтверждают работу inference; нулевой GPU во время CPU preflight
+или scoring сам по себе не является зависанием.
 
-GPU Job использует `g1.1` (V100 32 GB), FP16, `max-model-len=8192`, один
-vLLM server, и жёсткий лимит 3 часа. `trap` останавливает vLLM при успехе,
-ошибке, отмене или timeout. После terminal status DataSphere освобождает GPU
-автоматически.
+## 5. Full 20-QA pilot
 
-## 4. Наблюдение: каждые 10 минут, без платного простоя
+Только после чистого three-QA probe и скачивания его tar:
 
-Сразу после submit запишите `JOB_ID` в task/issue. Проверять нужно каждые
-10 минут (агенту можно дать инструкцию ниже):
+```bash
+RUN_ID=qa-pilot-$(git rev-parse --short HEAD)-$(date +%Y%m%d)
+CLUSTER_ARCHIVE=<PATH_TO_DOWNLOADED_cluster-probe-*.tar.gz>
+
+PYTHON_BIN=.venv-datasphere/bin/python \
+DATASPHERE_BIN=.venv-datasphere/bin/datasphere \
+bash scripts/submit_datasphere_job.sh \
+  --kind qa-pilot-g1 \
+  --project-id "$PROJECT_ID" \
+  --branch "$BRANCH" \
+  --commit "$COMMIT" \
+  --docker-image-id "$DOCKER_IMAGE_ID" \
+  --gate-artifact "$CLUSTER_ARCHIVE" \
+  --run-id "$RUN_ID"
+```
+
+Один `g1.1` Job запускает один FP16 vLLM server с `max-model-len=8192`, затем
+strict и support на одном 20-QA manifest и одном job-local cache. После live
+strict extraction оба scoring run (`strict` и `support`) запускаются с
+`--kg-cache-only`; cache miss или
+изменение SHA graph cache немедленно завершает Job, поэтому KG не извлекаются
+повторно. После live
+run server останавливается. Runner повторяет strict и support с `--cache-only`
+и требует одновременно:
+
+- ноль live LLM calls;
+- отсутствие cache misses;
+- byte-identical strict/support `metrics.csv`;
+- неизменные SHA-256 всех cache files.
+
+Любое нарушение завершает Job ошибкой. Не запускайте две GPU Jobs одновременно
+и не разделяйте strict/support на разные Jobs. Submitter сам получает JSON
+список Jobs и fail-closed запрещает второй non-terminal `hallu-*` GPU Job.
+
+## 6. Наблюдение и скачивание
+
+Сохраните выданный `JOB_ID`:
 
 ```bash
 .venv-datasphere/bin/datasphere --profile default project job get \
   --id <JOB_ID> --format json
 ```
 
-Значения статуса означают следующее:
+- `PREPARING`: DataSphere создаёт контейнер и монтирует storage. Это уже не
+  сборка Python environment внутри GPU Job.
+- `EXECUTING`: смотрите Launch history, `pilot.stdout.log`, `pilot.stderr.log`,
+  `vllm.log` и `gpu.csv`.
+- `SUCCESS`, `ERROR`, `CANCELLED`: terminal status; GPU VM освобождена.
 
-| Статус | Действие |
-|---|---|
-| `PREPARING` | Среда подготавливается; это ещё не полезная GPU-работа. Не отменяйте только из-за очереди, но не считайте это вычислением. |
-| `EXECUTING` | Job активна. После старта проверить `gpu-runtime.json`, healthcheck vLLM, а в конце — `gpu.csv` и `vllm.log`. |
-| `SUCCESS` | GPU уже освобождён. Скачать результаты, прочитать отчёт, остановить мониторинг. |
-| `ERROR` / `CANCELLED` | GPU уже освобождён. Скачать diagnostics, зафиксировать точную ошибку; не перезапускать вслепую. |
-
-В web-интерфейсе: **DataSphere Jobs → Launch history**. На macOS
-`project job attach` иногда засыпает терминал локальными gRPC warnings; это не
-диагностика Job. В таком случае используйте `project job get` и Launch history.
-`download-files` у активной Job может ответить, что файлов ещё нет — это не
-ошибка и не повод перезапускать Job.
-
-Если Job долго `EXECUTING`, но vLLM не проходит healthcheck или нет GPU
-activity после его старта, отменяйте **только конкретный** Job:
+После terminal status:
 
 ```bash
-.venv-datasphere/bin/datasphere --profile default project job cancel \
-  --id <JOB_ID> --graceful
-```
-
-Не используйте широкую кнопку «Отменить задания», если нужно остановить лишь
-один запуск. Перед отменой сохраните точный симптом и логи; новый запуск
-делается только после устранения причины.
-
-## Готовая инструкция для агента/исполнителя
-
-Скопируйте этот блок в задачу агенту, который наблюдает запуск:
-
-```text
-Работай только в ветке new-metrics или её опубликованной дочерней ветке.
-Не создавай DataSphere Project/cloud, не меняй shared/models и shared/ragtruth,
-не передавай HF_TOKEN в Job и не меняй pins vllm==0.6.3.post1 и
-transformers==4.45.2 (вместе с lm-format-enforcer==0.10.6 и
-outlines==0.0.46). Не удаляй `datasphere/runtime_shims/pyairports`: он нужен
-Outlines для полного nested JSON Schema KGGen и не является обходом extraction
-или clustering.
-
-До GPU Job требуй успешный CPU preflight: в archive должны быть `preflight.json`,
-`runtime-dependencies.json` и `outlines-backend.json` со status `ready`.
-Последние два файла создаются из тех же точных requirements, что и GPU Job, и
-импортируют vLLM, Transformers, lm-format-enforcer и Outlines c репозиторным
-shim без модели и без GPU. Для запуска используй только
-scripts/submit_datasphere_job.sh с уникальным RUN_ID; не редактируй Job YAML
-и не запускай datasphere project job execute вручную.
-
-После submit сохраняй JOB_ID и проверяй статус каждые 10 минут командой
-datasphere project job get --id <JOB_ID> --format json. PREPARING означает
-ожидание, EXECUTING — проверяй, что vLLM проходит healthcheck и GPU не простаивает.
-При SUCCESS/ERROR/CANCELLED сразу скачай outputs, logs и diagnostics, прочитай
-gpu-runtime.json, run_metadata.json, comparison.json, gpu.csv и vllm.log,
-сделай краткий отчёт и останови мониторинг. Не запускай повторную Job без
-разбора точной причины terminal failure. Не держи Jupyter или GPU включёнными
-ради чтения результатов.
-```
-
-## 5. Скачать и проверить результаты после terminal status
-
-```bash
-mkdir -p "outputs/datasphere-results/<RUN_ID>"
+mkdir -p "outputs/datasphere-results/$RUN_ID"
 .venv-datasphere/bin/datasphere --profile default project job download-files \
   --id <JOB_ID> --with-logs --with-diagnostics \
-  --output-dir "outputs/datasphere-results/<RUN_ID>"
+  --output-dir "outputs/datasphere-results/$RUN_ID"
 ```
 
-Обязательные файлы QA-архива:
+QA archive должен содержать как минимум `runtime-manifest.json`, оба freeze,
+`shared-assets-preflight.json`, `gpu-runtime.json`, все четыре probe reports,
+`qa_pilot_manifest.json`, `strict/`, `support/`, `cache-replay/`,
+`cache-before.sha256`, `cache-after.sha256`, `comparison.json`,
+`run_metadata.json`, `vllm.log`, `gpu.csv` и pilot logs.
 
-- `shared-assets-preflight.json` — общие модель/датасет прочитаны;
-- `gpu-runtime.json` — CUDA smoke-check до vLLM;
-- `vllm.log` и `gpu.csv` — запуск LLM и загрузка GPU;
-- `run_metadata.json`, `qa_pilot_manifest.json` — commit, конфигурация и
-  детерминированные 20 QA;
-- `strict/` и `support/` — независимые результаты двух режимов;
-- `comparison.json` и `comparison.md` — train OOF AUC, test AUC и сравнение;
-- audits, KG/verdict cache statistics, wall-clock и diagnostics.
+## Быстрая диагностика
 
-На 4 test примерах AUC дискретный и нестабильный. В отчёте всегда интерпретируем
-его вместе с 5-fold train OOF AUC, а не как окончательную оценку метода.
+| Симптом | Проверка и действие |
+|---|---|
+| `--docker-image-id` отклонён локально | Нужен immutable Project Docker resource ID, строго `b[a-z0-9]{19}`. |
+| Preflight: runtime built from another commit | Dockerfile был отрендерен не из текущего полного SHA. Соберите новый resource и повторите только CPU preflight. |
+| Preflight: dependency/schema/S-BERT error | Не запускайте GPU. Исправьте Docker requirements/build, запушьте commit, соберите новый resource, повторите preflight. |
+| vLLM не проходит healthcheck | Смотрите `gpu-runtime.json` и `vllm.log`; не переходите к probe/pilot. |
+| Relation probe вернул bare triple | XGrammar/native schema contract не пройден. Не оборачивайте результат parser repair и не запускайте три QA. |
+| KGGen или verifier probe не прошёл | Не отключайте LLM-clustering/typed output. Исправьте runtime и повторите один точный probe. |
+| `failed_extractions.jsonl` не пуст | Gate не пройден; 20-QA pilot запрещён. |
+| Cache-only replay пытается вызвать endpoint или меняет cache | Archive неполон или fingerprint не совпал. Job должен завершиться ошибкой; live повторный запуск не заменяет этот тест. |
+| GPU 0% во время extraction 180/600 секунд | Watchdog завершит bounded/full extraction и сохранит diagnostics. Не перезапускайте вслепую. |
 
-## 6. JupyterLab: когда нужен и когда его освобождать
+### Legacy, не использовать как текущую инструкцию
 
-Dedicated JupyterLab `c1.4` нужен только для одноразового staging общей модели
-и RAGTruth. Внутри Jupyter вводится **Python-код**, не shell-фрагмент. После
-успешных строк `[ok] shared model ready` и `[ok] shared RAGTruth ready` его
-нужно остановить: UI «Остановить JupyterLab и ВМ» освобождает CPU/RAM и не
-ломает уже выполняющуюся DataSphere Job. Он также не удаляет Project storage,
-модель, RAGTruth или архивы Job.
-
-Важная оговорка: UI предупреждает, что конфигурации Jupyter будут очищены.
-Если кому-то ещё нужна сама Jupyter-сессия, сначала согласуйте остановку. Если
-она больше не нужна — не держите её «на всякий случай».
-
-Падение Python kernel в Jupyter после staging не влияет на уже записанные
-shared assets и не влияет на отдельные Jobs.
-
-## 7. Карта уже встреченных ошибок
-
-| Симптом | Причина | Что делать правильно |
-|---|---|---|
-| `SyntaxError` в Jupyter | В Python-ячейку вставили shell/CLI-текст. | Вставлять только Python с `subprocess.run(...)` из полной runbook. |
-| `KeyError: 'DS_PROJECT_HOME'` в Jupyter | `DS_PROJECT_HOME` есть только внутри Job. | В Jupyter использовать `pathlib.Path('hallu_smiles') / 'shared'`; в Job — `$DS_PROJECT_HOME/...`. |
-| `Python crashed` в Jupyter | Упал kernel/сессия, а не GPU Job. | Проверить наличие ready-marker; не считать уже завершённый staging потерянным. |
-| `yc init` не принимает выданный аккаунт / «no clouds available» | Federated DataSphere account не обязан иметь обычный cloud. | `yc init` без `--username`; затем проверить существующий DataSphere Project, ничего нового не создавать. |
-| `file set was not found` при создании Job | CLI принял shell `set ...` за имя файла. | Job command начинается с `bash -lc`, это уже зашито в template. |
-| `cmd contains variable not presented in config` | `${PWD}` / `${RUN_ROOT}` ошибочно распознаны как YAML-подстановки. | В shell использовать `$PWD`, `$RUN_ROOT`; не править template вручную. |
-| CPU preflight завершается сразу с `PYTHONPATH: unbound variable` | В чистом manual Job включён `set -u`, но `PYTHONPATH` может отсутствовать. | Не экспортировать `...:$PYTHONPATH` без guard. Template проверяет `printenv PYTHONPATH` и задаёт shim directory отдельно, если переменная отсутствует. |
-| `Python root modules not found` | В manual Job не указали локальные Python paths/requirements. | Использовать helper; он добавляет `local-paths` и requirements. |
-| Ошибка requirements parser | В requirements были комментарии или `-r`. | Оставлять только прямые PEP 508 зависимости в `requirements.datasphere.txt`. |
-| Аргумент `--shared-root` стал отдельной командой | Некорректный folded YAML/отступ. | Не редактировать сгенерированную shell-команду; helper её валидирует. |
-| vLLM не стартует: driver/CUDA too old | Установилась новая несовместимая версия vLLM. | Не использовать `>=`; сохранить `vllm==0.6.3.post1` и смотреть `gpu-runtime.json`. |
-| vLLM ждёт healthcheck, а в логе `cannot import name 'DTensor'` | Resolver поставил Transformers 5.x, несовместимый с PyTorch 2.4. | Сохранить прямой pin `transformers==4.45.2`; не убирать его при обновлении requirements. |
-| `/v1/chat/completions` отвечает `400`, а `failed_extractions.jsonl` содержит `ContextWindowExceededError` | KGGen без явного лимита просит до 16 000 output tokens, но vLLM для V100 ограничен 8 192. | Сохранить `llm.max_tokens: 256` в runtime config и completion smoke-check до QA. |
-| Completion smoke-check отвечает `500`, в `vllm.log` — `ModuleNotFoundError: pyairports` | Outlines 0.0.46 импортирует дефектный `pyairports==0.0.1`, где нет Python-модуля. | Не переключать backend на raw или LME. Проверить, что Job экспортирует `PYTHONPATH=.../datasphere/runtime_shims` и preflight создал `outlines-backend.json` со `status: ready`. |
-| Completion smoke-check отвечает `500`, в `vllm.log` — `cannot import name 'LogitsWarper'` | Плавающий `transformers>=...` поставил версию 4.57, несовместимую с `lm-format-enforcer`. | Нужен точный, а не диапазонный pin: `transformers==4.45.2`; затем заново пройти CPU preflight. |
-| Guided-JSON probe отвечает `500`, а в `vllm.log` — `AttributeError: 'bool' object has no attribute 'get'` из `lmformatenforcer/.../jsonschemaobject.py` | `lm-format-enforcer==0.10.6` не умеет boolean-значение `additionalProperties: false` в закрытой JSON Schema, которую vLLM передаёт для typed KGGen extraction. Это происходит **до** QA/KGGen и после загрузки модели. | Не менять vLLM dependency pin. `patch_datasphere_lmfe_bool_schema.py` делает только upstream five-line backport в ephemeral Job venv и сохраняет JSON-отчёт; CPU preflight затем создаёт настоящий `JsonSchemaParser(... additionalProperties: false)`. Не отключать clustering или constrained decoding. |
-| Простой guided-JSON probe проходит, но реальный KGGen relations падает с `Expected output fields [relations], actual []`, а ответ — bare `{"subject", "predicate", "object"}` | vLLM 0.6.3 structured backends не переносят Pydantic `$defs`/`$ref` и DSPy-private annotation keys в schema `relations: list[Relation]`. Это не проблема модели, VRAM или LLM clustering. | Адаптер обязан развернуть только локальные `$defs` и удалить лишь annotations (`__dspy_*`, `desc`, `title`, `description`, examples), не меняя validation constraints; GPU probe строит exact KGGen fallback schema. Не оборачивать bare triple постфактум и не выключать clustering. |
-| `kggen-probe.json` не появляется или Job завершается до QA | DSPy 3.x/LiteLLM drift совместим по import, но не по KGGen structured-output path. | Сохранить locked `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`; probe должен пройти до extraction. |
-| Несовместимость Python-зависимостей обнаружена до GPU | CPU preflight импортирует ровно тот же набор requirements и пишет `runtime-dependencies.json` и `outlines-backend.json`. | Не запускать GPU, пока `preflight.json`, `runtime-dependencies.json` и `outlines-backend.json` имеют `status: ready`; исправить pin, запушить commit и повторить только CPU preflight. |
-| GPU остаётся 0% на KG extraction | Клиент KGGen/DSPy мог застыть после ответа vLLM при обработке cluster-процедуры. | Проверить `qa-reference-probe.json` и `vllm.log`; кластеризацию не отключать в официальном запуске. Сохранить pins `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`, `pydantic==2.10.6`, LLM timeout и serial KGGen. Сначала пройти `cluster-probe-g1` на трёх фиксированных QA. Watchdog завершит только extraction через 600 секунд сплошного нулевого GPU; после этого читать diagnostics, а не перезапускать вслепую. |
-| В error Job нет `vllm.log` / archive | При аварийном выходе DataSphere не передал путь output archive в shell. | Template задаёт fallback `ARTIFACT_ARCHIVE` до trap. Не удалять его: частичный archive должен собираться и при error/cancel. |
-| Логи `attach` шумные или пустые | Локальный macOS gRPC клиент нестабилен. | Смотреть `job get` и Launch history; архив скачивать после terminal. |
-| Повторная загрузка модели / нехватка диска | GPU Job пытается staging/download. | GPU Job только читает ready-marker; staging — лишь одноразово на c1.4. |
-| Непонятно, где результат | Job output — не Git и не shared model folder. | Скачивать архив в `outputs/datasphere-results/<RUN_ID>/`. |
-
-## Нельзя делать никогда
-
-- Не создавать новый Project/cloud и не подменять credentials команды личными.
-- Не отправлять в Git веса, `HF_TOKEN`, API keys, `.tools/`,
-  `.venv-datasphere/`, outputs, caches или diagnostics с секретами.
-- Не смешивать `RUN_ID`, manifests, caches и результаты двух веток.
-- Не запускать `huggingface-cli download` или runtime `pip install` в GPU Job.
-- Не освобождать shared storage и не трогать `ready`/`active-model.json` без
-  отдельного согласованного обновления модели.
-- Не держать Jupyter или GPU Job запущенными только ради просмотра CSV/лога.
-
-Если инструкция и фактический интерфейс расходятся, сначала остановитесь,
-снимите точный текст ошибки и приложите `JOB_ID`, ветку, commit и `RUN_ID`.
-Это почти всегда позволяет исправить запуск без траты ещё одного GPU-слота.
+Старый runtime `env.python.type: manual` с vLLM `0.6.3.post1`, Outlines
+`0.0.46`, LM Format Enforcer `0.10.6`, `pyairports` shim и runtime patch
+зафиксирован только как история исходного сбоя. Он нарушал корневую relation
+schema на реальном prompt и больше не является допустимым целевым runtime.

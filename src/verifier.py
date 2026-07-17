@@ -16,13 +16,34 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
 
+from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .config import resolve_api_key
+from .dspy_adapter import (
+    StructuredOutputParseError,
+    StructuredOutputSchemaError,
+    is_retryable_llm_exception,
+    json_schema_response_format,
+    strict_json_loads,
+    structured_output_settings,
+    validate_json_document,
+)
 from .matching import normalize
 
 
 VERDICTS = frozenset({"entailed", "contradicted", "unknown"})
+VERDICT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "verdict": {
+            "type": "string",
+            "enum": ["entailed", "contradicted", "unknown"],
+        }
+    },
+    "required": ["verdict"],
+    "additionalProperties": False,
+}
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _WORD_RE = re.compile(r"[\w]+", re.UNICODE)
 _PREDICATE_STOPWORDS = {
@@ -133,13 +154,14 @@ def _contains_token(text: str, token: str) -> bool:
 class RelationVerifier:
     """Direct LiteLLM verifier that shares the pipeline's single ``llm.model``."""
 
-    def __init__(self, cfg, usage=None):
+    def __init__(self, cfg, usage=None, *, cache_only: bool = False):
         verifier_cfg = getattr(cfg, "relation_verifier", None)
         if verifier_cfg is None:
             raise ValueError("relation_verifier config is required for support scoring")
         self.cfg = cfg
         self.model = cfg.llm.model
         self.api_base = getattr(cfg.llm, "api_base", None)
+        self.structured_output = structured_output_settings(cfg.llm)
         self.temperature = float(cfg.llm.temperature)
         self.max_retries = int(cfg.llm.max_retries)
         self.backoff_base = float(cfg.llm.retry_backoff_base_s)
@@ -150,7 +172,9 @@ class RelationVerifier:
         self.prompt_version = str(verifier_cfg.prompt_version)
         self.stopwords = set(getattr(cfg.matching, "stopwords", []) or [])
         self.cache_dir = Path(verifier_cfg.cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_only = bool(cache_only)
+        if not self.cache_only:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.usage = usage
 
     def verify(
@@ -174,6 +198,10 @@ class RelationVerifier:
             if self.usage is not None:
                 self.usage.record_call("relation_verifier", key, 0.0, cached=True)
             return RelationVerdict(cached, tuple(evidence), cache_hit=True)
+        if self.cache_only:
+            raise CacheOnlyMissError(
+                "relation_verifier", key, self.cache_dir / f"{key}.json"
+            )
 
         start = time.perf_counter()
         try:
@@ -181,7 +209,7 @@ class RelationVerifier:
             for attempt in Retrying(
                 stop=stop_after_attempt(self.max_retries),
                 wait=wait_exponential(multiplier=self.backoff_base),
-                retry=retry_if_exception_type(Exception),
+                retry=retry_if_exception(is_retryable_llm_exception),
                 reraise=True,
             ):
                 with attempt:
@@ -227,26 +255,54 @@ class RelationVerifier:
             "temperature": self.temperature,
             "max_tokens": 32,
             "timeout": self.request_timeout_s,
+            # Tenacity above is the verifier's only retry policy.  LiteLLM's
+            # OpenAI client otherwise applies its own default retries, making
+            # the configured attempt bound and usage accounting inaccurate.
+            "num_retries": 0,
         }
         api_key = resolve_api_key(self.cfg)
         if api_key:
             kwargs["api_key"] = api_key
         if self.api_base:
             kwargs["api_base"] = self.api_base
+        if self.structured_output.transport == "response_format":
+            kwargs["response_format"] = json_schema_response_format(
+                VERDICT_SCHEMA, name="relation_verdict"
+            )
+        elif self.structured_output.transport == "guided_json":
+            # Deprecated compatibility mode for artifacts created by the old
+            # vLLM 0.6 runtime.  New research Jobs use response_format.
+            kwargs["extra_body"] = {"guided_json": VERDICT_SCHEMA}
         response = completion(**kwargs)
-        content = response.choices[0].message.content
+        choices = _response_field(response, "choices")
+        if not isinstance(choices, (list, tuple)) or len(choices) != 1:
+            raise StructuredOutputParseError(
+                "verifier completion must contain exactly one choice"
+            )
+        choice = choices[0]
+        finish_reason = _response_field(choice, "finish_reason")
+        if finish_reason != "stop":
+            raise StructuredOutputParseError(
+                f"verifier completion did not finish cleanly: {finish_reason!r}"
+            )
+        message = _response_field(choice, "message")
+        content = _response_field(message, "content")
         return _parse_verdict(content)
 
     def _cache_key(
         self, triple: tuple[str, str, str], evidence: list[EvidenceSpan], matching_params: dict[str, Any]
     ) -> str:
         payload = {
-            "v": 1,
-            "model": self.model,
+            "v": 3,
+            "verifier_protocol": "relation-entailment-closed-schema-v2",
+            "llm": llm_runtime_fingerprint(self.cfg),
             "api_base": self.api_base,
-            "temperature": self.temperature,
             "prompt_version": self.prompt_version,
             "max_evidence_sentences": self.max_sentences,
+            "embedding_model": config_value(self.cfg.matching, "embedding_model"),
+            "embedding_model_revision": config_value(
+                self.cfg.matching, "embedding_model_revision"
+            ),
             "matching": matching_params,
             "triple": list(triple),
             "evidence": [span.to_dict() for span in evidence],
@@ -295,15 +351,18 @@ class FakeRelationVerifier:
 
 def _parse_verdict(content: Any) -> str:
     if not isinstance(content, str):
-        raise RelationVerifierError("verifier response has no text content")
-    raw = content.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`").removeprefix("json").strip()
+        raise StructuredOutputParseError("verifier response has no text content")
+    payload = strict_json_loads(content.strip(), label="verifier response")
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RelationVerifierError(f"verifier did not return JSON: {content!r}") from exc
-    verdict = payload.get("verdict") if isinstance(payload, dict) else None
-    if verdict not in VERDICTS:
-        raise RelationVerifierError(f"invalid verifier verdict: {verdict!r}")
+        validate_json_document(payload, VERDICT_SCHEMA)
+    except StructuredOutputSchemaError:
+        raise
+    verdict = payload["verdict"]
     return str(verdict)
+
+
+def _response_field(value: Any, field: str) -> Any:
+    """Read a LiteLLM/OpenAI response field without accepting malformed shapes."""
+    if isinstance(value, dict):
+        return value.get(field)
+    return getattr(value, field, None)

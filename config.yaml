@@ -14,6 +14,10 @@ llm:
   max_retries: 5
   retry_backoff_base_s: 2
   concurrency: 4                      # parallel API calls, respect rate limits
+  structured_output_transport: "none" # DataSphere local runtime sets response_format
+  structured_output_backend: "xgrammar"
+  model_revision: null                # exact shared-model manifest revision in live Jobs
+  runtime_fingerprint: null           # immutable Docker image/lock fingerprint in live Jobs
 
 extraction:
   cluster: true                       # KGGen entity/edge resolution ON
@@ -23,11 +27,19 @@ extraction:
   # pathological number of candidates, raw triples are retained but the
   # optional canonicalisation call is skipped instead of CPU-spinning.
   cluster_max_items: null
+  # Optional diagnostic gate for bounded probes.  null preserves official
+  # KGGen clustering without imposing a global compression threshold.
+  cluster_min_retention_ratio: null
+  cluster_retention_min_items: 5
   context_chunk_chars: 6000           # chunk long contexts; KGGen aggregates chunks (maps to kg-gen chunk_size)
   serial_chunking: false              # DataSphere local-vLLM override disables KGGen's nested thread pools
 
 matching:
   embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  embedding_model_revision: "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+  embedding_model_path: null          # DataSphere sets the staged, image-local snapshot path
+  embedding_device: "cpu"            # do not compete with vLLM for the V100
+  local_files_only: true              # scoring must never trigger a late Hub download
   entity_sim_threshold: 0.90          # tau_e
   relation_sim_threshold: 0.75        # tau_r
   allow_substring_match: true
