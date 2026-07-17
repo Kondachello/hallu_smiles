@@ -191,6 +191,12 @@ Outlines 0.0.46 по ошибке зависит от `pyairports==0.0.1`, а э
 `outlines.integrations.vllm.JSONLogitsProcessor` через тот же shim. Не удаляйте
 shim и не меняйте backend без целевого smoke-check.
 
+В DataSphere manual environment `PYTHONPATH` может быть совсем не задан. Так
+как shell Job использует `set -u`, template обязан сначала проверять
+`printenv PYTHONPATH`, а не безусловно разворачивать `$PYTHONPATH`; иначе Job
+завершится ещё до первого preflight-check. Это shell-infrastructure ошибка,
+а не ошибка Outlines, KGGen или GPU.
+
 `lm-format-enforcer==0.10.6` остаётся pinned dependency vLLM 0.6.3. Перед
 стартом server `patch_datasphere_lmfe_bool_schema.py` применяет только upstream
 five-line fix для parsing `additionalProperties: false` в ephemeral Job venv и

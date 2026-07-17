@@ -291,6 +291,7 @@ shared assets и не влияет на отдельные Jobs.
 | `yc init` не принимает выданный аккаунт / «no clouds available» | Federated DataSphere account не обязан иметь обычный cloud. | `yc init` без `--username`; затем проверить существующий DataSphere Project, ничего нового не создавать. |
 | `file set was not found` при создании Job | CLI принял shell `set ...` за имя файла. | Job command начинается с `bash -lc`, это уже зашито в template. |
 | `cmd contains variable not presented in config` | `${PWD}` / `${RUN_ROOT}` ошибочно распознаны как YAML-подстановки. | В shell использовать `$PWD`, `$RUN_ROOT`; не править template вручную. |
+| CPU preflight завершается сразу с `PYTHONPATH: unbound variable` | В чистом manual Job включён `set -u`, но `PYTHONPATH` может отсутствовать. | Не экспортировать `...:$PYTHONPATH` без guard. Template проверяет `printenv PYTHONPATH` и задаёт shim directory отдельно, если переменная отсутствует. |
 | `Python root modules not found` | В manual Job не указали локальные Python paths/requirements. | Использовать helper; он добавляет `local-paths` и requirements. |
 | Ошибка requirements parser | В requirements были комментарии или `-r`. | Оставлять только прямые PEP 508 зависимости в `requirements.datasphere.txt`. |
 | Аргумент `--shared-root` стал отдельной командой | Некорректный folded YAML/отступ. | Не редактировать сгенерированную shell-команду; helper её валидирует. |

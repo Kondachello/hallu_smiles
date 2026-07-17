@@ -209,6 +209,7 @@ def test_cpu_preflight_uses_the_same_locked_runtime_and_import_check(tmp_path):
     assert "patch_datasphere_lmfe_bool_schema.py" in config["cmd"]
     assert "check_datasphere_outlines_backend.py" in config["cmd"]
     assert "datasphere/runtime_shims" in config["cmd"]
+    assert "if printenv PYTHONPATH >/dev/null" in config["cmd"]
     assert (ROOT / "requirements.datasphere.preflight.txt").read_text(encoding="utf-8") == (
         ROOT / "requirements.datasphere.txt"
     ).read_text(encoding="utf-8")
