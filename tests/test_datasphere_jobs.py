@@ -110,6 +110,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "--relation-mode support" in runner
     assert "check_datasphere_gpu_runtime.py" in runner
     assert "check_datasphere_vllm_completion.py" in runner
+    assert "check_datasphere_kggen_probe.py" in runner
     assert "KGGEN_MAX_TOKENS" in runner
     assert "KGGEN_CONCURRENCY" in runner
     assert "--serial-chunking" in runner
@@ -150,6 +151,7 @@ def test_gpu_job_archives_artifacts_when_cancelled(tmp_path):
     command = yaml.safe_load(rendered.read_text(encoding="utf-8"))["cmd"]
     assert "trap archive_on_exit EXIT" in command
     assert "trap on_signal INT TERM" in command
+    assert "export ARTIFACT_ARCHIVE" in command
     assert "tar -C \"$(dirname \"$RUN_ROOT\")\" -czf \"$ARTIFACT_ARCHIVE\"" in command
 
 

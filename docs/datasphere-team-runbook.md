@@ -157,13 +157,23 @@ driver. Также сохраняйте точный `transformers==4.45.2`: э�
 ещё до healthcheck. До загрузки модели Job записывает `gpu-runtime.json` с CUDA smoke-check,
 версией PyTorch/CUDA, GPU и compute capability.
 
+Нельзя оставлять плавающими и KGGen-клиентские зависимости: для текущей
+ветки зафиксированы `kg-gen==0.4.0`, `dspy==2.6.27` и
+`litellm==1.60.3`. DSPy 3.x проходит простой import-check, но меняет
+typed-output path; на практике после нескольких запросов KGGen переставал
+подавать новые запросы в vLLM, а V100 простаивал. CPU preflight проверяет
+всю эту матрицу именно как lock, а не только как набор импортируемых пакетов.
+
 `max-model-len=8192` — сознательный лимит, позволяющий Llama 8B работать на
 V100 32 GB. Для KGGen в Job обязательно выставляется `llm.max_tokens=1024`:
 без него KGGen 0.4 допускает до 16k output tokens, и vLLM отклоняет запросы с
 `ContextWindowExceededError`. Сразу после `/health` Job выполняет один
-двухтокенный `/v1/chat/completions` smoke-check. Он проверяет путь модели,
-OpenAI-совместимый API и контекст до того, как будут оплачены десятки extraction
-запросов.
+двухтокенный `/v1/chat/completions` smoke-check, а затем отдельный маленький
+**KGGen/DSPy probe** с typed-output и clustering. Второй probe проверяет
+именно тот путь, который использует extractor; если он зависнет или
+завершится ошибкой, QA-pilot не начнётся. Внешний `timeout` probe ограничен
+180 секундами, поэтому несовместимость не превратится в три часа оплачиваемого
+простоя.
 
 Для vLLM 0.6.3 Job задаёт `--guided-decoding-backend lm-format-enforcer` и
 pin `lm-format-enforcer==0.10.6`. Default `outlines` в этой среде импортирует

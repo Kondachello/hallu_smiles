@@ -18,6 +18,7 @@ cmd: >-
   export MODEL_MAX_MODEL_LEN=8192;
   export DATASPHERE_UNITS_PER_SECOND=72;
   export GPU_TIME_LIMIT_SECONDS=10800;
+  if ! printenv ARTIFACT_ARCHIVE >/dev/null; then export ARTIFACT_ARCHIVE="$PWD/qa-pilot-__RUN_ID__.tar.gz"; fi;
   archive_on_exit() {
     status=$?;
     trap - EXIT;

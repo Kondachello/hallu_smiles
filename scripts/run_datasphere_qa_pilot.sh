@@ -137,6 +137,18 @@ nvidia-smi --query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used,
   --format=csv,noheader,nounits -l 10 >"$GPU_LOG" 2>&1 &
 GPU_PID=$!
 
+# A plain completion is not enough: KGGen calls vLLM through DSPy's typed
+# output adapter and (optionally) its clustering sequence.  Fail before the
+# 20-record pilot if this exact path is not healthy.  GNU timeout protects the
+# budget even if an upstream client blocks below its HTTP timeout layer.
+echo "[probe] checking KGGen/DSPy structured extraction before the QA pilot."
+timeout --signal=TERM --kill-after=30s "${KGGEN_PROBE_TIMEOUT_SECONDS:-180}" \
+  "$PYTHON_BIN" "$ROOT/scripts/check_datasphere_kggen_probe.py" \
+  --port "$PORT" --model-id "$MODEL_ID" \
+  --timeout "${KGGEN_PROBE_REQUEST_TIMEOUT_SECONDS:-60}" \
+  --max-tokens "${KGGEN_PROBE_MAX_TOKENS:-256}" \
+  --report "$RUN_ROOT/kggen-probe.json"
+
 run_extraction_with_gpu_watchdog() {
   # The liveness condition applies only to live KG extraction. Scoring and
   # reporting are intentionally CPU-heavy, so monitoring the whole pipeline
