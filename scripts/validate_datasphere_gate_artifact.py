@@ -124,7 +124,7 @@ def _validate_cluster_probe(
     _expect(metadata.get("source_commit"), commit, "cluster probe source commit")
     _expect(metadata.get("datasphere_docker_image_id"), image_id, "cluster Docker image")
     _expect(metadata.get("model_id"), model_id, "cluster model")
-    _expect(metadata.get("guided_decoding_backend"), "xgrammar:no-fallback", "server backend")
+    _expect(metadata.get("guided_decoding_backend"), "xgrammar", "server backend")
     _expect(identity.get("source_commit"), commit, "runtime identity source commit")
     _expect(identity.get("datasphere_docker_image_id"), image_id, "runtime identity image")
     _expect(identity.get("runtime_protocol"), RUNTIME_PROTOCOL, "runtime identity protocol")

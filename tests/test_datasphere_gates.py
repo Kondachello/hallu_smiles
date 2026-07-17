@@ -74,7 +74,7 @@ def _cluster_tar(tmp_path: Path) -> Path:
         "model_id": MODEL,
         "model_revision": "mrev",
         "runtime_fingerprint": runtime_fingerprint,
-        "guided_decoding_backend": "xgrammar:no-fallback",
+        "guided_decoding_backend": "xgrammar",
     })
     _write_json(root / "runtime-identity.json", {
         "source_commit": COMMIT,

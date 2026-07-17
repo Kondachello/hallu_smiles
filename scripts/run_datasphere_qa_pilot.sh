@@ -36,10 +36,11 @@ KGGEN_CLUSTER_MAX_ITEMS="${KGGEN_CLUSTER_MAX_ITEMS:-}"
 # chunk/response thread pools produced a local-vLLM deadlock and hours of idle
 # V100 time.  The Job is intentionally serial; vLLM remains the only GPU work.
 KGGEN_CONCURRENCY="${KGGEN_CONCURRENCY:-1}"
-# The scientific config records XGrammar, while vLLM is launched with its
-# fail-closed spelling so it cannot silently fall back to another backend.
+# vLLM 0.8.5 accepts only the bare backend enum at the CLI.  Selecting
+# XGrammar explicitly (rather than "auto") fixes the backend; the exact schema
+# probes below fail closed if it cannot compile or enforce the contracts.
 STRUCTURED_OUTPUT_BACKEND="xgrammar"
-GUIDED_DECODING_BACKEND="xgrammar:no-fallback"
+GUIDED_DECODING_BACKEND="xgrammar"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 # LiteLLM otherwise fetches an optional model-cost map from GitHub on its first
 # import. Jobs need no cost pricing to call localhost, and an unreachable

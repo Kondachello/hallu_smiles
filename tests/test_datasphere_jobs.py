@@ -174,7 +174,8 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "--structured-output-transport response_format" in runner
     assert "--structured-output-backend" in runner
     assert "require_complete_extraction" in runner
-    assert 'GUIDED_DECODING_BACKEND="xgrammar:no-fallback"' in runner
+    assert 'GUIDED_DECODING_BACKEND="xgrammar"' in runner
+    assert "xgrammar:no-fallback" not in runner
     assert "lm-format-enforcer" not in runner
     assert "datasphere/runtime_shims" not in runner
     assert "LITELLM_LOCAL_MODEL_COST_MAP" in runner
