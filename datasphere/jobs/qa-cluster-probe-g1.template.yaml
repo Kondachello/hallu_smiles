@@ -17,6 +17,8 @@ cmd: >-
   export MODEL_DTYPE=half;
   export MODEL_MAX_MODEL_LEN=8192;
   export QA_PILOT_LIMIT=3;
+  export GPU_IDLE_ABORT_SECONDS=180;
+  export DATASPHERE_KGGEN_DUMP_AFTER_SECONDS=120;
   export DATASPHERE_UNITS_PER_SECOND=72;
   export GPU_TIME_LIMIT_SECONDS=3600;
   if ! printenv ARTIFACT_ARCHIVE >/dev/null; then export ARTIFACT_ARCHIVE="$PWD/cluster-probe-__RUN_ID__.tar.gz"; fi;

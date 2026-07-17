@@ -94,6 +94,17 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     ], check=True)
     assert yaml.safe_load(output.read_text(encoding="utf-8"))["extraction"]["cluster"] is False
 
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "make_datasphere_runtime_config.py"),
+        "--base-config", str(ROOT / "config.yaml"), "--output", str(output),
+        "--model-id", MODEL_ID, "--api-base", "http://127.0.0.1:8000/v1",
+        "--data-dir", "/read-only/ragtruth", "--work-dir", str(work_dir),
+        "--explicit-clustering",
+    ], check=True)
+    explicit = yaml.safe_load(output.read_text(encoding="utf-8"))["extraction"]
+    assert explicit["cluster"] is True
+    assert explicit["explicit_clustering"] is True
+
 
 def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path):
     rendered = tmp_path / "qa-pilot.yaml"
@@ -126,6 +137,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "KGGEN_MAX_TOKENS" in runner
     assert "KGGEN_CLUSTER_MAX_ITEMS" in runner
     assert "--disable-clustering" not in runner
+    assert "--explicit-clustering" in runner
     assert "  --cluster \\\n  --report" in runner
     assert "KGGEN_CONCURRENCY" in runner
     assert "--serial-chunking" in runner

@@ -39,6 +39,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--explicit-clustering",
+        action="store_true",
+        help=(
+            "Run KGGen generate(cluster=False) followed by the same KGGen.cluster() call. "
+            "This preserves LLM clustering while emitting a precise local-runtime phase boundary."
+        ),
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=1,
@@ -85,6 +93,8 @@ def main() -> None:
     config["extraction"]["cluster_max_items"] = args.cluster_max_items
     if args.disable_clustering:
         config["extraction"]["cluster"] = False
+    if args.explicit_clustering:
+        config["extraction"]["explicit_clustering"] = True
     config["data"]["dir"] = args.data_dir
     # DataSphere mounts project storage read-only in Jobs.  Every mutable file
     # therefore belongs to the job-local output directory, never DS_PROJECT_HOME.

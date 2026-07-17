@@ -14,8 +14,10 @@ Design notes / adaptation to the real kg-gen API (documented in README):
 """
 from __future__ import annotations
 
+import faulthandler
 import hashlib
 import json
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -171,6 +173,15 @@ class KGExtractor:
             if hasattr(cfg.extraction, "get")
             else getattr(cfg.extraction, "serial_chunking", False)
         )
+        self.explicit_clustering = (
+            cfg.extraction.get("explicit_clustering", False)
+            if hasattr(cfg.extraction, "get")
+            else getattr(cfg.extraction, "explicit_clustering", False)
+        )
+        raw_dump_after = os.environ.get("DATASPHERE_KGGEN_DUMP_AFTER_SECONDS", "")
+        self.debug_dump_after_s = float(raw_dump_after) if raw_dump_after else None
+        if self.debug_dump_after_s is not None and self.debug_dump_after_s <= 0:
+            raise ValueError("DATASPHERE_KGGEN_DUMP_AFTER_SECONDS must be positive when set")
         self.max_retries = cfg.llm.max_retries
         self.backoff_base = cfg.llm.retry_backoff_base_s
         self.request_timeout_s = float(
@@ -222,7 +233,8 @@ class KGExtractor:
             "cluster": self.cluster,
             "chunk_chars": self.chunk_chars,
             "serial_chunking": self.serial_chunking,
-            "v": 3,  # serial chunk scheduling changes the extraction contract
+            "explicit_clustering": self.explicit_clustering,
+            "v": 4,  # explicit phase sequencing changes the cache contract
         }
         payload = json.dumps(params, sort_keys=True) + "\x00" + text
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -289,6 +301,25 @@ class KGExtractor:
         )
         return False
 
+    def _cluster_backend_graph(self, backend: Any, graph: Any) -> Any:
+        """Run KGGen's own cluster pass with observable phase boundaries."""
+        if not self._should_cluster_backend_graph(graph):
+            return graph
+        entities = getattr(graph, "entities", set()) or set()
+        edges = getattr(graph, "edges", set()) or set()
+        print(
+            f"[kg] cluster:start entities={len(entities)} predicates={len(edges)}",
+            flush=True,
+        )
+        clustered = backend.cluster(graph)
+        clustered_entities = getattr(clustered, "entities", set()) or set()
+        clustered_edges = getattr(clustered, "edges", set()) or set()
+        print(
+            f"[kg] cluster:done entities={len(clustered_entities)} predicates={len(clustered_edges)}",
+            flush=True,
+        )
+        return clustered
+
     def _call_backend(self, text: str) -> Graph:
         backend = self._get_backend()
         if self.serial_chunking and len(text) > self.chunk_chars:
@@ -302,23 +333,25 @@ class KGExtractor:
                 for chunk in self._split_text(text, self.chunk_chars)
             ]
             g = backend.aggregate(graphs)
-            if self._should_cluster_backend_graph(g):
-                g = backend.cluster(g)
+            g = self._cluster_backend_graph(backend, g)
         else:
-            # With a finite local-runtime bound, generate raw triples first so
-            # the decision to call KGGen's optional clustering is made from the
-            # actual candidate cardinality.  With the default ``None`` this is
-            # the original one-call KGGen behaviour.
-            bounded_clustering = self.cluster and self.cluster_max_items is not None
+            # ``KGGen.generate(cluster=True)`` is implemented as raw extraction
+            # followed by ``KGGen.cluster(graph)``.  Keep that exact upstream
+            # cluster routine, but make the boundary explicit in the local
+            # profile so a client-side stall can be distinguished from a vLLM
+            # generation stall. A finite cap also needs raw triples first.
+            explicit_cluster_phase = self.cluster and (
+                self.explicit_clustering or self.cluster_max_items is not None
+            )
             gen_kwargs: dict[str, Any] = {
                 "input_data": text,
-                "cluster": False if bounded_clustering else self.cluster,
+                "cluster": False if explicit_cluster_phase else self.cluster,
             }
             if len(text) > self.chunk_chars:
                 gen_kwargs["chunk_size"] = self.chunk_chars
             g = backend.generate(**gen_kwargs)
-            if bounded_clustering and self._should_cluster_backend_graph(g):
-                g = backend.cluster(g)
+            if explicit_cluster_phase:
+                g = self._cluster_backend_graph(backend, g)
         entities = {str(e) for e in getattr(g, "entities", set())}
         relations = {
             tuple(str(x) for x in r)
@@ -352,7 +385,18 @@ class KGExtractor:
             reraise=True,
         ):
             with attempt:
-                graph = self._call_backend(text)
+                if self.debug_dump_after_s is not None:
+                    # This is intentionally timer-based rather than SIGUSR1:
+                    # the prior external signal dump occasionally segfaulted
+                    # Pydantic while we were diagnosing the local runtime.
+                    faulthandler.dump_traceback_later(
+                        self.debug_dump_after_s, repeat=False, exit=False
+                    )
+                try:
+                    graph = self._call_backend(text)
+                finally:
+                    if self.debug_dump_after_s is not None:
+                        faulthandler.cancel_dump_traceback_later()
         # With reraise=True, we only reach here on success, so graph is bound.
         assert graph is not None
         elapsed = time.perf_counter() - start

@@ -116,6 +116,7 @@ runtime_config_args=(
   --api-base "http://127.0.0.1:${PORT}/v1"
   --data-dir "$DATA_DIR"
   --max-tokens "$KGGEN_MAX_TOKENS"
+  --explicit-clustering
   --concurrency "$KGGEN_CONCURRENCY"
   --serial-chunking
   --work-dir "$RUN_ROOT"

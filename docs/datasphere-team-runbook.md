@@ -207,7 +207,12 @@ DataSphere сохраняет KGGen LLM-clustering включённой: это 
 воспроизведён Pydantic stall в client-side обработке одного cluster response.
 Поэтому перед полным 20-QA запуском используется отдельный `cluster-probe-g1`:
 тот же vLLM, те же pins и clustering, но лишь первые три записи fixed manifest
-и лимит 1 час. Только его успех разрешает полный pilot. Если `vllm.log`/
+и лимит 1 час. В этом probe extractor вызывает официальный `KGGen.cluster()`
+явно после raw extraction — алгоритм не подменяется, но логи получают
+`cluster:start`/`cluster:done`. Через 120 секунд одного зависшего вызова
+печатается безопасный Python thread dump, а watchdog останавливает probe после
+180 секунд нулевого GPU; в полном pilot это остаётся 600 секунд. Только успех
+probe разрешает полный pilot. Если `vllm.log`/
 `gpu.csv` показывают несколько минут 0% utilisation после завершённых
 запросов, отменяйте конкретную Job: такой простой не является полезным
 вычислением.
