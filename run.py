@@ -63,9 +63,13 @@ def extract_all(
 
     def do_ref(item):
         source_id, inst = item
+        print(f"[extract] reference:start source_id={source_id}", flush=True)
         try:
-            return source_id, extractor.extract_reference(inst.context, inst.query), None
+            graphs = extractor.extract_reference(inst.context, inst.query)
+            print(f"[extract] reference:done source_id={source_id}", flush=True)
+            return source_id, graphs, None
         except Exception as exc:  # noqa: BLE001
+            print(f"[extract] reference:error source_id={source_id} error={exc!r}", flush=True)
             return source_id, None, {"stage": "reference", "source_id": source_id, "error": repr(exc)}
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
@@ -83,9 +87,23 @@ def extract_all(
                 "stage": "response(skipped: ref failed)", "response_id": inst.response_id,
                 "source_id": inst.source_id, "error": "reference extraction failed",
             }
+        print(
+            f"[extract] response:start source_id={inst.source_id} response_id={inst.response_id}",
+            flush=True,
+        )
         try:
-            return inst.response_id, extractor.extract(inst.response, kind="response"), None
+            graph = extractor.extract(inst.response, kind="response")
+            print(
+                f"[extract] response:done source_id={inst.source_id} response_id={inst.response_id}",
+                flush=True,
+            )
+            return inst.response_id, graph, None
         except Exception as exc:  # noqa: BLE001
+            print(
+                f"[extract] response:error source_id={inst.source_id} "
+                f"response_id={inst.response_id} error={exc!r}",
+                flush=True,
+            )
             return inst.response_id, None, {
                 "stage": "response", "response_id": inst.response_id,
                 "source_id": inst.source_id, "error": repr(exc),

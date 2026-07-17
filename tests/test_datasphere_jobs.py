@@ -148,6 +148,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "GPU_IDLE_ABORT_SECONDS" in runner
     assert "--stage extract" in runner
     assert "--relation-mode strict --qa-pilot-manifest \"$MANIFEST\"" in runner
+    assert "[extract] response:start" in (ROOT / "run.py").read_text(encoding="utf-8")
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)
 
 
@@ -180,6 +181,8 @@ def test_cluster_probe_is_bounded_but_keeps_kggen_clustering(tmp_path):
     assert "export QA_PILOT_LIMIT=3" in config["cmd"]
     assert "timeout --signal=TERM --kill-after=60s 3600" in config["cmd"]
     assert "--disable-clustering" not in config["cmd"]
+    assert 'pilot.stdout.log' in config["cmd"]
+    assert 'pilot.stderr.log' in config["cmd"]
     assert config["outputs"] == [{"cluster-probe-cluster-probe-20260717.tar.gz": "ARTIFACT_ARCHIVE"}]
 
 
@@ -195,6 +198,8 @@ def test_gpu_job_archives_artifacts_when_cancelled(tmp_path):
     assert "trap on_signal INT TERM" in command
     assert "export ARTIFACT_ARCHIVE" in command
     assert "tar -C \"$(dirname \"$RUN_ROOT\")\" -czf \"$ARTIFACT_ARCHIVE\"" in command
+    assert 'pilot.stdout.log' in command
+    assert 'pilot.stderr.log' in command
 
 
 def test_rendered_jobs_pass_local_cli_guardrails(tmp_path):

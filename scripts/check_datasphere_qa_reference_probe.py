@@ -15,6 +15,7 @@ safe way to interrupt an upstream client stall on a paid GPU VM.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import os
 import sys
@@ -39,6 +40,24 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 def _emit(phase: str, **fields: Any) -> None:
     """Print a flush-safe structured progress record for DataSphere stdout."""
     print(json.dumps({"probe": "qa-reference", "phase": phase, **fields}, sort_keys=True), flush=True)
+
+
+def _cluster_stack_dump_timeout() -> float | None:
+    """Return the optional diagnostic timeout shared with the pilot extractor.
+
+    The reference probe calls ``KGGen.cluster`` directly so it deliberately
+    bypasses :meth:`KGExtractor.extract`.  Consequently the extractor's
+    diagnostic faulthandler timer cannot observe this probe.  Keep this
+    instrumentation local to the bounded diagnostic Job; it changes neither
+    clustering nor the full pilot's graph semantics.
+    """
+    raw = os.environ.get("DATASPHERE_KGGEN_DUMP_AFTER_SECONDS", "").strip()
+    if not raw:
+        return None
+    timeout = float(raw)
+    if timeout <= 0:
+        raise ValueError("DATASPHERE_KGGEN_DUMP_AFTER_SECONDS must be positive")
+    return timeout
 
 
 def run_probe(config_path: str | Path) -> dict[str, Any]:
@@ -116,7 +135,18 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
             entities=len(raw_graph.entities),
             predicates=len(raw_graph.edges),
         )
-        graph = backend.cluster(raw_graph)
+        dump_after = _cluster_stack_dump_timeout()
+        if dump_after is not None:
+            # Dump *all* Python threads to stderr if upstream KGGen/DSPy stops
+            # after an HTTP 200. The Job template persists stderr explicitly,
+            # so the next diagnostic result identifies the blocked frame.
+            faulthandler.enable(file=sys.stderr)
+            faulthandler.dump_traceback_later(dump_after, repeat=False, exit=False)
+        try:
+            graph = backend.cluster(raw_graph)
+        finally:
+            if dump_after is not None:
+                faulthandler.cancel_dump_traceback_later()
         _emit(
             "cluster:done",
             entities=len(graph.entities),

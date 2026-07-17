@@ -23,6 +23,8 @@ cmd: >-
     status=$?;
     trap - EXIT;
     tar -C "$(dirname "$RUN_ROOT")" -czf "$ARTIFACT_ARCHIVE" "$(basename "$RUN_ROOT")" || true;
+    if test -f "$RUN_ROOT/pilot.stdout.log"; then echo "[diagnostics] pilot stdout tail follows"; tail -n 320 "$RUN_ROOT/pilot.stdout.log" || true; fi;
+    if test -f "$RUN_ROOT/pilot.stderr.log"; then echo "[diagnostics] pilot stderr tail follows"; tail -n 320 "$RUN_ROOT/pilot.stderr.log" || true; fi;
     if test -f "$RUN_ROOT/vllm.log"; then echo "[diagnostics] vLLM log tail follows"; tail -n 240 "$RUN_ROOT/vllm.log" || true; fi;
     if test -f "$RUN_ROOT/gpu.csv"; then echo "[diagnostics] GPU samples tail follows"; tail -n 80 "$RUN_ROOT/gpu.csv" || true; fi;
     exit "$status";
@@ -31,7 +33,7 @@ cmd: >-
   trap archive_on_exit EXIT;
   trap on_signal INT TERM;
   set +e;
-  timeout --signal=TERM --kill-after=60s 10800 bash source/scripts/run_datasphere_qa_pilot.sh;
+  timeout --signal=TERM --kill-after=60s 10800 bash source/scripts/run_datasphere_qa_pilot.sh >"$RUN_ROOT/pilot.stdout.log" 2>"$RUN_ROOT/pilot.stderr.log";
   job_status=$?;
   set -e;
   exit "$job_status"'
