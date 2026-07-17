@@ -164,8 +164,8 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)
 
 
-def test_vllm_guided_json_adapter_inlines_nested_dspy_schema_without_response_format(monkeypatch):
-    from src.dspy_adapter import inline_local_json_schema_refs, vllm_guided_json_adapter
+def test_vllm_guided_json_adapter_canonicalizes_nested_dspy_schema_without_response_format(monkeypatch):
+    from src.dspy_adapter import canonicalize_vllm_guided_json_schema, vllm_guided_json_adapter
     from dspy.adapters.chat_adapter import ChatAdapter
 
     nested_schema = {
@@ -174,7 +174,7 @@ def test_vllm_guided_json_adapter_inlines_nested_dspy_schema_without_response_fo
                 "type": "object",
                 "properties": {
                     "subject": {"type": "string"},
-                    "predicate": {"type": "string"},
+                    "predicate": {"type": "string", "__dspy_field_type": "input", "desc": "predicate"},
                     "object": {"type": "string"},
                 },
                 "required": ["subject", "predicate", "object"],
@@ -211,6 +211,8 @@ def test_vllm_guided_json_adapter_inlines_nested_dspy_schema_without_response_fo
     assert captured["extra_body"]["guided_json"]["required"] == ["relations"]
     schema = captured["extra_body"]["guided_json"]
     assert "$defs" not in schema
+    assert "__dspy_field_type" not in json.dumps(schema)
+    assert '"desc"' not in json.dumps(schema)
     assert schema["properties"]["relations"]["items"]["required"] == [
         "subject", "predicate", "object"
     ]
@@ -221,7 +223,7 @@ def test_vllm_guided_json_adapter_inlines_nested_dspy_schema_without_response_fo
         "type": "object",
         "properties": {"value": {"$ref": "#/$defs/T"}},
     }
-    flattened = inline_local_json_schema_refs(original)
+    flattened = canonicalize_vllm_guided_json_schema(original)
     assert original["properties"]["value"] == {"$ref": "#/$defs/T"}
     assert flattened == {
         "type": "object",
@@ -263,15 +265,15 @@ def test_outlines_backend_uses_the_checked_in_pyairports_compatibility_shim():
     assert 'EXPECTED_OUTLINES_VERSION = "0.0.46"' in checker
     assert "from pyairports.airports import AIRPORT_LIST" in checker
     assert "from outlines.integrations.vllm import JSONLogitsProcessor" in checker
-    assert "compile flattened nested KGGen Relation schema" in checker
+    assert "compile canonical nested KGGen Relation schema" in checker
 
 
 def test_vllm_guided_json_probe_uses_the_real_nested_relation_contract():
     checker = (SCRIPTS / "check_datasphere_vllm_guided_json.py").read_text(encoding="utf-8")
 
-    assert '"$ref": "#/$defs/Relation"' in checker
+    assert "fallback_extraction_sig" in checker
     assert '"subject", "predicate", "object"' in checker
-    assert "inline_local_json_schema_refs" in checker
+    assert "canonicalize_vllm_guided_json_schema" in checker
 
 
 def test_cluster_probe_is_bounded_but_keeps_kggen_clustering(tmp_path):

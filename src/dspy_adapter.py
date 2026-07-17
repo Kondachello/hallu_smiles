@@ -106,6 +106,60 @@ def inline_local_json_schema_refs(schema: Mapping[str, Any]) -> dict[str, Any]:
     return expanded
 
 
+_NON_SEMANTIC_SCHEMA_ANNOTATIONS = frozenset({
+    "title",
+    "description",
+    "examples",
+    "default",
+    "$comment",
+    # ``desc`` is DSPy's legacy field metadata, not a JSON Schema keyword.
+    "desc",
+})
+_SCHEMA_MAP_KEYWORDS = frozenset({"$defs", "patternProperties", "dependentSchemas"})
+
+
+def canonicalize_vllm_guided_json_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the constraint-bearing JSON Schema accepted by vLLM 0.6.3.
+
+    In addition to local ``$defs`` expansion, remove annotations and DSPy's
+    private ``__dspy_*`` metadata.  These keywords do not restrict which JSON
+    documents validate; they are prompt/UI metadata.  Keeping them in the
+    grammar sent to the old Outlines backend makes it silently ignore the
+    enclosing object for KGGen's dynamic fallback Relation schema.  Removing
+    them therefore preserves exactly the same JSON language while avoiding
+    that backend defect.
+    """
+    expanded = inline_local_json_schema_refs(schema)
+
+    def clean(node: Any, *, property_map: bool = False) -> Any:
+        if isinstance(node, list):
+            return [clean(value) for value in node]
+        if not isinstance(node, Mapping):
+            return deepcopy(node)
+        if property_map:
+            # A user is allowed to name a JSON property ``title`` or ``desc``;
+            # these are property names here, not schema annotations.
+            return {str(key): clean(value) for key, value in node.items()}
+
+        result: dict[str, Any] = {}
+        for key, value in node.items():
+            if key in _NON_SEMANTIC_SCHEMA_ANNOTATIONS or key.startswith("__dspy_"):
+                continue
+            if key == "properties":
+                if not isinstance(value, Mapping):
+                    raise TypeError("JSON Schema properties must be an object")
+                result[key] = clean(value, property_map=True)
+            elif key in _SCHEMA_MAP_KEYWORDS:
+                if not isinstance(value, Mapping):
+                    raise TypeError(f"JSON Schema {key} must be an object")
+                result[key] = clean(value, property_map=True)
+            else:
+                result[key] = clean(value)
+        return result
+
+    return clean(expanded)
+
+
 def vllm_guided_json_adapter() -> Any:
     """Return a DSPy adapter that sends each output schema as ``guided_json``.
 
@@ -131,7 +185,7 @@ def vllm_guided_json_adapter() -> Any:
         ) -> list[dict[str, Any]]:
             try:
                 output_model = _get_structured_outputs_response_format(signature)
-                schema = inline_local_json_schema_refs(output_model.model_json_schema())
+                schema = canonicalize_vllm_guided_json_schema(output_model.model_json_schema())
             except Exception:
                 # Preserve DSPy's own compatibility fallback for signatures
                 # which cannot be represented as a closed JSON schema.

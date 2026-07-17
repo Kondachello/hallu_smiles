@@ -176,8 +176,9 @@ V100 32 GB. Для KGGen в Job обязательно выставляется 
 простоя.
 
 Для vLLM 0.6.3 Job задаёт `--guided-decoding-backend outlines`: перед отправкой
-DSPy-схемы адаптер разворачивает локальные Pydantic `$defs`/`$ref` в
-эквивалентную inline-схему, затем Outlines выполняет
+DSPy-схемы адаптер разворачивает локальные Pydantic `$defs`/`$ref` и удаляет
+только несемантические DSPy annotation fields в эквивалентную inline-схему,
+затем Outlines выполняет
 constrained decoding по **тому же полному JSON-языку** KGGen,
 включая вложенный `relations: list[Relation]`. Это принципиально: у
 `lm-format-enforcer==0.10.6` после успешного простого JSON probe реальная

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.dspy_adapter import inline_local_json_schema_refs
+from src.dspy_adapter import canonicalize_vllm_guided_json_schema
 
 
 EXPECTED_OUTLINES_VERSION = "0.0.46"
@@ -33,9 +33,9 @@ KGGEN_RELATION_SCHEMA: dict[str, Any] = {
         "Relation": {
             "type": "object",
             "properties": {
-                "subject": {"type": "string"},
-                "predicate": {"type": "string"},
-                "object": {"type": "string"},
+                "subject": {"type": "string", "__dspy_field_type": "input", "desc": "subject"},
+                "predicate": {"type": "string", "examples": ["is related to"]},
+                "object": {"type": "string", "title": "Object"},
             },
             "required": ["subject", "predicate", "object"],
             "additionalProperties": False,
@@ -70,9 +70,10 @@ def check() -> dict[str, Any]:
         raise RuntimeError("pyairports compatibility shim did not expose a list")
     if JSONLogitsProcessor is None:  # Defensive: import success must be meaningful.
         raise RuntimeError("Outlines vLLM JSON logits processor is unavailable")
-    flattened_schema = inline_local_json_schema_refs(KGGEN_RELATION_SCHEMA)
-    if "$defs" in flattened_schema or "\"$ref\"" in json.dumps(flattened_schema, sort_keys=True):
-        raise RuntimeError("KGGen relation schema was not fully inlined before Outlines compilation")
+    flattened_schema = canonicalize_vllm_guided_json_schema(KGGEN_RELATION_SCHEMA)
+    serialised_schema = json.dumps(flattened_schema, sort_keys=True)
+    if "$defs" in flattened_schema or "\"$ref\"" in serialised_schema or "__dspy_" in serialised_schema:
+        raise RuntimeError("KGGen relation schema was not fully canonicalised before Outlines compilation")
     # The processor needs a live tokenizer, but the schema->regex compiler does
     # not.  Compile the *actual nested KGGen relation grammar* on CPU before a
     # V100 is allocated, rather than merely checking that Outlines imports.
@@ -88,7 +89,7 @@ def check() -> dict[str, Any]:
         "checks": [
             "import pyairports.airports from checked-in runtime shim",
             "import outlines.integrations.vllm.JSONLogitsProcessor",
-            "compile flattened nested KGGen Relation schema to an Outlines regex",
+            "compile canonical nested KGGen Relation schema to an Outlines regex",
         ],
     }
 

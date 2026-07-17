@@ -23,33 +23,31 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.dspy_adapter import inline_local_json_schema_refs
+from src.dspy_adapter import canonicalize_vllm_guided_json_schema
 
 
-# This is the full relation-output shape used by KGGen/DSPy, including the
-# Pydantic ``$defs`` reference which previously escaped the root structure in
-# vLLM 0.6.3.  The adapter canonicalises it before sending it to vLLM; keep
-# this direct probe on the same schema so a trivial string-array success can
-# never green-light an incompatible GPU pilot.
-PYDANTIC_RELATION_SCHEMA: dict[str, Any] = {
-    "$defs": {
-        "Relation": {
-            "type": "object",
-            "properties": {
-                "subject": {"type": "string"},
-                "predicate": {"type": "string"},
-                "object": {"type": "string"},
-            },
-            "required": ["subject", "predicate", "object"],
-            "additionalProperties": False,
-        },
-    },
-    "type": "object",
-    "properties": {"relations": {"type": "array", "items": {"$ref": "#/$defs/Relation"}}},
-    "required": ["relations"],
-    "additionalProperties": False,
-}
-SCHEMA = inline_local_json_schema_refs(PYDANTIC_RELATION_SCHEMA)
+def kggen_fallback_relation_schema() -> dict[str, Any]:
+    """Build the exact dynamic fallback schema used by KGGen 0.4.
+
+    KGGen first tries a relation signature, then uses this fallback when a
+    typed relation response is malformed.  It contains the DSPy-only metadata
+    that previously differentiated a passing toy probe from the failing real
+    reference.  Exercise the production canonicaliser itself, not a hand-made
+    approximation.
+    """
+    from dspy.adapters.json_adapter import _get_structured_outputs_response_format
+    from kg_gen.steps._2_get_relations import fallback_extraction_sig
+
+    _, signature = fallback_extraction_sig(
+        ["Swiss chard", "spinach", "beetroot", "sea beet"],
+        is_conversation=False,
+    )
+    output_model = _get_structured_outputs_response_format(signature)
+    schema = canonicalize_vllm_guided_json_schema(output_model.model_json_schema())
+    serialized = json.dumps(schema, sort_keys=True)
+    if "#/$defs/" in serialized or "__dspy_" in serialized or '"desc"' in serialized:
+        raise RuntimeError("KGGen fallback schema was not fully canonicalised for vLLM")
+    return schema
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -64,6 +62,7 @@ def run_probe(*, port: int, model_id: str, timeout_s: float) -> dict[str, Any]:
         raise ValueError("port must be positive")
     if timeout_s <= 0:
         raise ValueError("timeout must be positive")
+    schema = kggen_fallback_relation_schema()
     payload = {
         "model": model_id,
         "temperature": 0.0,
@@ -76,7 +75,7 @@ def run_probe(*, port: int, model_id: str, timeout_s: float) -> dict[str, Any]:
         ],
         # vLLM 0.6.3's documented native structured-output parameter.  This
         # avoids its known response_format compatibility regression.
-        "guided_json": SCHEMA,
+        "guided_json": schema,
     }
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
@@ -104,9 +103,9 @@ def run_probe(*, port: int, model_id: str, timeout_s: float) -> dict[str, Any]:
         "status": "ready",
         "model_id": model_id,
         "request_parameter": "guided_json",
-        "schema_transport": "local_defs_inlined",
+        "schema_transport": "local_defs_inlined_and_dspy_annotations_removed",
         "schema_sha256": hashlib.sha256(
-            json.dumps(SCHEMA, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            json.dumps(schema, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest(),
         "relations_count": len(parsed["relations"]),
     }
