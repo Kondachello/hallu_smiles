@@ -22,9 +22,12 @@ from dataclasses import dataclass
 from typing import Any
 
 
-STRUCTURED_OUTPUT_PROTOCOL_VERSION = "strict-response-format-v2"
+STRUCTURED_OUTPUT_PROTOCOL_VERSION = "strict-response-format-v3-xgrammar-bounded-whitespace"
 STRUCTURED_OUTPUT_TRANSPORTS = frozenset({"none", "response_format", "guided_json"})
 STRUCTURED_OUTPUT_BACKENDS = frozenset({"xgrammar", "guidance"})
+XGRAMMAR_STRICT_REQUEST_BACKEND = (
+    "xgrammar:disable-any-whitespace,no-fallback"
+)
 
 
 class StructuredOutputError(RuntimeError):
@@ -128,6 +131,7 @@ class StructuredOutputSettings:
 
     transport: str = "none"
     backend: str = "xgrammar"
+    request_backend: str | None = None
     model_revision: str | None = None
     runtime_fingerprint: str | None = None
 
@@ -171,6 +175,25 @@ def structured_output_settings(llm_config: Any) -> StructuredOutputSettings:
         choices = ", ".join(sorted(STRUCTURED_OUTPUT_BACKENDS))
         raise ValueError(f"llm.structured_output_backend must be one of: {choices}")
 
+    request_backend = _config_value(
+        llm_config, "structured_output_request_backend", None
+    )
+    expected_request_backend = (
+        XGRAMMAR_STRICT_REQUEST_BACKEND
+        if transport == "response_format" and backend == "xgrammar"
+        else None
+    )
+    if request_backend is not None:
+        request_backend = str(request_backend).strip().lower()
+        if request_backend != expected_request_backend:
+            raise ValueError(
+                "llm.structured_output_request_backend must be "
+                f"{expected_request_backend!r} for transport={transport!r} "
+                f"and backend={backend!r}"
+            )
+    else:
+        request_backend = expected_request_backend
+
     model_revision = _config_value(llm_config, "model_revision", None)
     runtime_fingerprint = _config_value(llm_config, "runtime_fingerprint", None)
     if transport == "response_format" and (not model_revision or not runtime_fingerprint):
@@ -181,6 +204,7 @@ def structured_output_settings(llm_config: Any) -> StructuredOutputSettings:
     return StructuredOutputSettings(
         transport=transport,
         backend=backend,
+        request_backend=request_backend,
         model_revision=str(model_revision) if model_revision else None,
         runtime_fingerprint=str(runtime_fingerprint) if runtime_fingerprint else None,
     )
@@ -382,7 +406,7 @@ def canonicalize_vllm_guided_json_schema(schema: Mapping[str, Any]) -> dict[str,
     return clean(expanded)
 
 
-def strict_json_schema_adapter() -> Any:
+def strict_json_schema_adapter(*, request_backend: str | None = None) -> Any:
     """Return a DSPy JSON adapter with one strict native-schema request.
 
     DSPy 2.6's stock :class:`JSONAdapter` catches *any* structured-output
@@ -427,6 +451,14 @@ def strict_json_schema_adapter() -> Any:
                     request_kwargs["extra_body"] = cleaned_extra
                 else:
                     request_kwargs.pop("extra_body", None)
+            if request_backend is not None:
+                previous_extra = request_kwargs.get("extra_body", {})
+                if not isinstance(previous_extra, Mapping):
+                    raise TypeError("DSPy lm_kwargs.extra_body must be a mapping")
+                request_kwargs["extra_body"] = {
+                    **dict(previous_extra),
+                    "guided_decoding_backend": request_backend,
+                }
             request_kwargs["response_format"] = json_schema_response_format(
                 schema,
                 name=getattr(signature, "__name__", "dspy_program_outputs"),

@@ -58,6 +58,10 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
         "model": verifier.model,
         "transport": verifier.structured_output.transport,
         "backend": verifier.structured_output.backend,
+        "guided_decoding_request_backend": (
+            verifier.structured_output.request_backend
+        ),
+        "xgrammar_any_whitespace": False,
         "claim": list(CLAIM),
         "evidence": [span.to_dict() for span in evidence],
         "schema": VERDICT_SCHEMA,

@@ -88,6 +88,9 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["llm"]["vllm_guided_json"] is False
     assert config["llm"]["structured_output_transport"] == "response_format"
     assert config["llm"]["structured_output_backend"] == "xgrammar"
+    assert config["llm"]["structured_output_request_backend"] == (
+        "xgrammar:disable-any-whitespace,no-fallback"
+    )
     assert config["llm"]["model_revision"] == REVISION
     assert config["llm"]["runtime_fingerprint"] == RUNTIME_FINGERPRINT
     assert config["extraction"]["serial_chunking"] is True
@@ -177,7 +180,12 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "--structured-output-backend" in runner
     assert "require_complete_extraction" in runner
     assert 'GUIDED_DECODING_BACKEND="xgrammar"' in runner
-    assert "xgrammar:no-fallback" not in runner
+    assert '--guided-decoding-backend "$GUIDED_DECODING_BACKEND"' in runner
+    assert (
+        'STRUCTURED_OUTPUT_REQUEST_BACKEND="xgrammar:disable-any-whitespace,no-fallback"'
+        in runner
+    )
+    assert '--request-backend "$STRUCTURED_OUTPUT_REQUEST_BACKEND"' in runner
     assert "lm-format-enforcer" not in runner
     assert "datasphere/runtime_shims" not in runner
     assert "LITELLM_LOCAL_MODEL_COST_MAP" in runner
@@ -286,6 +294,9 @@ def test_cpu_preflight_uses_the_same_locked_runtime_and_import_check(tmp_path):
     assert '"vllm": "0.8.5.post1+cu118"' in dependency_check
     assert 'expected_torch_cuda="11.8"' in dependency_check
     assert "Grammar.from_json_schema" in dependency_check
+    assert "any_whitespace=False" in dependency_check
+    assert "disable-any-whitespace" in dependency_check
+    assert "no-fallback" in dependency_check
     assert "SentenceTransformer" in dependency_check
     assert "local_files_only=True" in dependency_check
     assert "runtime source commit and embedded asset identity" in dependency_check
@@ -331,6 +342,7 @@ def test_structured_output_probe_uses_real_nested_relation_contract():
     assert 'SWISS_SOURCE_ID = "15138"' in checker
     assert "json_schema_response_format" in checker
     assert '"request_parameter": "response_format"' in checker
+    assert '"guided_decoding_backend": request_backend' in checker
     assert "validate_json_document" in checker
     assert "two-fact contract returned only" in checker
     assert "canonicalize_vllm_guided_json_schema" not in checker

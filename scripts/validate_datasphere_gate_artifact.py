@@ -17,6 +17,9 @@ except ImportError:  # pragma: no cover - package import in unit tests
 
 MAX_JSON_BYTES = 5 * 1024 * 1024
 RUNTIME_PROTOCOL = "hallu-datasphere-vllm085-cu118-v1"
+XGRAMMAR_STRICT_REQUEST_BACKEND = (
+    "xgrammar:disable-any-whitespace,no-fallback"
+)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -78,6 +81,22 @@ def _validate_preflight(
     _expect(gate.get("model_id"), model_id, "preflight model")
     _expect(gate.get("runtime_protocol"), RUNTIME_PROTOCOL, "preflight runtime protocol")
     _expect(runtime.get("status"), "ready", "runtime report status")
+    xgrammar_contract = runtime.get("xgrammar_contract") or {}
+    _expect(
+        xgrammar_contract.get("request_backend"),
+        XGRAMMAR_STRICT_REQUEST_BACKEND,
+        "preflight XGrammar request backend",
+    )
+    _expect(
+        xgrammar_contract.get("backend_options"),
+        ["disable-any-whitespace", "no-fallback"],
+        "preflight XGrammar backend options",
+    )
+    _expect(
+        xgrammar_contract.get("any_whitespace"),
+        False,
+        "preflight XGrammar whitespace mode",
+    )
     _expect(shared.get("status"), "ready", "shared-assets status")
     _expect(shared.get("model_id"), model_id, "shared-assets model")
     _expect(shared.get("model_revision"), gate.get("model_revision"), "model revision")
@@ -125,9 +144,30 @@ def _validate_cluster_probe(
     _expect(metadata.get("datasphere_docker_image_id"), image_id, "cluster Docker image")
     _expect(metadata.get("model_id"), model_id, "cluster model")
     _expect(metadata.get("guided_decoding_backend"), "xgrammar", "server backend")
+    _expect(
+        metadata.get("guided_decoding_request_backend"),
+        XGRAMMAR_STRICT_REQUEST_BACKEND,
+        "request backend",
+    )
+    _expect(metadata.get("xgrammar_any_whitespace"), False, "XGrammar whitespace mode")
     _expect(identity.get("source_commit"), commit, "runtime identity source commit")
     _expect(identity.get("datasphere_docker_image_id"), image_id, "runtime identity image")
     _expect(identity.get("runtime_protocol"), RUNTIME_PROTOCOL, "runtime identity protocol")
+    _expect(
+        identity.get("guided_decoding_request_backend"),
+        XGRAMMAR_STRICT_REQUEST_BACKEND,
+        "runtime identity request backend",
+    )
+    _expect(
+        (identity.get("server_launch") or {}).get("guided_decoding_request_backend"),
+        XGRAMMAR_STRICT_REQUEST_BACKEND,
+        "runtime launch request backend",
+    )
+    _expect(
+        (identity.get("server_launch") or {}).get("xgrammar_any_whitespace"),
+        False,
+        "runtime launch XGrammar whitespace mode",
+    )
     _expect(
         identity.get("image_runtime_fingerprint"),
         runtime.get("runtime_fingerprint"),
@@ -147,7 +187,18 @@ def _validate_cluster_probe(
         "verifier-probe.json",
         "qa-reference-probe.json",
     ):
-        _expect(artifact.json(report_name).get("status"), "ready", f"{report_name} status")
+        report = artifact.json(report_name)
+        _expect(report.get("status"), "ready", f"{report_name} status")
+        _expect(
+            report.get("guided_decoding_request_backend"),
+            XGRAMMAR_STRICT_REQUEST_BACKEND,
+            f"{report_name} request backend",
+        )
+        _expect(
+            report.get("xgrammar_any_whitespace"),
+            False,
+            f"{report_name} XGrammar whitespace mode",
+        )
     if artifact.raw("strict/failed_extractions.jsonl", max_bytes=1024) != b"":
         raise ValueError("cluster probe has failed KG extractions")
     _validate_manifest(artifact.json("qa_pilot_manifest.json"))

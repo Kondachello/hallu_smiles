@@ -60,6 +60,7 @@ def run_probe(
     max_tokens: int,
     cluster: bool = False,
     structured_output_transport: str = "response_format",
+    request_backend: str | None = None,
 ) -> dict[str, Any]:
     if timeout_s <= 0:
         raise ValueError("timeout must be positive")
@@ -69,6 +70,14 @@ def run_probe(
     from importlib import metadata
 
     from kg_gen import KGGen
+    from src.dspy_adapter import XGRAMMAR_STRICT_REQUEST_BACKEND
+
+    if structured_output_transport == "response_format":
+        request_backend = request_backend or XGRAMMAR_STRICT_REQUEST_BACKEND
+        if request_backend != XGRAMMAR_STRICT_REQUEST_BACKEND:
+            raise ValueError(
+                "response_format probe must use strict bounded-whitespace XGrammar"
+            )
 
     started = time.perf_counter()
     backend = KGGen(
@@ -94,7 +103,7 @@ def run_probe(
         from src.dspy_adapter import strict_json_schema_adapter, vllm_guided_json_adapter
 
         adapter = (
-            strict_json_schema_adapter()
+            strict_json_schema_adapter(request_backend=request_backend)
             if structured_output_transport == "response_format"
             else vllm_guided_json_adapter()
         )
@@ -131,6 +140,10 @@ def run_probe(
         "max_tokens": max_tokens,
         "cluster": cluster,
         "structured_output_transport": structured_output_transport,
+        "guided_decoding_request_backend": request_backend,
+        "xgrammar_any_whitespace": (
+            False if structured_output_transport == "response_format" else None
+        ),
         "versions": {
             "kg-gen": metadata.version("kg-gen"),
             "dspy": metadata.version("dspy"),
@@ -156,6 +169,13 @@ def main() -> None:
         action="store_true",
         help="Also exercise KGGen's official LLM clustering pass.",
     )
+    from src.dspy_adapter import XGRAMMAR_STRICT_REQUEST_BACKEND
+
+    parser.add_argument(
+        "--request-backend",
+        choices=(XGRAMMAR_STRICT_REQUEST_BACKEND,),
+        default=XGRAMMAR_STRICT_REQUEST_BACKEND,
+    )
     parser.add_argument(
         "--structured-output-transport",
         choices=("none", "response_format", "guided_json"),
@@ -173,6 +193,7 @@ def main() -> None:
         max_tokens=args.max_tokens,
         cluster=args.cluster,
         structured_output_transport=args.structured_output_transport,
+        request_backend=args.request_backend,
     )
     _atomic_json(Path(args.report), report)
     print(json.dumps(report, sort_keys=True))

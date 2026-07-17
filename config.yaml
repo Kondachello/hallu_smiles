@@ -16,6 +16,7 @@ llm:
   concurrency: 4                      # parallel API calls, respect rate limits
   structured_output_transport: "none" # DataSphere local runtime sets response_format
   structured_output_backend: "xgrammar"
+  structured_output_request_backend: null # DataSphere pins XGrammar request options
   model_revision: null                # exact shared-model manifest revision in live Jobs
   runtime_fingerprint: null           # immutable Docker image/lock fingerprint in live Jobs
 

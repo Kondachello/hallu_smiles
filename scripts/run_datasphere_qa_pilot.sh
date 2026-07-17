@@ -36,11 +36,12 @@ KGGEN_CLUSTER_MAX_ITEMS="${KGGEN_CLUSTER_MAX_ITEMS:-}"
 # chunk/response thread pools produced a local-vLLM deadlock and hours of idle
 # V100 time.  The Job is intentionally serial; vLLM remains the only GPU work.
 KGGEN_CONCURRENCY="${KGGEN_CONCURRENCY:-1}"
-# vLLM 0.8.5 accepts only the bare backend enum at the CLI.  Selecting
-# XGrammar explicitly (rather than "auto") fixes the backend; the exact schema
-# probes below fail closed if it cannot compile or enforce the contracts.
+# vLLM 0.8.5 accepts only the bare backend enum at the server CLI. Request-level
+# options disable XGrammar's unbounded syntactic-whitespace loops and forbid
+# fallback; neither option changes the JSON Schema or its accepted documents.
 STRUCTURED_OUTPUT_BACKEND="xgrammar"
 GUIDED_DECODING_BACKEND="xgrammar"
+STRUCTURED_OUTPUT_REQUEST_BACKEND="xgrammar:disable-any-whitespace,no-fallback"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 # LiteLLM otherwise fetches an optional model-cost map from GitHub on its first
 # import. Jobs need no cost pricing to call localhost, and an unreachable
@@ -137,7 +138,7 @@ RUNTIME_FINGERPRINT="$("$CLIENT_PYTHON" - \
   "$DATASPHERE_DOCKER_IMAGE_ID" "$EMBEDDING_MODEL_PATH" "$EMBEDDING_MODEL_REVISION" \
   "$MODEL_DTYPE" "$MODEL_MAX_MODEL_LEN" "$GUIDED_DECODING_BACKEND" \
   "$STRUCTURED_OUTPUT_BACKEND" "$GPU_MEMORY_UTILIZATION" "$KGGEN_CONCURRENCY" \
-  "$MODEL_REVISION" "$KGGEN_MAX_TOKENS" <<'PY'
+  "$MODEL_REVISION" "$KGGEN_MAX_TOKENS" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" <<'PY'
 import hashlib
 import json
 import sys
@@ -173,6 +174,8 @@ server_launch = {
     "kggen_concurrency": int(sys.argv[12]),
     "model_revision": sys.argv[13],
     "max_tokens": int(sys.argv[14]),
+    "guided_decoding_request_backend": sys.argv[15],
+    "xgrammar_any_whitespace": False,
 }
 canonical = json.dumps(server_launch, sort_keys=True, separators=(",", ":"))
 generation_fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -187,6 +190,8 @@ identity = {
     "generation_fingerprint": generation_fingerprint,
     "runtime_fingerprint": runtime_fingerprint,
     "server_launch": server_launch,
+    "guided_decoding_request_backend": sys.argv[15],
+    "xgrammar_any_whitespace": False,
 }
 Path(sys.argv[2]).write_text(
     json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -216,6 +221,10 @@ Path(sys.argv[1]).write_text(json.dumps({
     "server_launch": identity["server_launch"],
     "structured_output_transport": "response_format",
     "structured_output_backend": "xgrammar",
+    "guided_decoding_request_backend": identity[
+        "guided_decoding_request_backend"
+    ],
+    "xgrammar_any_whitespace": False,
     "runs": ["strict", "support", "cache-only-strict", "cache-only-support"],
 }, indent=2) + "\n", encoding="utf-8")
 PY
@@ -232,6 +241,7 @@ runtime_config_args=(
   --max-tokens "$KGGEN_MAX_TOKENS"
   --structured-output-transport response_format
   --structured-output-backend "$STRUCTURED_OUTPUT_BACKEND"
+  --structured-output-request-backend "$STRUCTURED_OUTPUT_REQUEST_BACKEND"
   --embedding-model-path "$EMBEDDING_MODEL_PATH"
   --embedding-model-revision "$EMBEDDING_MODEL_REVISION"
   --explicit-clustering
@@ -293,6 +303,7 @@ CUDA_VISIBLE_DEVICES="" "$CLIENT_PYTHON" "$ROOT/scripts/check_datasphere_vllm_gu
   --timeout "${STRUCTURED_OUTPUT_PROBE_TIMEOUT_SECONDS:-90}" \
   --repeat 1 \
   --max-tokens "$KGGEN_MAX_TOKENS" \
+  --request-backend "$STRUCTURED_OUTPUT_REQUEST_BACKEND" \
   --report "$RUN_ROOT/vllm-response-format-probe.json"
 
 # A plain completion is not enough: KGGen calls vLLM through DSPy's typed
@@ -307,6 +318,7 @@ timeout --signal=TERM --kill-after=30s "${KGGEN_PROBE_TIMEOUT_SECONDS:-180}" \
   --max-tokens "${KGGEN_PROBE_MAX_TOKENS:-$KGGEN_MAX_TOKENS}" \
   --cluster \
   --structured-output-transport response_format \
+  --request-backend "$STRUCTURED_OUTPUT_REQUEST_BACKEND" \
   --report "$RUN_ROOT/kggen-probe.json"
 
 echo "[probe] checking the support verifier's closed verdict schema."
@@ -385,7 +397,7 @@ require_complete_extraction() {
 require_complete_extraction "$STRICT_OUT"
 if [[ -n "$QA_PILOT_LIMIT" ]]; then
   end_epoch="$(date +%s)"
-  "$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$QA_PILOT_LIMIT" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" <<'PY'
+  "$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$QA_PILOT_LIMIT" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -410,6 +422,8 @@ Path(sys.argv[1]).write_text(json.dumps({
     "structured_output_transport": "response_format",
     "structured_output_backend": "xgrammar",
     "guided_decoding_backend": sys.argv[13],
+    "guided_decoding_request_backend": sys.argv[14],
+    "xgrammar_any_whitespace": False,
     "runs": ["strict-extract"],
 }, indent=2) + "\n", encoding="utf-8")
 PY
@@ -449,7 +463,7 @@ find "$RUN_ROOT/cache" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_RO
 cmp "$RUN_ROOT/cache-before.sha256" "$RUN_ROOT/cache-after.sha256"
 end_epoch="$(date +%s)"
 
-"$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" <<'PY'
+"$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -472,6 +486,8 @@ Path(sys.argv[1]).write_text(json.dumps({
     "structured_output_transport": "response_format",
     "structured_output_backend": "xgrammar",
     "guided_decoding_backend": sys.argv[12],
+    "guided_decoding_request_backend": sys.argv[13],
+    "xgrammar_any_whitespace": False,
     "runs": ["strict", "support", "cache-only-strict", "cache-only-support"],
 }, indent=2) + "\n", encoding="utf-8")
 PY

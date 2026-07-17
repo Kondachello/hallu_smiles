@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.dspy_adapter import XGRAMMAR_STRICT_REQUEST_BACKEND
 
 
 def main() -> None:
@@ -67,6 +75,14 @@ def main() -> None:
         default="xgrammar",
     )
     parser.add_argument(
+        "--structured-output-request-backend",
+        default=None,
+        help=(
+            "Exact request-level guided-decoding backend and options. The "
+            "DataSphere XGrammar runtime pins disable-any-whitespace and no-fallback."
+        ),
+    )
+    parser.add_argument(
         "--embedding-model-path",
         default="/opt/hallu/models/all-MiniLM-L6-v2",
     )
@@ -117,6 +133,23 @@ def main() -> None:
         raise ValueError("--cluster-min-retention-ratio must be between 0 and 1")
     if args.vllm_guided_json and args.structured_output_transport != "guided_json":
         raise ValueError("--vllm-guided-json conflicts with --structured-output-transport")
+    if (
+        args.structured_output_transport == "response_format"
+        and args.structured_output_backend == "xgrammar"
+    ):
+        args.structured_output_request_backend = (
+            args.structured_output_request_backend
+            or XGRAMMAR_STRICT_REQUEST_BACKEND
+        )
+        if args.structured_output_request_backend != XGRAMMAR_STRICT_REQUEST_BACKEND:
+            raise ValueError(
+                "DataSphere response_format requires strict bounded-whitespace XGrammar"
+            )
+    elif args.structured_output_request_backend is not None:
+        raise ValueError(
+            "--structured-output-request-backend is only supported for "
+            "response_format with xgrammar"
+        )
 
     with open(args.base_config, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -133,6 +166,9 @@ def main() -> None:
     config["llm"]["concurrency"] = args.concurrency
     config["llm"]["structured_output_transport"] = args.structured_output_transport
     config["llm"]["structured_output_backend"] = args.structured_output_backend
+    config["llm"]["structured_output_request_backend"] = (
+        args.structured_output_request_backend
+    )
     config["llm"]["vllm_guided_json"] = args.vllm_guided_json
     config["extraction"]["serial_chunking"] = args.serial_chunking
     config["extraction"]["cluster_max_items"] = args.cluster_max_items

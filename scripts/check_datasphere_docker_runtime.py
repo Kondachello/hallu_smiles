@@ -95,16 +95,40 @@ def _inspect(
     return payload
 
 
-def _compile_xgrammar(server_python: str, schemas_path: Path) -> None:
+def _compile_xgrammar(
+    server_python: str, schemas_path: Path, request_backend: str
+) -> dict[str, Any]:
     program = (
         "import json,sys,xgrammar as xgr; "
+        "from vllm.sampling_params import GuidedDecodingParams; "
+        "params=GuidedDecodingParams(backend=sys.argv[2]); "
+        "assert params.backend_name=='xgrammar'; "
+        "assert set(params.backend_options())=="
+        "{'disable-any-whitespace','no-fallback'}; "
         "schemas=json.load(open(sys.argv[1],encoding='utf-8')); "
-        "[xgr.Grammar.from_json_schema(json.dumps(schema)) for schema in schemas.values()]"
+        "[xgr.Grammar.from_json_schema(json.dumps(schema),any_whitespace=False) "
+        "for schema in schemas.values()]; "
+        "print(json.dumps({'request_backend':params.backend,"
+        "'backend_name':params.backend_name,'backend_options':"
+        "sorted(params.backend_options()),'any_whitespace':False},sort_keys=True))"
     )
-    subprocess.run(
-        [server_python, "-c", program, str(schemas_path)],
+    completed = subprocess.run(
+        [server_python, "-c", program, str(schemas_path), request_backend],
         check=True,
+        text=True,
+        capture_output=True,
         timeout=120,
+    )
+    for line in reversed(completed.stdout.splitlines()):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and payload.get("backend_name") == "xgrammar":
+            return payload
+    raise RuntimeError(
+        "XGrammar contract check emitted no JSON payload: "
+        f"stdout={completed.stdout[-2000:]!r} stderr={completed.stderr[-2000:]!r}"
     )
 
 
@@ -141,7 +165,10 @@ def main() -> None:
     args = parser.parse_args()
 
     from scripts.check_datasphere_vllm_guided_json import kggen_fallback_relation_schema
-    from src.dspy_adapter import validate_json_document
+    from src.dspy_adapter import (
+        XGRAMMAR_STRICT_REQUEST_BACKEND,
+        validate_json_document,
+    )
     from src.verifier import VERDICT_SCHEMA
 
     relation_schema = kggen_fallback_relation_schema()
@@ -182,7 +209,9 @@ def main() -> None:
         expected_torch_cuda=None,
     )
     native_build_toolchain = _check_native_build_toolchain(args.server_python)
-    _compile_xgrammar(args.server_python, schemas_path)
+    xgrammar_contract = _compile_xgrammar(
+        args.server_python, schemas_path, XGRAMMAR_STRICT_REQUEST_BACKEND
+    )
     embedding_program = (
         "import sys; from sentence_transformers import SentenceTransformer; "
         "m=SentenceTransformer(sys.argv[1],device='cpu',local_files_only=True); "
@@ -208,12 +237,13 @@ def main() -> None:
         "server": server,
         "client": client,
         "native_build_toolchain": native_build_toolchain,
+        "xgrammar_contract": xgrammar_contract,
         "schemas": str(schemas_path),
         "checks": [
             "split server/client dependency imports",
             "exact CUDA 11.8 server and CPU-only client PyTorch builds",
             "gcc and Python development headers for XGrammar/Triton JIT",
-            "XGrammar compilation of relation, verifier and enum schemas",
+            "XGrammar bounded-whitespace compilation of relation, verifier and enum schemas",
             "offline CPU SBERT embedding",
             "runtime source commit and embedded asset identity",
         ],

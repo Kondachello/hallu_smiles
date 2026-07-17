@@ -474,7 +474,9 @@ class KGExtractor:
                 f"{self.structured_output.transport} requires a KGGen backend with a DSPy LM"
             )
         adapter = (
-            strict_json_schema_adapter()
+            strict_json_schema_adapter(
+                request_backend=self.structured_output.request_backend
+            )
             if self.structured_output.transport == "response_format"
             else vllm_guided_json_adapter()
         )

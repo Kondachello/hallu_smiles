@@ -10,6 +10,7 @@ import pytest
 from src.dspy_adapter import (
     StructuredOutputParseError,
     StructuredOutputSchemaError,
+    XGRAMMAR_STRICT_REQUEST_BACKEND,
     install_dspy_completion_guard,
     is_retryable_llm_exception,
     json_schema_response_format,
@@ -88,7 +89,9 @@ def test_strict_adapter_sends_one_native_schema_request_without_legacy_controls(
         return [{"relations": []}]
 
     monkeypatch.setattr(Adapter, "__call__", fake_call)
-    adapter = strict_json_schema_adapter()
+    adapter = strict_json_schema_adapter(
+        request_backend=XGRAMMAR_STRICT_REQUEST_BACKEND
+    )
     result = adapter(
         object(),
         {"extra_body": {"guided_json": {"old": True}, "trace": True}},
@@ -100,7 +103,10 @@ def test_strict_adapter_sends_one_native_schema_request_without_legacy_controls(
     assert result == [{"relations": []}]
     assert len(calls) == 1
     assert calls[0]["response_format"]["json_schema"]["schema"] == RELATION_SCHEMA
-    assert calls[0]["extra_body"] == {"trace": True}
+    assert calls[0]["extra_body"] == {
+        "trace": True,
+        "guided_decoding_backend": XGRAMMAR_STRICT_REQUEST_BACKEND,
+    }
 
 
 def test_strict_adapter_does_not_fallback_after_call_failure(monkeypatch):
@@ -148,7 +154,9 @@ def test_strict_async_adapter_uses_the_same_one_call_contract(monkeypatch):
 
     monkeypatch.setattr(Adapter, "acall", fake_acall)
     result = asyncio.run(
-        strict_json_schema_adapter().acall(
+        strict_json_schema_adapter(
+            request_backend=XGRAMMAR_STRICT_REQUEST_BACKEND
+        ).acall(
             object(),
             {"extra_body": {"guided_json": {"old": True}}},
             _Signature,
@@ -160,7 +168,9 @@ def test_strict_async_adapter_uses_the_same_one_call_contract(monkeypatch):
     assert result == [{"relations": []}]
     assert len(calls) == 1
     assert calls[0]["response_format"]["json_schema"]["schema"] == RELATION_SCHEMA
-    assert "extra_body" not in calls[0]
+    assert calls[0]["extra_body"] == {
+        "guided_decoding_backend": XGRAMMAR_STRICT_REQUEST_BACKEND
+    }
 
 
 def test_strict_parser_rejects_bare_relation_and_json_repair(monkeypatch):
@@ -225,6 +235,7 @@ def test_structured_output_settings_validate_and_keep_legacy_mapping_explicit():
     )
     assert settings.transport == "response_format"
     assert settings.backend == "xgrammar"
+    assert settings.request_backend == XGRAMMAR_STRICT_REQUEST_BACKEND
     assert settings.model_revision == "abc"
 
     with pytest.warns(DeprecationWarning):
@@ -327,6 +338,9 @@ def test_direct_probe_rejects_bare_relation_and_preserves_failure_evidence(monke
     assert attempt["response"]["choices"][0]["finish_reason"] == "stop"
     assert attempt["parsed"] == bare
     assert attempt["request"]["response_format"]["json_schema"]["schema"] == RELATION_SCHEMA
+    assert attempt["request"]["guided_decoding_backend"] == (
+        XGRAMMAR_STRICT_REQUEST_BACKEND
+    )
     assert attempt["error_type"] == "StructuredOutputSchemaError"
 
 
@@ -371,3 +385,7 @@ def test_two_fact_direct_probe_requires_two_schema_valid_relations(monkeypatch):
     assert [attempt["relations_count"] for attempt in result["attempts"]] == [2, 2]
     assert all(payload["max_tokens"] == 777 for payload in payloads)
     assert all(payload["response_format"]["type"] == "json_schema" for payload in payloads)
+    assert all(
+        payload["guided_decoding_backend"] == XGRAMMAR_STRICT_REQUEST_BACKEND
+        for payload in payloads
+    )

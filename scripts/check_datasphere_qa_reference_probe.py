@@ -126,6 +126,10 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
             "context_chars": len(text),
             "entities": len(cached.entities),
             "relations": len(cached.relations),
+            "guided_decoding_request_backend": (
+                extractor.structured_output.request_backend
+            ),
+            "xgrammar_any_whitespace": False,
         }
 
     started = time.perf_counter()
@@ -175,7 +179,12 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
             faulthandler.enable(file=sys.stderr)
             faulthandler.dump_traceback_later(dump_after, repeat=False, exit=False)
         try:
-            graph = extractor._cluster_backend_graph(backend, raw_graph)
+            # KGGen.cluster() opens its own LM context but does not preserve
+            # the outer strict adapter. Re-enter the exact pilot context so
+            # official clustering uses the same response_format and XGrammar
+            # request options as extraction.
+            with extractor.dspy_context(backend):
+                graph = extractor._cluster_backend_graph(backend, raw_graph)
         finally:
             if dump_after is not None:
                 faulthandler.cancel_dump_traceback_later()
@@ -224,6 +233,10 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
         "relations": len(extracted.relations),
         "clustering_ran": clustering_ran,
         "cluster_max_items": extractor.cluster_max_items,
+        "guided_decoding_request_backend": (
+            extractor.structured_output.request_backend
+        ),
+        "xgrammar_any_whitespace": False,
         "elapsed_seconds": round(time.perf_counter() - started, 3),
     }
 

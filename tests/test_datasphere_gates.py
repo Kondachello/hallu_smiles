@@ -19,6 +19,7 @@ IMAGE = "b" + "1" * 19
 MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 PROTOCOL = "hallu-datasphere-vllm085-cu118-v1"
 IMAGE_FINGERPRINT = "c" * 64
+REQUEST_BACKEND = "xgrammar:disable-any-whitespace,no-fallback"
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -41,7 +42,15 @@ def _preflight_tar(tmp_path: Path) -> Path:
     }
     _write_json(
         root / "runtime-dependencies.json",
-        {"status": "ready", "runtime_manifest": manifest},
+        {
+            "status": "ready",
+            "runtime_manifest": manifest,
+            "xgrammar_contract": {
+                "request_backend": REQUEST_BACKEND,
+                "backend_options": ["disable-any-whitespace", "no-fallback"],
+                "any_whitespace": False,
+            },
+        },
     )
     _write_json(
         root / "preflight.json",
@@ -75,6 +84,8 @@ def _cluster_tar(tmp_path: Path) -> Path:
         "model_revision": "mrev",
         "runtime_fingerprint": runtime_fingerprint,
         "guided_decoding_backend": "xgrammar",
+        "guided_decoding_request_backend": REQUEST_BACKEND,
+        "xgrammar_any_whitespace": False,
     })
     _write_json(root / "runtime-identity.json", {
         "source_commit": COMMIT,
@@ -82,6 +93,11 @@ def _cluster_tar(tmp_path: Path) -> Path:
         "runtime_protocol": PROTOCOL,
         "image_runtime_fingerprint": IMAGE_FINGERPRINT,
         "runtime_fingerprint": runtime_fingerprint,
+        "guided_decoding_request_backend": REQUEST_BACKEND,
+        "server_launch": {
+            "guided_decoding_request_backend": REQUEST_BACKEND,
+            "xgrammar_any_whitespace": False,
+        },
     })
     _write_json(root / "runtime-manifest.json", {
         "source_commit": COMMIT,
@@ -97,7 +113,11 @@ def _cluster_tar(tmp_path: Path) -> Path:
         "verifier-probe.json",
         "qa-reference-probe.json",
     ):
-        _write_json(root / name, {"status": "ready"})
+        _write_json(root / name, {
+            "status": "ready",
+            "guided_decoding_request_backend": REQUEST_BACKEND,
+            "xgrammar_any_whitespace": False,
+        })
     (root / "strict").mkdir(parents=True)
     (root / "strict" / "failed_extractions.jsonl").write_bytes(b"")
     _write_json(root / "qa_pilot_manifest.json", {

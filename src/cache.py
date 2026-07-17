@@ -42,6 +42,20 @@ def config_value(section: Any, name: str, default: Any = None) -> Any:
     return getattr(section, name, default)
 
 
+def _structured_output_request_backend(llm: Any) -> str | None:
+    configured = config_value(llm, "structured_output_request_backend")
+    if configured is not None:
+        return str(configured)
+    if (
+        config_value(llm, "structured_output_transport", "none") == "response_format"
+        and config_value(llm, "structured_output_backend", "none") == "xgrammar"
+    ):
+        from .dspy_adapter import XGRAMMAR_STRICT_REQUEST_BACKEND
+
+        return XGRAMMAR_STRICT_REQUEST_BACKEND
+    return None
+
+
 @lru_cache(maxsize=1)
 def _installed_versions() -> dict[str, str]:
     versions: dict[str, str] = {}
@@ -83,6 +97,7 @@ def evaluation_runtime_metadata(cfg: Any) -> dict[str, Any]:
         "structured_output_backend": config_value(
             llm, "structured_output_backend", "none"
         ),
+        "structured_output_request_backend": _structured_output_request_backend(llm),
         "embedding_model": config_value(matching, "embedding_model"),
         "embedding_model_revision": config_value(
             matching, "embedding_model_revision"
@@ -118,6 +133,7 @@ def llm_runtime_fingerprint(cfg: Any) -> dict[str, Any]:
         "structured_output_backend": config_value(
             llm, "structured_output_backend", "none"
         ),
+        "structured_output_request_backend": _structured_output_request_backend(llm),
         "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
         "runtime_fingerprint": config_value(llm, "runtime_fingerprint"),
         "python_version": platform.python_version(),

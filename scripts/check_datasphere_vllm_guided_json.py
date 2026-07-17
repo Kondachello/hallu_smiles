@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
 
 from src.dspy_adapter import (
     STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+    XGRAMMAR_STRICT_REQUEST_BACKEND,
     dspy_output_schema,
     json_schema_response_format,
     strict_json_schema_adapter,
@@ -78,6 +79,29 @@ class ContractProbeError(RuntimeError):
     def __init__(self, message: str, evidence: dict[str, Any]):
         super().__init__(message)
         self.evidence = evidence
+
+
+def _content_diagnostic(content: Any) -> dict[str, Any]:
+    """Return bounded evidence for failures whose full artifact is unavailable."""
+    if not isinstance(content, str):
+        return {"content_type": type(content).__name__}
+    longest_whitespace_run = 0
+    current_whitespace_run = 0
+    for character in content:
+        if character.isspace():
+            current_whitespace_run += 1
+            longest_whitespace_run = max(
+                longest_whitespace_run, current_whitespace_run
+            )
+        else:
+            current_whitespace_run = 0
+    return {
+        "content_chars": len(content),
+        "non_whitespace_chars": sum(not character.isspace() for character in content),
+        "longest_whitespace_run": longest_whitespace_run,
+        "prefix": content[:240],
+        "suffix": content[-240:],
+    }
 
 
 def _load_swiss_source(data_dir: str | Path) -> str:
@@ -181,6 +205,7 @@ def _run_case(
     timeout_s: float,
     repeat: int,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    request_backend: str = XGRAMMAR_STRICT_REQUEST_BACKEND,
 ) -> dict[str, Any]:
     messages, schema = _request_fixture(source_text, entities)
     schema_sha256 = hashlib.sha256(
@@ -196,6 +221,7 @@ def _run_case(
             "response_format": json_schema_response_format(
                 schema, name=f"kggen_{case}_relations"
             ),
+            "guided_decoding_backend": request_backend,
         }
         evidence: dict[str, Any] = {
             "attempt": attempt,
@@ -224,8 +250,33 @@ def _run_case(
             _semantic_assertion(case, relations)
             evidence["relations_count"] = len(relations)
         except Exception as exc:
+            choices = (
+                evidence.get("response", {}).get("choices")
+                if isinstance(evidence.get("response"), dict)
+                else None
+            )
+            content = None
+            if isinstance(choices, list) and choices:
+                content = (choices[0].get("message") or {}).get("content")
+            evidence["response_content_diagnostic"] = _content_diagnostic(content)
             evidence["error_type"] = type(exc).__name__
             evidence["error"] = str(exc)
+            print(
+                "[contract-probe:error] "
+                + json.dumps(
+                    {
+                        "case": case,
+                        "attempt": attempt,
+                        "finish_reason": evidence.get("finish_reason"),
+                        "response_content_diagnostic": evidence[
+                            "response_content_diagnostic"
+                        ],
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
             raise ContractProbeError(
                 f"{case} contract attempt {attempt} failed: {exc}",
                 {
@@ -249,6 +300,7 @@ def run_probe(
     timeout_s: float,
     repeat: int = 2,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    request_backend: str = XGRAMMAR_STRICT_REQUEST_BACKEND,
 ) -> dict[str, Any]:
     if port <= 0:
         raise ValueError("port must be positive")
@@ -258,6 +310,10 @@ def run_probe(
         raise ValueError("repeat must be positive")
     if max_tokens <= 0:
         raise ValueError("max_tokens must be positive")
+    if request_backend != XGRAMMAR_STRICT_REQUEST_BACKEND:
+        raise ValueError(
+            "request backend must pin XGrammar no-fallback with bounded whitespace"
+        )
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     swiss_text = _load_swiss_source(data_dir)
     specifications = [
@@ -277,6 +333,7 @@ def run_probe(
                     timeout_s=timeout_s,
                     repeat=repeat,
                     max_tokens=max_tokens,
+                    request_backend=request_backend,
                 )
             )
         except ContractProbeError as exc:
@@ -292,6 +349,8 @@ def run_probe(
         "source_id": SWISS_SOURCE_ID,
         "request_parameter": "response_format",
         "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+        "guided_decoding_request_backend": request_backend,
+        "xgrammar_any_whitespace": False,
         "max_tokens": max_tokens,
         "cases": cases,
     }
@@ -305,6 +364,11 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument("--repeat", type=int, default=2)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument(
+        "--request-backend",
+        choices=(XGRAMMAR_STRICT_REQUEST_BACKEND,),
+        default=XGRAMMAR_STRICT_REQUEST_BACKEND,
+    )
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
     report_path = Path(args.report)
@@ -316,6 +380,7 @@ def main() -> None:
             timeout_s=args.timeout,
             repeat=args.repeat,
             max_tokens=args.max_tokens,
+            request_backend=args.request_backend,
         )
     except Exception as exc:
         evidence = getattr(exc, "evidence", None)
@@ -328,6 +393,8 @@ def main() -> None:
                 "error": str(exc),
                 "request_parameter": "response_format",
                 "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+                "guided_decoding_request_backend": args.request_backend,
+                "xgrammar_any_whitespace": False,
                 "evidence": evidence,
             },
         )

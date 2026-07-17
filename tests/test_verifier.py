@@ -96,7 +96,9 @@ def test_verifier_sends_closed_native_schema_and_requires_clean_finish(monkeypat
             "strict": True,
         },
     }
-    assert "extra_body" not in captured
+    assert captured["extra_body"] == {
+        "guided_decoding_backend": "xgrammar:disable-any-whitespace,no-fallback"
+    }
     assert captured["timeout"] == 17
     assert captured["num_retries"] == 0
 

@@ -269,6 +269,10 @@ class RelationVerifier:
             kwargs["response_format"] = json_schema_response_format(
                 VERDICT_SCHEMA, name="relation_verdict"
             )
+            if self.structured_output.request_backend is not None:
+                kwargs["extra_body"] = {
+                    "guided_decoding_backend": self.structured_output.request_backend
+                }
         elif self.structured_output.transport == "guided_json":
             # Deprecated compatibility mode for artifacts created by the old
             # vLLM 0.6 runtime.  New research Jobs use response_format.
