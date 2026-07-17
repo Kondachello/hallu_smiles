@@ -12,13 +12,40 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.dspy_adapter import inline_local_json_schema_refs
+
 
 EXPECTED_OUTLINES_VERSION = "0.0.46"
+
+
+KGGEN_RELATION_SCHEMA: dict[str, Any] = {
+    "$defs": {
+        "Relation": {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string"},
+                "predicate": {"type": "string"},
+                "object": {"type": "string"},
+            },
+            "required": ["subject", "predicate", "object"],
+            "additionalProperties": False,
+        },
+    },
+    "type": "object",
+    "properties": {"relations": {"type": "array", "items": {"$ref": "#/$defs/Relation"}}},
+    "required": ["relations"],
+    "additionalProperties": False,
+}
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -36,12 +63,22 @@ def check() -> dict[str, Any]:
             "do not run an untested guided-decoding backend"
         )
     from pyairports.airports import AIRPORT_LIST
+    from outlines.fsm.json_schema import build_regex_from_schema
     from outlines.integrations.vllm import JSONLogitsProcessor
 
     if not isinstance(AIRPORT_LIST, list):
         raise RuntimeError("pyairports compatibility shim did not expose a list")
     if JSONLogitsProcessor is None:  # Defensive: import success must be meaningful.
         raise RuntimeError("Outlines vLLM JSON logits processor is unavailable")
+    flattened_schema = inline_local_json_schema_refs(KGGEN_RELATION_SCHEMA)
+    if "$defs" in flattened_schema or "\"$ref\"" in json.dumps(flattened_schema, sort_keys=True):
+        raise RuntimeError("KGGen relation schema was not fully inlined before Outlines compilation")
+    # The processor needs a live tokenizer, but the schema->regex compiler does
+    # not.  Compile the *actual nested KGGen relation grammar* on CPU before a
+    # V100 is allocated, rather than merely checking that Outlines imports.
+    relation_regex = build_regex_from_schema(json.dumps(flattened_schema, sort_keys=True))
+    if not isinstance(relation_regex, str) or not relation_regex:
+        raise RuntimeError("Outlines did not compile the flattened KGGen relation schema")
     return {
         "checked_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "status": "ready",
@@ -51,6 +88,7 @@ def check() -> dict[str, Any]:
         "checks": [
             "import pyairports.airports from checked-in runtime shim",
             "import outlines.integrations.vllm.JSONLogitsProcessor",
+            "compile flattened nested KGGen Relation schema to an Outlines regex",
         ],
     }
 

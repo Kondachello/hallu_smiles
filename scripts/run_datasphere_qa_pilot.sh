@@ -29,10 +29,11 @@ KGGEN_CLUSTER_MAX_ITEMS="${KGGEN_CLUSTER_MAX_ITEMS:-}"
 # chunk/response thread pools produced a local-vLLM deadlock and hours of idle
 # V100 time.  The Job is intentionally serial; vLLM remains the only GPU work.
 KGGEN_CONCURRENCY="${KGGEN_CONCURRENCY:-1}"
-# lm-format-enforcer 0.10.6 accepts a simple JSON schema but lets a nested
-# KGGen Relation schema escape its root object on vLLM 0.6.3.  Outlines keeps
-# the complete Pydantic schema constrained.  Its broken pyairports dependency
-# is supplied by the checked-in JSON-only runtime shim below.
+# lm-format-enforcer and vLLM 0.6.3's structured backends fail to resolve Pydantic ``$defs`` inside
+# KGGen's nested Relation output schema.  The DSPy adapter therefore sends the
+# mathematically equivalent inline schema; Outlines constrains that complete
+# grammar.  Its broken pyairports dependency is supplied by the checked-in
+# JSON-only runtime shim below.
 GUIDED_DECODING_BACKEND="${GUIDED_DECODING_BACKEND:-outlines}"
 # LiteLLM otherwise fetches an optional model-cost map from GitHub on its first
 # import. Jobs need no cost pricing to call localhost, and an unreachable

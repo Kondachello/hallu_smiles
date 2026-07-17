@@ -12,19 +12,44 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-SCHEMA: dict[str, Any] = {
+from src.dspy_adapter import inline_local_json_schema_refs
+
+
+# This is the full relation-output shape used by KGGen/DSPy, including the
+# Pydantic ``$defs`` reference which previously escaped the root structure in
+# vLLM 0.6.3.  The adapter canonicalises it before sending it to vLLM; keep
+# this direct probe on the same schema so a trivial string-array success can
+# never green-light an incompatible GPU pilot.
+PYDANTIC_RELATION_SCHEMA: dict[str, Any] = {
+    "$defs": {
+        "Relation": {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string"},
+                "predicate": {"type": "string"},
+                "object": {"type": "string"},
+            },
+            "required": ["subject", "predicate", "object"],
+            "additionalProperties": False,
+        },
+    },
     "type": "object",
-    "properties": {"relations": {"type": "array", "items": {"type": "string"}}},
+    "properties": {"relations": {"type": "array", "items": {"$ref": "#/$defs/Relation"}}},
     "required": ["relations"],
     "additionalProperties": False,
 }
+SCHEMA = inline_local_json_schema_refs(PYDANTIC_RELATION_SCHEMA)
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -46,7 +71,7 @@ def run_probe(*, port: int, model_id: str, timeout_s: float) -> dict[str, Any]:
         "messages": [
             {
                 "role": "user",
-                "content": "Return one empty JSON object with the required relations array.",
+                "content": "Return exactly one JSON object with a relations array. The array may be empty.",
             }
         ],
         # vLLM 0.6.3's documented native structured-output parameter.  This
@@ -67,13 +92,19 @@ def run_probe(*, port: int, model_id: str, timeout_s: float) -> dict[str, Any]:
     parsed = json.loads(content)
     if not isinstance(parsed, dict) or set(parsed) != {"relations"}:
         raise ValueError("guided_json response did not contain exactly the required relations field")
-    if not isinstance(parsed["relations"], list) or not all(isinstance(item, str) for item in parsed["relations"]):
-        raise ValueError("guided_json response relations is not a string array")
+    if not isinstance(parsed["relations"], list):
+        raise ValueError("guided_json response relations is not an array")
+    for relation in parsed["relations"]:
+        if not isinstance(relation, dict) or set(relation) != {"subject", "predicate", "object"}:
+            raise ValueError("guided_json response relation does not have the closed KGGen triple shape")
+        if not all(isinstance(relation[field], str) for field in ("subject", "predicate", "object")):
+            raise ValueError("guided_json response relation fields are not strings")
     return {
         "checked_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "status": "ready",
         "model_id": model_id,
         "request_parameter": "guided_json",
+        "schema_transport": "local_defs_inlined",
         "schema_sha256": hashlib.sha256(
             json.dumps(SCHEMA, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest(),
