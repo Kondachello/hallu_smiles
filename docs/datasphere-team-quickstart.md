@@ -25,7 +25,7 @@
   именно эта версия совместима с CUDA driver V100 `g1.1`. Диапазон вида
   `vllm>=...` может молча поставить несовместимую версию и потратить GPU-время
   до первой полезной операции.
-- Пара `vllm==0.6.3.post1` и `lm-format-enforcer==0.10.6` требует ровно
+- Пара `vllm==0.6.3.post1` и `lm-format-enforcer==0.10.11` требует ровно
   `transformers==4.45.2`. Это проверенная связка: плавающий диапазон поставил
   4.57, где удален `LogitsWarper`; сервер стартовал, но первый completion
   завершался HTTP 500. Transformers 5.x дополнительно несовместим с PyTorch
@@ -36,7 +36,10 @@
   KGGen/DSPy typed-output **и clustering** probe с timeout 180 секунд,
   прежде чем запускать все 20 QA. Кластеризация — часть KGGen, не fallback.
 - Для vLLM 0.6.3 выбран `--guided-decoding-backend lm-format-enforcer`
-  (`lm-format-enforcer==0.10.6`). Не возвращайте default `outlines`: его
+  (`lm-format-enforcer==0.10.11`). Эта версия исправляет обработку обычной
+  JSON Schema-конструкции `additionalProperties: false`, используемой
+  constrained decoding; `0.10.6` падала на ней уже после загрузки V100.
+  Не возвращайте default `outlines`: его
   dependency `pyairports==0.0.1` в этой среде ставится без Python-модуля.
 
 ## Короткая схема
@@ -204,7 +207,7 @@ activity после его старта, отменяйте **только ко�
 Работай только в ветке new-metrics или её опубликованной дочерней ветке.
 Не создавай DataSphere Project/cloud, не меняй shared/models и shared/ragtruth,
 не передавай HF_TOKEN в Job и не меняй pins vllm==0.6.3.post1 и
-transformers==4.45.2 (вместе с lm-format-enforcer==0.10.6).
+transformers==4.45.2 (вместе с lm-format-enforcer==0.10.11).
 
 До GPU Job требуй успешный CPU preflight: в archive должны быть `preflight.json`
 и `runtime-dependencies.json` со status `ready`. Второй файл создаётся из тех
@@ -278,8 +281,9 @@ shared assets и не влияет на отдельные Jobs.
 | vLLM не стартует: driver/CUDA too old | Установилась новая несовместимая версия vLLM. | Не использовать `>=`; сохранить `vllm==0.6.3.post1` и смотреть `gpu-runtime.json`. |
 | vLLM ждёт healthcheck, а в логе `cannot import name 'DTensor'` | Resolver поставил Transformers 5.x, несовместимый с PyTorch 2.4. | Сохранить прямой pin `transformers==4.45.2`; не убирать его при обновлении requirements. |
 | `/v1/chat/completions` отвечает `400`, а `failed_extractions.jsonl` содержит `ContextWindowExceededError` | KGGen без явного лимита просит до 16 000 output tokens, но vLLM для V100 ограничен 8 192. | Сохранить `llm.max_tokens: 256` в runtime config и completion smoke-check до QA. |
-| Completion smoke-check отвечает `500`, в `vllm.log` — `ModuleNotFoundError: pyairports` | Default guided-decoding backend `outlines` импортирует дефектный `pyairports==0.0.1`. | Использовать `--guided-decoding-backend lm-format-enforcer` и pin `lm-format-enforcer==0.10.6`. |
-| Completion smoke-check отвечает `500`, в `vllm.log` — `cannot import name 'LogitsWarper'` | Плавающий `transformers>=...` поставил версию 4.57, несовместимую с `lm-format-enforcer==0.10.6`. | Нужен точный, а не диапазонный pin: `transformers==4.45.2`; затем заново пройти CPU preflight. |
+| Completion smoke-check отвечает `500`, в `vllm.log` — `ModuleNotFoundError: pyairports` | Default guided-decoding backend `outlines` импортирует дефектный `pyairports==0.0.1`. | Использовать `--guided-decoding-backend lm-format-enforcer` и pin `lm-format-enforcer==0.10.11`. |
+| Completion smoke-check отвечает `500`, в `vllm.log` — `cannot import name 'LogitsWarper'` | Плавающий `transformers>=...` поставил версию 4.57, несовместимую с `lm-format-enforcer`. | Нужен точный, а не диапазонный pin: `transformers==4.45.2`; затем заново пройти CPU preflight. |
+| Guided-JSON probe отвечает `500`, а в `vllm.log` — `AttributeError: 'bool' object has no attribute 'get'` из `lmformatenforcer/.../jsonschemaobject.py` | `lm-format-enforcer==0.10.6` не умеет boolean-значение `additionalProperties: false` в закрытой JSON Schema, которую vLLM передаёт для typed KGGen extraction. Это происходит **до** QA/KGGen и после загрузки модели. | Оставить native `guided_json`, обновить pin до `lm-format-enforcer==0.10.11` и требовать CPU preflight с фактическим `JsonSchemaParser(... additionalProperties: false)`. Не отключать clustering или constrained decoding. |
 | `kggen-probe.json` не появляется или Job завершается до QA | DSPy 3.x/LiteLLM drift совместим по import, но не по KGGen structured-output path. | Сохранить locked `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`; probe должен пройти до extraction. |
 | Несовместимость Python-зависимостей обнаружена до GPU | CPU preflight импортирует ровно тот же набор requirements и пишет `runtime-dependencies.json`. | Не запускать GPU, пока оба отчёта preflight имеют `status: ready`; исправить pin, запушить commit и повторить только CPU preflight. |
 | GPU остаётся 0% на KG extraction | Клиент KGGen/DSPy мог застыть после ответа vLLM при обработке cluster-процедуры. | Проверить `qa-reference-probe.json` и `vllm.log`; кластеризацию не отключать в официальном запуске. Сохранить pins `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`, `pydantic==2.10.6`, LLM timeout и serial KGGen. Сначала пройти `cluster-probe-g1` на трёх фиксированных QA. Watchdog завершит только extraction через 600 секунд сплошного нулевого GPU; после этого читать diagnostics, а не перезапускать вслепую. |

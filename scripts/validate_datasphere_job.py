@@ -47,10 +47,10 @@ def _validate_gpu_requirements(path: Path) -> None:
     )
     _require(
         "transformers==4.45.2" in lines,
-        "vllm==0.6.3.post1 + lm-format-enforcer==0.10.6 require the tested transformers==4.45.2 pin",
+        "vllm==0.6.3.post1 + lm-format-enforcer==0.10.11 require the tested transformers==4.45.2 pin",
     )
     _require(
-        "lm-format-enforcer==0.10.6" in lines,
+        "lm-format-enforcer==0.10.11" in lines,
         "g1.1 vLLM runtime requires the pinned lm-format-enforcer guided-decoding backend",
     )
     _require(

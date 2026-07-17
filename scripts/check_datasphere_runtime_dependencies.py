@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Verify the exact vLLM guided-decoding dependency chain on a CPU Job.
 
-This deliberately imports the lm-format-enforcer Transformers integration.
-It catches the otherwise late ``LogitsWarper`` incompatibility before a V100
-is allocated. It does not load model weights and does not require a GPU.
+This deliberately imports the lm-format-enforcer Transformers integration and
+instantiates its JSON-schema parser with ``additionalProperties: false``. It
+catches the otherwise late ``LogitsWarper`` and boolean-schema incompatibilities
+before a V100 is allocated. It does not load model weights and does not require
+a GPU.
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ EXPECTED_VERSIONS = {
     "pydantic": "2.10.6",
     "vllm": "0.6.3.post1",
     "transformers": "4.45.2",
-    "lm-format-enforcer": "0.10.6",
+    "lm-format-enforcer": "0.10.11",
 }
 
 
@@ -60,11 +62,25 @@ def check() -> dict[str, Any]:
     _import("litellm")
     _import("dspy")
     _import("kg_gen")
-    # lm-format-enforcer 0.10.6 imports LogitsWarper here. Transformers 4.57
+    # lm-format-enforcer 0.10.11 imports LogitsWarper here. Transformers 4.57
     # removed that symbol and previously caused a paid GPU HTTP 500.
     integration = importlib.import_module("lmformatenforcer.integrations.transformers")
     if not hasattr(integration, "build_token_enforcer_tokenizer_data"):
         raise RuntimeError("lm-format-enforcer Transformers integration has no tokenizer adapter")
+    # vLLM guided_json passes a normal closed JSON schema to this parser.  The
+    # former 0.10.6 pin crashed on the boolean ``additionalProperties`` value
+    # *after* the V100 had loaded model weights.  Construct it here so the CPU
+    # preflight rejects that exact broken dependency combination for free.
+    from lmformatenforcer import JsonSchemaParser
+
+    JsonSchemaParser(
+        {
+            "type": "object",
+            "properties": {"relations": {"type": "array", "items": {"type": "string"}}},
+            "required": ["relations"],
+            "additionalProperties": False,
+        }
+    )
 
     return {
         "checked_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -75,6 +91,7 @@ def check() -> dict[str, Any]:
             "import transformers",
             "import lmformatenforcer",
             "import lmformatenforcer.integrations.transformers",
+            "instantiate JsonSchemaParser with additionalProperties=false",
             "import litellm with local model-cost map",
             "import dspy",
             "import kg_gen",
