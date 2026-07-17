@@ -22,6 +22,25 @@ def main() -> None:
         help="Maximum completion tokens for KGGen; must fit the local vLLM context window.",
     )
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Response-level KGGen workers; local vLLM must use one shared DSPy client serially.",
+    )
+    parser.add_argument(
+        "--serial-chunking",
+        dest="serial_chunking",
+        action="store_true",
+        default=True,
+        help="Disable KGGen's nested chunk ThreadPoolExecutor for local vLLM reliability.",
+    )
+    parser.add_argument(
+        "--native-chunking",
+        dest="serial_chunking",
+        action="store_false",
+        help="Use KGGen's native parallel chunking (not safe for the shared local vLLM client).",
+    )
+    parser.add_argument(
         "--work-dir",
         required=True,
         help="Writable, job-local directory for caches and generated artifacts.",
@@ -29,6 +48,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.max_tokens <= 0:
         raise ValueError("--max-tokens must be positive")
+    if args.concurrency <= 0:
+        raise ValueError("--concurrency must be positive")
 
     with open(args.base_config, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -40,6 +61,8 @@ def main() -> None:
     # Llama server deliberately has an 8k context window, so the upstream
     # default makes every extraction request fail before generation begins.
     config["llm"]["max_tokens"] = args.max_tokens
+    config["llm"]["concurrency"] = args.concurrency
+    config["extraction"]["serial_chunking"] = args.serial_chunking
     config["data"]["dir"] = args.data_dir
     # DataSphere mounts project storage read-only in Jobs.  Every mutable file
     # therefore belongs to the job-local output directory, never DS_PROJECT_HOME.

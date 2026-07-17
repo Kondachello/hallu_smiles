@@ -20,6 +20,10 @@ MODEL_MAX_MODEL_LEN="${MODEL_MAX_MODEL_LEN:-8192}"
 # KGGen 0.4 otherwise requests up to 16k completion tokens.  That cannot fit
 # alongside a prompt in the deliberately memory-safe 8k vLLM context window.
 KGGEN_MAX_TOKENS="${KGGEN_MAX_TOKENS:-1024}"
+# KGGen 0.4 and DSPy share mutable state inside a backend instance.  Nested
+# chunk/response thread pools produced a local-vLLM deadlock and hours of idle
+# V100 time.  The Job is intentionally serial; vLLM remains the only GPU work.
+KGGEN_CONCURRENCY="${KGGEN_CONCURRENCY:-1}"
 # outlines imports the broken pyairports 0.0.1 distribution on this runtime.
 # vLLM 0.6.3 supports this installed backend for JSON-guided KGGen responses.
 GUIDED_DECODING_BACKEND="${GUIDED_DECODING_BACKEND:-lm-format-enforcer}"
@@ -101,6 +105,8 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-local-datasphere-key}"
   --api-base "http://127.0.0.1:${PORT}/v1" \
   --data-dir "$DATA_DIR" \
   --max-tokens "$KGGEN_MAX_TOKENS" \
+  --concurrency "$KGGEN_CONCURRENCY" \
+  --serial-chunking \
   --work-dir "$RUN_ROOT"
 
 vllm serve "$MODEL_PATH" \

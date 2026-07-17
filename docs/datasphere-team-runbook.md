@@ -177,6 +177,15 @@ adapter, а затем сохраняет `runtime-dependencies.json`. Это н
 запуска. GPU Job разрешён только когда и `preflight.json`, и
 `runtime-dependencies.json` имеют `status: ready`.
 
+Для локального vLLM Job дополнительно принудительно задаёт
+`llm.concurrency: 1` и `extraction.serial_chunking: true`. KGGen 0.4 создаёт
+свой внутренний pool при `chunk_size`; совместно с внешним response pool он
+разделяет один DSPy client и может зависнуть после части запросов. Serial режим
+сохраняет алгоритм KGGen — тот же split, aggregate и final cluster, — но
+устраняет nested concurrency. Если `vllm.log`/`gpu.csv` показывают несколько
+минут 0% utilisation после завершённых запросов, отменяйте конкретную Job:
+такой простой не является полезным вычислением.
+
 ## Что именно pre-submit проверяет
 
 `scripts/validate_datasphere_job.py` запускается helper-ом автоматически. Он

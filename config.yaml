@@ -17,6 +17,7 @@ llm:
 extraction:
   cluster: true                       # KGGen entity/edge resolution ON
   context_chunk_chars: 6000           # chunk long contexts; KGGen aggregates chunks (maps to kg-gen chunk_size)
+  serial_chunking: false              # DataSphere local-vLLM override disables KGGen's nested thread pools
 
 matching:
   embedding_model: "sentence-transformers/all-MiniLM-L6-v2"

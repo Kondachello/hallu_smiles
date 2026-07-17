@@ -150,6 +150,11 @@ class KGExtractor:
         )
         self.cluster = cfg.extraction.cluster
         self.chunk_chars = cfg.extraction.context_chunk_chars
+        self.serial_chunking = (
+            cfg.extraction.get("serial_chunking", False)
+            if hasattr(cfg.extraction, "get")
+            else getattr(cfg.extraction, "serial_chunking", False)
+        )
         self.max_retries = cfg.llm.max_retries
         self.backoff_base = cfg.llm.retry_backoff_base_s
         self.cache_dir = Path(cfg.cache_dir)
@@ -184,7 +189,8 @@ class KGExtractor:
             "max_tokens": self.max_tokens,
             "cluster": self.cluster,
             "chunk_chars": self.chunk_chars,
-            "v": 2,  # max_tokens is now part of the backend contract/cache key
+            "serial_chunking": self.serial_chunking,
+            "v": 3,  # serial chunk scheduling changes the extraction contract
         }
         payload = json.dumps(params, sort_keys=True) + "\x00" + text
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -213,12 +219,33 @@ class KGExtractor:
         os.replace(tmp, dest)  # atomic -> crash-safe / resumable
 
     # -- generation -----------------------------------------------------------
+    @staticmethod
+    def _split_text(text: str, chunk_size: int) -> list[str]:
+        """Use KGGen's own sentence-aware splitter without its thread pool."""
+        from kg_gen.utils.chunk_text import chunk_text
+
+        return chunk_text(text, chunk_size)
+
     def _call_backend(self, text: str) -> Graph:
         backend = self._get_backend()
-        gen_kwargs: dict[str, Any] = {"input_data": text, "cluster": self.cluster}
-        if len(text) > self.chunk_chars:
-            gen_kwargs["chunk_size"] = self.chunk_chars
-        g = backend.generate(**gen_kwargs)
+        if self.serial_chunking and len(text) > self.chunk_chars:
+            # KGGen 0.4 implements ``chunk_size`` with an unbounded nested
+            # ThreadPoolExecutor over one shared DSPy LM.  Combining that with
+            # response-level parallelism can deadlock a local vLLM client after
+            # some successful calls.  Preserve KGGen's algorithm (chunk,
+            # aggregate, then cluster) but schedule the chunks serially.
+            graphs = [
+                backend.generate(input_data=chunk, cluster=False)
+                for chunk in self._split_text(text, self.chunk_chars)
+            ]
+            g = backend.aggregate(graphs)
+            if self.cluster:
+                g = backend.cluster(g)
+        else:
+            gen_kwargs: dict[str, Any] = {"input_data": text, "cluster": self.cluster}
+            if len(text) > self.chunk_chars:
+                gen_kwargs["chunk_size"] = self.chunk_chars
+            g = backend.generate(**gen_kwargs)
         entities = {str(e) for e in getattr(g, "entities", set())}
         relations = {
             tuple(str(x) for x in r)

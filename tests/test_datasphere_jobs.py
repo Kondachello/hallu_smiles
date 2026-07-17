@@ -80,6 +80,8 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["cache_dir"] == str(work_dir / "cache" / "kg")
     assert config["relation_verifier"]["cache_dir"] == str(work_dir / "cache" / "verdicts")
     assert config["llm"]["max_tokens"] == 1024
+    assert config["llm"]["concurrency"] == 1
+    assert config["extraction"]["serial_chunking"] is True
 
 
 def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path):
@@ -108,6 +110,8 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "check_datasphere_gpu_runtime.py" in runner
     assert "check_datasphere_vllm_completion.py" in runner
     assert "KGGEN_MAX_TOKENS" in runner
+    assert "KGGEN_CONCURRENCY" in runner
+    assert "--serial-chunking" in runner
     assert "--guided-decoding-backend" in runner
     assert "lm-format-enforcer" in runner
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)

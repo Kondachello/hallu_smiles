@@ -110,6 +110,47 @@ def test_kg_extractor_keeps_kggen_clustering_and_native_chunking(tmp_path):
     ]
 
 
+def test_kg_extractor_can_schedule_kggen_chunks_serially_for_local_vllm(tmp_path, monkeypatch):
+    class RawGraph:
+        def __init__(self, value):
+            self.entities = {value}
+            self.relations = {(value, "rel", value)}
+
+    class Backend:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, **kwargs):
+            self.calls.append(("generate", kwargs))
+            return RawGraph(kwargs["input_data"])
+
+        def aggregate(self, graphs):
+            self.calls.append(("aggregate", [next(iter(graph.entities)) for graph in graphs]))
+            return RawGraph("aggregate")
+
+        def cluster(self, graph):
+            self.calls.append(("cluster", next(iter(graph.entities))))
+            return RawGraph("cluster")
+
+    cfg = SimpleNamespace(
+        llm=SimpleNamespace(model="test", temperature=0.0, max_retries=1, retry_backoff_base_s=0.0),
+        extraction=SimpleNamespace(cluster=True, context_chunk_chars=8, serial_chunking=True),
+        cache_dir=str(tmp_path / "cache"),
+    )
+    backend = Backend()
+    extractor = KGExtractor(cfg, backend=backend)
+    monkeypatch.setattr(extractor, "_split_text", lambda text, size: ["first", "second"])
+    graph = extractor._call_backend("a context that exceeds eight characters")
+
+    assert graph.entities == {"cluster"}
+    assert backend.calls == [
+        ("generate", {"input_data": "first", "cluster": False}),
+        ("generate", {"input_data": "second", "cluster": False}),
+        ("aggregate", ["first", "second"]),
+        ("cluster", "aggregate"),
+    ]
+
+
 def test_micro_audit_uses_the_normal_eg_rp_audit_contract():
     cfg = SimpleNamespace(
         matching=SimpleNamespace(
