@@ -157,6 +157,13 @@ class KGExtractor:
         )
         self.max_retries = cfg.llm.max_retries
         self.backoff_base = cfg.llm.retry_backoff_base_s
+        self.request_timeout_s = float(
+            cfg.llm.get("request_timeout_s", 90)
+            if hasattr(cfg.llm, "get")
+            else getattr(cfg.llm, "request_timeout_s", 90)
+        )
+        if self.request_timeout_s <= 0:
+            raise ValueError("llm.request_timeout_s must be positive")
         self.cache_dir = Path(cfg.cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._backend = backend  # if None, lazily construct KGGen on first use
@@ -178,6 +185,15 @@ class KGExtractor:
             if api_base:
                 kwargs["api_base"] = api_base
             self._backend = KGGen(**kwargs)
+            # KGGen 0.4 does not expose DSPy's HTTP timeout in its constructor.
+            # Bound the underlying local-vLLM request anyway: a request that is
+            # never accepted by the server must surface as a retryable error,
+            # not occupy a paid GPU indefinitely.  KGExtractor's tenacity loop
+            # remains the single retry policy, hence DSPy's own retries are off.
+            lm = getattr(self._backend, "lm", None)
+            if lm is not None:
+                lm.kwargs["timeout"] = self.request_timeout_s
+                lm.num_retries = 0
             self.usage.try_hook_litellm()
         return self._backend
 

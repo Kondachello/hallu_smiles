@@ -139,6 +139,14 @@ GPU Job неизменно использует `g1.1` (V100 32 GB), FP16,
 останавливает vLLM. После terminal status DataSphere освобождает GPU VM сам;
 держать Job для просмотра отчёта не нужно.
 
+Перед импортом KGGen Job выставляет `LITELLM_LOCAL_MODEL_COST_MAP=true`: локальному
+vLLM не нужна скачиваемая LiteLLM-карта цен, а внешняя сеть не должна быть частью
+критического пути. KG extraction запускается отдельным шагом с liveness watchdog:
+если `gpu.csv` показывает 600 секунд подряд нулевой utilisation, завершается только
+этот шаг, а exit-trap всё равно упаковывает частичные `vllm.log`, `gpu.csv`, manifest
+и diagnostics. CPU-heavy scoring не контролируется этим watchdog, поэтому у него нет
+ложных отмен после успешно законченного extraction.
+
 `requirements.datasphere.txt` намеренно закрепляет `vllm==0.6.3.post1`: эта
 версия использует PyTorch 2.4/CUDA 12.1, совместимые с CUDA 12.2 driver `g1.1`.
 Не заменяйте pin на диапазон версий: новый vLLM может потребовать более свежий
@@ -171,8 +179,9 @@ pin `lm-format-enforcer==0.10.6`. Default `outlines` в этой среде им
 
 CPU preflight теперь не только проверяет ready-marker, SHA и размеры shared
 assets. Он устанавливает **тот же exact requirements набор**, что GPU Job,
-импортирует `vllm`, `transformers`, `lmformatenforcer` и его Transformers
-adapter, а затем сохраняет `runtime-dependencies.json`. Это не загружает 8B
+импортирует `vllm`, `transformers`, `lmformatenforcer`, его Transformers
+adapter, `litellm`, `dspy` и `kg_gen`, а затем сохраняет
+`runtime-dependencies.json`. Это не загружает 8B
 веса и не резервирует GPU, но ловит resolver/import-конфликты до дорогого
 запуска. GPU Job разрешён только когда и `preflight.json`, и
 `runtime-dependencies.json` имеют `status: ready`.
@@ -217,6 +226,8 @@ adapter, а затем сохраняет `runtime-dependencies.json`. Это н
 - `PREPARING` — подготовка среды; GPU ещё не следует считать полезно занятым.
 - `EXECUTING` — Job запущен. В браузере смотрите **DataSphere Jobs → Launch
   history**; после vLLM start проверяйте `vllm.log`/`gpu.csv` в результате.
+  Через CLI live snapshot попадает в временную папку, напечатанную как
+  `logs file path`; там `gpu_stats.tsv` позволяет подтвердить непрерывные 0%.
 - `SUCCESS`, `ERROR`, `CANCELLED` — terminal. GPU VM автоматически освобождена.
 
 На macOS `project job attach` иногда показывает локальные gRPC warnings вместо
@@ -234,7 +245,8 @@ mkdir -p "outputs/datasphere-results/<RUN_ID>"
 В архиве QA Job обязательны `shared-assets-preflight.json`, `gpu-runtime.json`,
 `vllm.log`, `gpu.csv`, `run_metadata.json`, `qa_pilot_manifest.json`, `strict/`,
 `support/`, `comparison.json` и `comparison.md`. Если Job уже `EXECUTING`, но
-из log видно, что vLLM не прошёл healthcheck или долго нет GPU activity,
+из log видно, что vLLM не прошёл healthcheck или `gpu_stats.tsv` показывает
+более 10 минут 0% во время extraction,
 отмените именно этот Job: `datasphere project job cancel --id <JOB_ID> --graceful`.
 Не нажимайте широкую кнопку «Отменить задания», если хотите остановить только
 JupyterLab.

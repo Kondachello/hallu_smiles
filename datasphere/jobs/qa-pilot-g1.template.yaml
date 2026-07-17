@@ -18,11 +18,19 @@ cmd: >-
   export MODEL_MAX_MODEL_LEN=8192;
   export DATASPHERE_UNITS_PER_SECOND=72;
   export GPU_TIME_LIMIT_SECONDS=10800;
+  archive_on_exit() {
+    status=$?;
+    trap - EXIT;
+    tar -C "$(dirname "$RUN_ROOT")" -czf "$ARTIFACT_ARCHIVE" "$(basename "$RUN_ROOT")" || true;
+    exit "$status";
+  };
+  on_signal() { exit 143; };
+  trap archive_on_exit EXIT;
+  trap on_signal INT TERM;
   set +e;
   timeout --signal=TERM --kill-after=60s 10800 bash source/scripts/run_datasphere_qa_pilot.sh;
   job_status=$?;
   set -e;
-  tar -C "$(dirname "$RUN_ROOT")" -czf "${ARTIFACT_ARCHIVE}" "$(basename "$RUN_ROOT")";
   exit "$job_status"'
 env:
   python:

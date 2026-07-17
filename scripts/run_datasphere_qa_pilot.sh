@@ -27,6 +27,10 @@ KGGEN_CONCURRENCY="${KGGEN_CONCURRENCY:-1}"
 # outlines imports the broken pyairports 0.0.1 distribution on this runtime.
 # vLLM 0.6.3 supports this installed backend for JSON-guided KGGen responses.
 GUIDED_DECODING_BACKEND="${GUIDED_DECODING_BACKEND:-lm-format-enforcer}"
+# LiteLLM otherwise fetches an optional model-cost map from GitHub on its first
+# import. Jobs need no cost pricing to call localhost, and an unreachable
+# external endpoint must never block KGGen before the first real request.
+export LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-true}"
 RUNTIME_CONFIG="$RUN_ROOT/runtime_config.yaml"
 MANIFEST="$RUN_ROOT/qa_pilot_manifest.json"
 STRICT_OUT="$RUN_ROOT/strict"
@@ -55,7 +59,8 @@ unset HF_TOKEN || true
 mkdir -p "$RUN_ROOT"
 export HF_HOME="${HF_HOME:-$RUN_ROOT/hf-home}"
 export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME:-$RUN_ROOT/sentence-transformers}"
-mkdir -p "$HF_HOME" "$SENTENCE_TRANSFORMERS_HOME"
+export DSPY_CACHEDIR="${DSPY_CACHEDIR:-$RUN_ROOT/dspy-cache}"
+mkdir -p "$HF_HOME" "$SENTENCE_TRANSFORMERS_HOME" "$DSPY_CACHEDIR"
 available_kb="$(df -Pk "$RUN_ROOT" | awk 'NR==2 {print $4}')"
 required_kb=$((MIN_WORK_FREE_GB * 1024 * 1024))
 if [[ -z "$available_kb" || "$available_kb" -lt "$required_kb" ]]; then
@@ -132,9 +137,51 @@ nvidia-smi --query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used,
   --format=csv,noheader,nounits -l 10 >"$GPU_LOG" 2>&1 &
 GPU_PID=$!
 
+run_extraction_with_gpu_watchdog() {
+  # The liveness condition applies only to live KG extraction. Scoring and
+  # reporting are intentionally CPU-heavy, so monitoring the whole pipeline
+  # would produce false positives after extraction has completed.
+  local idle_limit_seconds="${GPU_IDLE_ABORT_SECONDS:-600}"
+  local poll_seconds=30
+  local required_samples=$((idle_limit_seconds / 10))
+  local child_pid=""
+  if [[ ! "$idle_limit_seconds" =~ ^[1-9][0-9]*$ ]] || (( idle_limit_seconds < 60 )); then
+    echo "GPU_IDLE_ABORT_SECONDS must be an integer of at least 60." >&2
+    return 2
+  fi
+
+  "$@" &
+  child_pid=$!
+  while kill -0 "$child_pid" 2>/dev/null; do
+    sleep "$poll_seconds"
+    if ! kill -0 "$child_pid" 2>/dev/null; then
+      break
+    fi
+    if tail -n "$required_samples" "$GPU_LOG" | awk -F ',' -v need="$required_samples" '
+      NF >= 2 {
+        samples++
+        value = $2
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        if (value + 0 > 0) active = 1
+      }
+      END { exit !(samples >= need && !active) }
+    '; then
+      echo "[watchdog] no GPU activity for ${idle_limit_seconds}s during KG extraction; terminating extraction." >&2
+      kill -TERM "$child_pid" 2>/dev/null || true
+      wait "$child_pid" || true
+      return 124
+    fi
+  done
+  wait "$child_pid"
+}
+
 start_epoch="$(date +%s)"
-"$PYTHON_BIN" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
+echo "[watchdog] strict KG extraction will abort after ${GPU_IDLE_ABORT_SECONDS:-600}s without GPU activity."
+run_extraction_with_gpu_watchdog "$PYTHON_BIN" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage extract \
   --relation-mode strict --qa-pilot --qa-pilot-manifest-out "$MANIFEST" \
+  --output-dir "$STRICT_OUT"
+"$PYTHON_BIN" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
+  --relation-mode strict --qa-pilot-manifest "$MANIFEST" \
   --output-dir "$STRICT_OUT"
 "$PYTHON_BIN" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
   --relation-mode support --qa-pilot-manifest "$MANIFEST" \

@@ -51,6 +51,11 @@ def check() -> dict[str, Any]:
     _import("vllm")
     _import("transformers")
     _import("lmformatenforcer")
+    if os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() != "true":
+        raise RuntimeError("LITELLM_LOCAL_MODEL_COST_MAP=true is required for offline-safe Job startup")
+    _import("litellm")
+    _import("dspy")
+    _import("kg_gen")
     # lm-format-enforcer 0.10.6 imports LogitsWarper here. Transformers 4.57
     # removed that symbol and previously caused a paid GPU HTTP 500.
     integration = importlib.import_module("lmformatenforcer.integrations.transformers")
@@ -66,6 +71,9 @@ def check() -> dict[str, Any]:
             "import transformers",
             "import lmformatenforcer",
             "import lmformatenforcer.integrations.transformers",
+            "import litellm with local model-cost map",
+            "import dspy",
+            "import kg_gen",
         ],
     }
 

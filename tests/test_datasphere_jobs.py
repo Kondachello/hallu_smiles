@@ -81,6 +81,7 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["relation_verifier"]["cache_dir"] == str(work_dir / "cache" / "verdicts")
     assert config["llm"]["max_tokens"] == 1024
     assert config["llm"]["concurrency"] == 1
+    assert config["llm"]["request_timeout_s"] == 90
     assert config["extraction"]["serial_chunking"] is True
 
 
@@ -114,6 +115,11 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "--serial-chunking" in runner
     assert "--guided-decoding-backend" in runner
     assert "lm-format-enforcer" in runner
+    assert "LITELLM_LOCAL_MODEL_COST_MAP" in runner
+    assert "run_extraction_with_gpu_watchdog" in runner
+    assert "GPU_IDLE_ABORT_SECONDS" in runner
+    assert "--stage extract" in runner
+    assert "--relation-mode strict --qa-pilot-manifest \"$MANIFEST\"" in runner
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)
 
 
@@ -128,9 +134,23 @@ def test_cpu_preflight_uses_the_same_locked_runtime_and_import_check(tmp_path):
     assert config["cloud-instance-types"] == ["c1.4"]
     assert config["working-storage"]["size"] == "100Gb"
     assert "check_datasphere_runtime_dependencies.py" in config["cmd"]
+    assert "LITELLM_LOCAL_MODEL_COST_MAP=true" in config["cmd"]
     assert (ROOT / "requirements.datasphere.preflight.txt").read_text(encoding="utf-8") == (
         ROOT / "requirements.datasphere.txt"
     ).read_text(encoding="utf-8")
+
+
+def test_gpu_job_archives_artifacts_when_cancelled(tmp_path):
+    rendered = tmp_path / "qa-pilot.yaml"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_job.py"),
+        "--kind", "qa-pilot-g1", "--commit", "f" * 40,
+        "--run-id", "new-metrics-20260717", "--output", str(rendered),
+    ], check=True)
+    command = yaml.safe_load(rendered.read_text(encoding="utf-8"))["cmd"]
+    assert "trap archive_on_exit EXIT" in command
+    assert "trap on_signal INT TERM" in command
+    assert "tar -C \"$(dirname \"$RUN_ROOT\")\" -czf \"$ARTIFACT_ARCHIVE\"" in command
 
 
 def test_rendered_jobs_pass_local_cli_guardrails(tmp_path):

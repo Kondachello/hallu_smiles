@@ -143,6 +143,9 @@ class RelationVerifier:
         self.temperature = float(cfg.llm.temperature)
         self.max_retries = int(cfg.llm.max_retries)
         self.backoff_base = float(cfg.llm.retry_backoff_base_s)
+        self.request_timeout_s = float(getattr(cfg.llm, "request_timeout_s", 90))
+        if self.request_timeout_s <= 0:
+            raise ValueError("llm.request_timeout_s must be positive")
         self.max_sentences = int(verifier_cfg.max_evidence_sentences)
         self.prompt_version = str(verifier_cfg.prompt_version)
         self.stopwords = set(getattr(cfg.matching, "stopwords", []) or [])
@@ -223,6 +226,7 @@ class RelationVerifier:
             "messages": messages,
             "temperature": self.temperature,
             "max_tokens": 32,
+            "timeout": self.request_timeout_s,
         }
         api_key = resolve_api_key(self.cfg)
         if api_key:
