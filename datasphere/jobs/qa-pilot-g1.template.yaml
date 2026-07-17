@@ -23,6 +23,8 @@ cmd: >-
     status=$?;
     trap - EXIT;
     tar -C "$(dirname "$RUN_ROOT")" -czf "$ARTIFACT_ARCHIVE" "$(basename "$RUN_ROOT")" || true;
+    if test -f "$RUN_ROOT/vllm.log"; then echo "[diagnostics] vLLM log tail follows"; tail -n 240 "$RUN_ROOT/vllm.log" || true; fi;
+    if test -f "$RUN_ROOT/gpu.csv"; then echo "[diagnostics] GPU samples tail follows"; tail -n 80 "$RUN_ROOT/gpu.csv" || true; fi;
     exit "$status";
   };
   on_signal() { exit 143; };

@@ -79,10 +79,11 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["data"]["dir"] == "/read-only/ragtruth"
     assert config["cache_dir"] == str(work_dir / "cache" / "kg")
     assert config["relation_verifier"]["cache_dir"] == str(work_dir / "cache" / "verdicts")
-    assert config["llm"]["max_tokens"] == 1024
+    assert config["llm"]["max_tokens"] == 256
     assert config["llm"]["concurrency"] == 1
     assert config["llm"]["request_timeout_s"] == 90
     assert config["extraction"]["serial_chunking"] is True
+    assert config["extraction"]["cluster_max_items"] == 48
 
 
 def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path):
@@ -111,7 +112,9 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "check_datasphere_gpu_runtime.py" in runner
     assert "check_datasphere_vllm_completion.py" in runner
     assert "check_datasphere_kggen_probe.py" in runner
+    assert "check_datasphere_qa_reference_probe.py" in runner
     assert "KGGEN_MAX_TOKENS" in runner
+    assert "KGGEN_CLUSTER_MAX_ITEMS" in runner
     assert "KGGEN_CONCURRENCY" in runner
     assert "--serial-chunking" in runner
     assert "--guided-decoding-backend" in runner
@@ -119,6 +122,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "LITELLM_LOCAL_MODEL_COST_MAP" in runner
     assert "run_extraction_with_gpu_watchdog" in runner
     assert "GPU_IDLE_ABORT_SECONDS" in runner
+    assert "DATASPHERE_DEBUG_STACK" in runner
     assert "--stage extract" in runner
     assert "--relation-mode strict --qa-pilot-manifest \"$MANIFEST\"" in runner
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_qa_pilot.sh")], check=True)

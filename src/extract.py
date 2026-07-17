@@ -149,6 +149,16 @@ class KGExtractor:
             else getattr(cfg.llm, "max_tokens", None)
         )
         self.cluster = cfg.extraction.cluster
+        raw_cluster_max_items = (
+            cfg.extraction.get("cluster_max_items", None)
+            if hasattr(cfg.extraction, "get")
+            else getattr(cfg.extraction, "cluster_max_items", None)
+        )
+        self.cluster_max_items = (
+            int(raw_cluster_max_items) if raw_cluster_max_items is not None else None
+        )
+        if self.cluster_max_items is not None and self.cluster_max_items <= 0:
+            raise ValueError("extraction.cluster_max_items must be positive or null")
         self.chunk_chars = cfg.extraction.context_chunk_chars
         self.serial_chunking = (
             cfg.extraction.get("serial_chunking", False)
@@ -242,6 +252,37 @@ class KGExtractor:
 
         return chunk_text(text, chunk_size)
 
+    def _should_cluster_backend_graph(self, graph: Any) -> bool:
+        """Return whether optional KGGen canonicalisation is safe to run.
+
+        KGGen creates dynamic ``Literal[...]`` schemas for all entities and
+        predicates before asking the model to cluster them.  That is useful
+        canonicalisation, but a small local model can occasionally emit a very
+        large candidate list.  Building that schema becomes CPU-bound before a
+        new vLLM request is sent.  A finite limit retains every raw triple and
+        simply skips this optional post-processing for that outlier.  ``None``
+        is deliberately the default so non-DataSphere behaviour is unchanged.
+        """
+        if not self.cluster:
+            return False
+        if self.cluster_max_items is None:
+            return True
+        entities = getattr(graph, "entities", set()) or set()
+        edges = getattr(graph, "edges", set()) or {
+            relation[1] for relation in (getattr(graph, "relations", set()) or set())
+            if isinstance(relation, (tuple, list)) and len(relation) == 3
+        }
+        largest_group = max(len(entities), len(edges))
+        if largest_group <= self.cluster_max_items:
+            return True
+        print(
+            "[kg] skipping optional KGGen clustering: "
+            f"entities={len(entities)} predicates={len(edges)} "
+            f"limit={self.cluster_max_items}; raw triples are retained",
+            flush=True,
+        )
+        return False
+
     def _call_backend(self, text: str) -> Graph:
         backend = self._get_backend()
         if self.serial_chunking and len(text) > self.chunk_chars:
@@ -255,13 +296,23 @@ class KGExtractor:
                 for chunk in self._split_text(text, self.chunk_chars)
             ]
             g = backend.aggregate(graphs)
-            if self.cluster:
+            if self._should_cluster_backend_graph(g):
                 g = backend.cluster(g)
         else:
-            gen_kwargs: dict[str, Any] = {"input_data": text, "cluster": self.cluster}
+            # With a finite local-runtime bound, generate raw triples first so
+            # the decision to call KGGen's optional clustering is made from the
+            # actual candidate cardinality.  With the default ``None`` this is
+            # the original one-call KGGen behaviour.
+            bounded_clustering = self.cluster and self.cluster_max_items is not None
+            gen_kwargs: dict[str, Any] = {
+                "input_data": text,
+                "cluster": False if bounded_clustering else self.cluster,
+            }
             if len(text) > self.chunk_chars:
                 gen_kwargs["chunk_size"] = self.chunk_chars
             g = backend.generate(**gen_kwargs)
+            if bounded_clustering and self._should_cluster_backend_graph(g):
+                g = backend.cluster(g)
         entities = {str(e) for e in getattr(g, "entities", set())}
         relations = {
             tuple(str(x) for x in r)

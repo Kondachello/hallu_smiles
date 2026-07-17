@@ -7,8 +7,11 @@ on train rows, then score test rows once with frozen parameters.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import math
+import os
+import signal
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -386,6 +389,11 @@ def _select_instances(args, cfg, out_dir: Path) -> list[Instance]:
 
 
 def main() -> None:
+    if os.environ.get("DATASPHERE_DEBUG_STACK") == "1":
+        # This is inert locally.  The GPU runner sends SIGUSR1 just before its
+        # idle watchdog terminates extraction, giving the downloaded stderr a
+        # precise Python stack instead of only an opaque timeout.
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
     parser = argparse.ArgumentParser(description="HalluGraph-KGGen on RAGTruth")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--stage", default="all", choices=["extract", "score", "tune", "evaluate", "all"])

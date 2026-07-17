@@ -18,8 +18,17 @@ def main() -> None:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=1024,
+        default=256,
         help="Maximum completion tokens for KGGen; must fit the local vLLM context window.",
+    )
+    parser.add_argument(
+        "--cluster-max-items",
+        type=int,
+        default=48,
+        help=(
+            "Maximum entity/predicate candidates for KGGen's optional LLM clustering; "
+            "raw triples are kept when this local-runtime safety bound is exceeded."
+        ),
     )
     parser.add_argument(
         "--concurrency",
@@ -50,6 +59,8 @@ def main() -> None:
         raise ValueError("--max-tokens must be positive")
     if args.concurrency <= 0:
         raise ValueError("--concurrency must be positive")
+    if args.cluster_max_items <= 0:
+        raise ValueError("--cluster-max-items must be positive")
 
     with open(args.base_config, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -63,6 +74,7 @@ def main() -> None:
     config["llm"]["max_tokens"] = args.max_tokens
     config["llm"]["concurrency"] = args.concurrency
     config["extraction"]["serial_chunking"] = args.serial_chunking
+    config["extraction"]["cluster_max_items"] = args.cluster_max_items
     config["data"]["dir"] = args.data_dir
     # DataSphere mounts project storage read-only in Jobs.  Every mutable file
     # therefore belongs to the job-local output directory, never DS_PROJECT_HOME.

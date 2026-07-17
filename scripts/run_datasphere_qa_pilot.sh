@@ -17,9 +17,13 @@ MIN_WORK_FREE_GB="${MIN_WORK_FREE_GB:-5}"
 # chunks while avoiding a needless 128K KV-cache reservation on a 32-GiB V100.
 MODEL_DTYPE="${MODEL_DTYPE:-half}"
 MODEL_MAX_MODEL_LEN="${MODEL_MAX_MODEL_LEN:-8192}"
-# KGGen 0.4 otherwise requests up to 16k completion tokens.  That cannot fit
-# alongside a prompt in the deliberately memory-safe 8k vLLM context window.
-KGGEN_MAX_TOKENS="${KGGEN_MAX_TOKENS:-1024}"
+# KGGen 0.4 otherwise requests up to 16k completion tokens.  256 is sufficient
+# for the selected short QA contexts and bounds an 8B model from returning a
+# huge entity list which makes KGGen's dynamic Pydantic schemas CPU-bound.
+KGGEN_MAX_TOKENS="${KGGEN_MAX_TOKENS:-256}"
+# Raw triples are retained when this guard is exceeded; only KGGen's optional
+# LLM canonicalisation is skipped.  The repository default remains unbounded.
+KGGEN_CLUSTER_MAX_ITEMS="${KGGEN_CLUSTER_MAX_ITEMS:-48}"
 # KGGen 0.4 and DSPy share mutable state inside a backend instance.  Nested
 # chunk/response thread pools produced a local-vLLM deadlock and hours of idle
 # V100 time.  The Job is intentionally serial; vLLM remains the only GPU work.
@@ -31,6 +35,10 @@ GUIDED_DECODING_BACKEND="${GUIDED_DECODING_BACKEND:-lm-format-enforcer}"
 # import. Jobs need no cost pricing to call localhost, and an unreachable
 # external endpoint must never block KGGen before the first real request.
 export LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-true}"
+# On an extraction watchdog trip, run.py prints all Python thread stacks before
+# it is terminated.  This makes an upstream client-side stall diagnosable from
+# the standard DataSphere stderr download.
+export DATASPHERE_DEBUG_STACK="${DATASPHERE_DEBUG_STACK:-1}"
 RUNTIME_CONFIG="$RUN_ROOT/runtime_config.yaml"
 MANIFEST="$RUN_ROOT/qa_pilot_manifest.json"
 STRICT_OUT="$RUN_ROOT/strict"
@@ -110,6 +118,7 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-local-datasphere-key}"
   --api-base "http://127.0.0.1:${PORT}/v1" \
   --data-dir "$DATA_DIR" \
   --max-tokens "$KGGEN_MAX_TOKENS" \
+  --cluster-max-items "$KGGEN_CLUSTER_MAX_ITEMS" \
   --concurrency "$KGGEN_CONCURRENCY" \
   --serial-chunking \
   --work-dir "$RUN_ROOT"
@@ -149,6 +158,16 @@ timeout --signal=TERM --kill-after=30s "${KGGEN_PROBE_TIMEOUT_SECONDS:-180}" \
   --max-tokens "${KGGEN_PROBE_MAX_TOKENS:-256}" \
   --report "$RUN_ROOT/kggen-probe.json"
 
+# The synthetic probe above validates the typed-output protocol.  This second
+# bounded probe exercises the exact first selected RAGTruth reference graph,
+# prints phase-by-phase progress and seeds its content-addressed context cache.
+# Do not spend a full pilot Job if this real input cannot clear extraction.
+echo "[probe] checking first selected QA reference with post-stage diagnostics."
+timeout --signal=TERM --kill-after=30s "${KGGEN_REFERENCE_PROBE_TIMEOUT_SECONDS:-180}" \
+  "$PYTHON_BIN" "$ROOT/scripts/check_datasphere_qa_reference_probe.py" \
+  --config "$RUNTIME_CONFIG" \
+  --report "$RUN_ROOT/qa-reference-probe.json"
+
 run_extraction_with_gpu_watchdog() {
   # The liveness condition applies only to live KG extraction. Scoring and
   # reporting are intentionally CPU-heavy, so monitoring the whole pipeline
@@ -179,6 +198,8 @@ run_extraction_with_gpu_watchdog() {
       END { exit !(samples >= need && !active) }
     '; then
       echo "[watchdog] no GPU activity for ${idle_limit_seconds}s during KG extraction; terminating extraction." >&2
+      kill -USR1 "$child_pid" 2>/dev/null || true
+      sleep 3
       kill -TERM "$child_pid" 2>/dev/null || true
       wait "$child_pid" || true
       return 124

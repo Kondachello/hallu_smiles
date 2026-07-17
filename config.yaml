@@ -17,6 +17,12 @@ llm:
 
 extraction:
   cluster: true                       # KGGen entity/edge resolution ON
+  # Optional safety bound for the *post-extraction* KGGen LLM clustering.
+  # null preserves KGGen's native behaviour.  The DataSphere runtime sets a
+  # finite value for the small local Llama server: if a model emits an
+  # pathological number of candidates, raw triples are retained but the
+  # optional canonicalisation call is skipped instead of CPU-spinning.
+  cluster_max_items: null
   context_chunk_chars: 6000           # chunk long contexts; KGGen aggregates chunks (maps to kg-gen chunk_size)
   serial_chunking: false              # DataSphere local-vLLM override disables KGGen's nested thread pools
 
