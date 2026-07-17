@@ -29,19 +29,30 @@
   `transformers==4.45.2`. Это проверенная связка: плавающий диапазон поставил
   4.57, где удален `LogitsWarper`; сервер стартовал, но первый completion
   завершался HTTP 500. Transformers 5.x дополнительно несовместим с PyTorch
-  2.4 ещё до старта vLLM.
+  2.4 ещё до старта vLLM. `outlines==0.0.46` закреплён отдельно: это
+  constrained-decoding backend для полного вложенного JSON Schema KGGen.
 - Локальный vLLM намеренно ограничен 8 192 токенами на V100. Поэтому KGGen
   должен получить `llm.max_tokens: 256`: его дефолт 16 000 переполняет окно
   ещё до генерации. Скрипт делает дешёвый completion smoke-check и затем
   KGGen/DSPy typed-output **и clustering** probe с timeout 180 секунд,
   прежде чем запускать все 20 QA. Кластеризация — часть KGGen, не fallback.
-- Для vLLM 0.6.3 выбран `--guided-decoding-backend lm-format-enforcer`
-  (`lm-format-enforcer==0.10.6`, как требует vLLM). Перед стартом vLLM
-  скрипт применяет к **эпhemeral Job virtualenv** проверяемый пятистрочный
-  backport upstream-фикса для `additionalProperties: false`; `0.10.11`
-  напрямую установить нельзя, потому что vLLM 0.6.3.post1 требует ровно `0.10.6`.
-  Не возвращайте default `outlines`: его
-  dependency `pyairports==0.0.1` в этой среде ставится без Python-модуля.
+- Для vLLM 0.6.3 выбран `--guided-decoding-backend outlines`: он ограничивает
+  **тот же полный Pydantic JSON Schema** KGGen, включая вложенный
+  `relations: list[Relation]`. У `lm-format-enforcer==0.10.6` после успешного
+  простого probe была подтверждена ошибка на реальном nested schema: он мог
+  вернуть один bare `{"subject", "predicate", "object"}` вместо корневого
+  `{"relations": [...]}`. Это не исправляют постобработкой и не обходят
+  отключением typed extraction или LLM clustering.
+
+  `outlines==0.0.46` требует `pyairports==0.0.1`, а этот PyPI distribution не
+  содержит импортируемого Python-модуля. Поэтому Job добавляет в `PYTHONPATH`
+  проверенный репозиторный shim `datasphere/runtime_shims/pyairports` с пустым
+  неиспользуемым списком аэропортов. CPU preflight импортирует именно этот shim
+  и `outlines.integrations.vllm.JSONLogitsProcessor` до выделения V100.
+  `patch_datasphere_lmfe_bool_schema.py` остаётся обязательным audit-патчем
+  точного pinned dependency vLLM: он применяет upstream five-line fix только в
+  ephemeral Job venv и проверяет closed schema. Он не меняет schema, KGGen или
+  кластеризацию.
 
 ## Короткая схема
 
@@ -208,12 +219,16 @@ activity после его старта, отменяйте **только ко�
 Работай только в ветке new-metrics или её опубликованной дочерней ветке.
 Не создавай DataSphere Project/cloud, не меняй shared/models и shared/ragtruth,
 не передавай HF_TOKEN в Job и не меняй pins vllm==0.6.3.post1 и
-transformers==4.45.2 (вместе с lm-format-enforcer==0.10.6).
+transformers==4.45.2 (вместе с lm-format-enforcer==0.10.6 и
+outlines==0.0.46). Не удаляй `datasphere/runtime_shims/pyairports`: он нужен
+Outlines для полного nested JSON Schema KGGen и не является обходом extraction
+или clustering.
 
-До GPU Job требуй успешный CPU preflight: в archive должны быть `preflight.json`
-и `runtime-dependencies.json` со status `ready`. Второй файл создаётся из тех
-же точных requirements, что и GPU Job, и импортирует vLLM, Transformers и
-lm-format-enforcer без модели и без GPU. Для запуска используй только
+До GPU Job требуй успешный CPU preflight: в archive должны быть `preflight.json`,
+`runtime-dependencies.json` и `outlines-backend.json` со status `ready`.
+Последние два файла создаются из тех же точных requirements, что и GPU Job, и
+импортируют vLLM, Transformers, lm-format-enforcer и Outlines c репозиторным
+shim без модели и без GPU. Для запуска используй только
 scripts/submit_datasphere_job.sh с уникальным RUN_ID; не редактируй Job YAML
 и не запускай datasphere project job execute вручную.
 
@@ -282,11 +297,12 @@ shared assets и не влияет на отдельные Jobs.
 | vLLM не стартует: driver/CUDA too old | Установилась новая несовместимая версия vLLM. | Не использовать `>=`; сохранить `vllm==0.6.3.post1` и смотреть `gpu-runtime.json`. |
 | vLLM ждёт healthcheck, а в логе `cannot import name 'DTensor'` | Resolver поставил Transformers 5.x, несовместимый с PyTorch 2.4. | Сохранить прямой pin `transformers==4.45.2`; не убирать его при обновлении requirements. |
 | `/v1/chat/completions` отвечает `400`, а `failed_extractions.jsonl` содержит `ContextWindowExceededError` | KGGen без явного лимита просит до 16 000 output tokens, но vLLM для V100 ограничен 8 192. | Сохранить `llm.max_tokens: 256` в runtime config и completion smoke-check до QA. |
-| Completion smoke-check отвечает `500`, в `vllm.log` — `ModuleNotFoundError: pyairports` | Default guided-decoding backend `outlines` импортирует дефектный `pyairports==0.0.1`. | Использовать `--guided-decoding-backend lm-format-enforcer` и pin `lm-format-enforcer==0.10.6`. |
+| Completion smoke-check отвечает `500`, в `vllm.log` — `ModuleNotFoundError: pyairports` | Outlines 0.0.46 импортирует дефектный `pyairports==0.0.1`, где нет Python-модуля. | Не переключать backend на raw или LME. Проверить, что Job экспортирует `PYTHONPATH=.../datasphere/runtime_shims` и preflight создал `outlines-backend.json` со `status: ready`. |
 | Completion smoke-check отвечает `500`, в `vllm.log` — `cannot import name 'LogitsWarper'` | Плавающий `transformers>=...` поставил версию 4.57, несовместимую с `lm-format-enforcer`. | Нужен точный, а не диапазонный pin: `transformers==4.45.2`; затем заново пройти CPU preflight. |
 | Guided-JSON probe отвечает `500`, а в `vllm.log` — `AttributeError: 'bool' object has no attribute 'get'` из `lmformatenforcer/.../jsonschemaobject.py` | `lm-format-enforcer==0.10.6` не умеет boolean-значение `additionalProperties: false` в закрытой JSON Schema, которую vLLM передаёт для typed KGGen extraction. Это происходит **до** QA/KGGen и после загрузки модели. | Не менять vLLM dependency pin. `patch_datasphere_lmfe_bool_schema.py` делает только upstream five-line backport в ephemeral Job venv и сохраняет JSON-отчёт; CPU preflight затем создаёт настоящий `JsonSchemaParser(... additionalProperties: false)`. Не отключать clustering или constrained decoding. |
+| Простой guided-JSON probe проходит, но реальный KGGen relations падает с `Expected output fields [relations], actual []`, а ответ — bare `{"subject", "predicate", "object"}` | `lm-format-enforcer==0.10.6` не сохраняет корневую структуру у nested `$defs` Pydantic Schema. Это не проблема модели, VRAM или LLM clustering. | Использовать выбранный `outlines` backend с тем же полным schema и pyairports shim; сначала пройти CPU preflight и `cluster-probe-g1`. Не добавлять эвристику, которая оборачивает bare triple. |
 | `kggen-probe.json` не появляется или Job завершается до QA | DSPy 3.x/LiteLLM drift совместим по import, но не по KGGen structured-output path. | Сохранить locked `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`; probe должен пройти до extraction. |
-| Несовместимость Python-зависимостей обнаружена до GPU | CPU preflight импортирует ровно тот же набор requirements и пишет `runtime-dependencies.json`. | Не запускать GPU, пока оба отчёта preflight имеют `status: ready`; исправить pin, запушить commit и повторить только CPU preflight. |
+| Несовместимость Python-зависимостей обнаружена до GPU | CPU preflight импортирует ровно тот же набор requirements и пишет `runtime-dependencies.json` и `outlines-backend.json`. | Не запускать GPU, пока `preflight.json`, `runtime-dependencies.json` и `outlines-backend.json` имеют `status: ready`; исправить pin, запушить commit и повторить только CPU preflight. |
 | GPU остаётся 0% на KG extraction | Клиент KGGen/DSPy мог застыть после ответа vLLM при обработке cluster-процедуры. | Проверить `qa-reference-probe.json` и `vllm.log`; кластеризацию не отключать в официальном запуске. Сохранить pins `kg-gen==0.4.0`, `dspy==2.6.27`, `litellm==1.60.4`, `pydantic==2.10.6`, LLM timeout и serial KGGen. Сначала пройти `cluster-probe-g1` на трёх фиксированных QA. Watchdog завершит только extraction через 600 секунд сплошного нулевого GPU; после этого читать diagnostics, а не перезапускать вслепую. |
 | В error Job нет `vllm.log` / archive | При аварийном выходе DataSphere не передал путь output archive в shell. | Template задаёт fallback `ARTIFACT_ARCHIVE` до trap. Не удалять его: частичный archive должен собираться и при error/cancel. |
 | Логи `attach` шумные или пустые | Локальный macOS gRPC клиент нестабилен. | Смотреть `job get` и Launch history; архив скачивать после terminal. |

@@ -12,10 +12,12 @@ cmd: >-
   actual_commit="$(git -C source rev-parse HEAD)";
   test "$actual_commit" = "__GIT_COMMIT__";
   export LITELLM_LOCAL_MODEL_COST_MAP=true;
+  export PYTHONPATH="$PWD/source/datasphere/runtime_shims:$PYTHONPATH";
   python source/scripts/resolve_datasphere_shared_model.py --shared-root "$DS_PROJECT_HOME/hallu_smiles/shared" --model-id "__MODEL_ID__" > "$ARTIFACT_DIR/model-path.txt";
   python source/scripts/check_datasphere_shared_assets.py --model-path "$(cat "$ARTIFACT_DIR/model-path.txt")" --data-dir "$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth" --model-id "__MODEL_ID__" --report "$ARTIFACT_DIR/preflight.json";
   python source/scripts/patch_datasphere_lmfe_bool_schema.py --report "$ARTIFACT_DIR/lmfe-bool-schema-patch.json";
   python source/scripts/check_datasphere_runtime_dependencies.py --report "$ARTIFACT_DIR/runtime-dependencies.json";
+  python source/scripts/check_datasphere_outlines_backend.py --report "$ARTIFACT_DIR/outlines-backend.json";
   tar -C "$(dirname "$ARTIFACT_DIR")" -czf "${ARTIFACT_ARCHIVE}" "$(basename "$ARTIFACT_DIR")"'
 env:
   python:

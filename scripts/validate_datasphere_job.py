@@ -57,6 +57,10 @@ def _validate_gpu_requirements(path: Path) -> None:
         "pydantic==2.10.6" in lines,
         "KGGen/DSPy local-vLLM path requires the tested pydantic==2.10.6 pin",
     )
+    _require(
+        "outlines==0.0.46" in lines,
+        "g1.1 requires the tested outlines==0.0.46 structured-decoding backend pin",
+    )
 
 
 def _validate_preflight_requirements(path: Path, repo_root: Path) -> None:
@@ -100,6 +104,13 @@ def validate_job(path: Path, repo_root: Path) -> dict:
     _require(isinstance(requirements, str), "manual Job requires env.python.requirements-file")
     requirements_path = repo_root / requirements
     _validate_requirements(requirements_path)
+
+    if "outlines==0.0.46" in requirements_path.read_text(encoding="utf-8"):
+        shim = repo_root / "datasphere" / "runtime_shims" / "pyairports" / "airports.py"
+        _require(
+            shim.is_file(),
+            "Outlines requires the checked-in pyairports runtime shim; do not submit without it",
+        )
 
     lowered = body.lower()
     _require("huggingface-cli download" not in lowered, "GPU/CPU Job must not download model weights")

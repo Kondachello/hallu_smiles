@@ -29,9 +29,11 @@ KGGEN_CLUSTER_MAX_ITEMS="${KGGEN_CLUSTER_MAX_ITEMS:-}"
 # chunk/response thread pools produced a local-vLLM deadlock and hours of idle
 # V100 time.  The Job is intentionally serial; vLLM remains the only GPU work.
 KGGEN_CONCURRENCY="${KGGEN_CONCURRENCY:-1}"
-# outlines imports the broken pyairports 0.0.1 distribution on this runtime.
-# vLLM 0.6.3 supports this installed backend for JSON-guided KGGen responses.
-GUIDED_DECODING_BACKEND="${GUIDED_DECODING_BACKEND:-lm-format-enforcer}"
+# lm-format-enforcer 0.10.6 accepts a simple JSON schema but lets a nested
+# KGGen Relation schema escape its root object on vLLM 0.6.3.  Outlines keeps
+# the complete Pydantic schema constrained.  Its broken pyairports dependency
+# is supplied by the checked-in JSON-only runtime shim below.
+GUIDED_DECODING_BACKEND="${GUIDED_DECODING_BACKEND:-outlines}"
 # LiteLLM otherwise fetches an optional model-cost map from GitHub on its first
 # import. Jobs need no cost pricing to call localhost, and an unreachable
 # external endpoint must never block KGGen before the first real request.
@@ -66,6 +68,7 @@ mkdir -p "$RUN_ROOT"
 export HF_HOME="${HF_HOME:-$RUN_ROOT/hf-home}"
 export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME:-$RUN_ROOT/sentence-transformers}"
 export DSPY_CACHEDIR="${DSPY_CACHEDIR:-$RUN_ROOT/dspy-cache}"
+export PYTHONPATH="$ROOT/datasphere/runtime_shims${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$HF_HOME" "$SENTENCE_TRANSFORMERS_HOME" "$DSPY_CACHEDIR"
 available_kb="$(df -Pk "$RUN_ROOT" | awk 'NR==2 {print $4}')"
 required_kb=$((MIN_WORK_FREE_GB * 1024 * 1024))
@@ -83,6 +86,8 @@ command -v nvidia-smi >/dev/null || { echo "nvidia-smi is absent; this must run 
   --report "$RUN_ROOT/gpu-runtime.json"
 "$PYTHON_BIN" "$ROOT/scripts/patch_datasphere_lmfe_bool_schema.py" \
   --report "$RUN_ROOT/lmfe-bool-schema-patch.json"
+"$PYTHON_BIN" "$ROOT/scripts/check_datasphere_outlines_backend.py" \
+  --report "$RUN_ROOT/outlines-backend.json"
 "$PYTHON_BIN" - "$RUN_ROOT/shared-assets-preflight.json" "$RUN_ROOT/model_revision.txt" <<'PY'
 import json
 import sys

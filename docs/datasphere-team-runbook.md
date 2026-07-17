@@ -151,7 +151,7 @@ vLLM не нужна скачиваемая LiteLLM-карта цен, а вне
 версия использует PyTorch 2.4/CUDA 12.1, совместимые с CUDA 12.2 driver `g1.1`.
 Не заменяйте pin на диапазон версий: новый vLLM может потребовать более свежий
 driver. Также сохраняйте точный `transformers==4.45.2`: эта версия проверена
-вместе с `lm-format-enforcer==0.10.6`. Плавающий диапазон поставил 4.57, где
+вместе с `lm-format-enforcer==0.10.6` и `outlines==0.0.46`. Плавающий диапазон поставил 4.57, где
 удален `LogitsWarper`, и первый completion завершался HTTP 500. Transformers
 5.x дополнительно требует API более нового PyTorch и ломает импорт vLLM 0.6.3
 ещё до healthcheck. До загрузки модели Job записывает `gpu-runtime.json` с CUDA smoke-check,
@@ -175,30 +175,42 @@ V100 32 GB. Для KGGen в Job обязательно выставляется 
 180 секундами, поэтому несовместимость не превратится в три часа оплачиваемого
 простоя.
 
-Для vLLM 0.6.3 Job задаёт `--guided-decoding-backend lm-format-enforcer` и
-pin `lm-format-enforcer==0.10.6`, который строго требует vLLM 0.6.3. Перед
-стартом server `patch_datasphere_lmfe_bool_schema.py` применяет только
-upstream five-line fix для parsing `additionalProperties: false` в closed JSON
-Schema, которую передаёт native `guided_json`; он работает лишь в ephemeral
-Job venv и пишет audit report. Default `outlines` в этой среде импортирует
-`pyairports==0.0.1`, но этот distribution не содержит Python-модуль;
-результат — HTTP 500 ещё на первом completion. Не меняйте backend обратно без
-живого smoke-check на целевой конфигурации.
+Для vLLM 0.6.3 Job задаёт `--guided-decoding-backend outlines`: он выполняет
+constrained decoding по **тому же полному Pydantic JSON Schema** KGGen,
+включая вложенный `relations: list[Relation]`. Это принципиально: у
+`lm-format-enforcer==0.10.6` после успешного простого JSON probe реальная
+relation extraction вернула bare `{"subject", "predicate", "object"}` вместо
+корневого `{"relations": [...]}`. Эту ошибку не исправляют постобработкой,
+не отключают typed extraction и не отключают KGGen LLM clustering.
+
+Outlines 0.0.46 по ошибке зависит от `pyairports==0.0.1`, а этот distribution
+не содержит импортируемого Python-модуля. Job до старта vLLM добавляет
+`datasphere/runtime_shims` в `PYTHONPATH`; shim поставляет только пустой
+неиспользуемый список аэропортов, чтобы импорт Outlines работал. CPU preflight
+обязан записать `outlines-backend.json` со `status: ready`, импортировав
+`outlines.integrations.vllm.JSONLogitsProcessor` через тот же shim. Не удаляйте
+shim и не меняйте backend без целевого smoke-check.
+
+`lm-format-enforcer==0.10.6` остаётся pinned dependency vLLM 0.6.3. Перед
+стартом server `patch_datasphere_lmfe_bool_schema.py` применяет только upstream
+five-line fix для parsing `additionalProperties: false` в ephemeral Job venv и
+пишет audit report. Это сохраняет совместимость pinned runtime, но не
+подменяет выбранный Outlines backend.
 
 Поскольку `lm-format-enforcer==0.10.6` импортирует `LogitsWarper`, нельзя
 оставлять диапазон версий Transformers: на практике resolver выбрал 4.57, где
 этот символ удален. Обязательная проверенная тройка —
 `vllm==0.6.3.post1`, `lm-format-enforcer==0.10.6`,
-`transformers==4.45.2`.
+`outlines==0.0.46`, `transformers==4.45.2`.
 
 CPU preflight теперь не только проверяет ready-marker, SHA и размеры shared
 assets. Он устанавливает **тот же exact requirements набор**, что GPU Job,
 импортирует `vllm`, `transformers`, `lmformatenforcer`, его Transformers
-adapter, `litellm`, `dspy` и `kg_gen`, а затем сохраняет
-`runtime-dependencies.json`. Это не загружает 8B
+adapter, `litellm`, `dspy`, `kg_gen` и Outlines с репозиторным pyairports shim,
+а затем сохраняет `runtime-dependencies.json` и `outlines-backend.json`. Это не загружает 8B
 веса и не резервирует GPU, но ловит resolver/import-конфликты до дорогого
-запуска. GPU Job разрешён только когда и `preflight.json`, и
-`runtime-dependencies.json` имеют `status: ready`.
+запуска. GPU Job разрешён только когда `preflight.json`,
+`runtime-dependencies.json` и `outlines-backend.json` имеют `status: ready`.
 
 Для локального vLLM Job дополнительно принудительно задаёт
 `llm.concurrency: 1` и `extraction.serial_chunking: true`. KGGen 0.4 создаёт
