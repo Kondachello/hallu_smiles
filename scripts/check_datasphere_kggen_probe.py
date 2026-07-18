@@ -70,7 +70,10 @@ def run_probe(
     from importlib import metadata
 
     from kg_gen import KGGen
-    from src.dspy_adapter import XGRAMMAR_STRICT_REQUEST_BACKEND
+    from src.dspy_adapter import (
+        STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+        XGRAMMAR_STRICT_REQUEST_BACKEND,
+    )
 
     if structured_output_transport == "response_format":
         request_backend = request_backend or XGRAMMAR_STRICT_REQUEST_BACKEND
@@ -140,6 +143,7 @@ def run_probe(
         "max_tokens": max_tokens,
         "cluster": cluster,
         "structured_output_transport": structured_output_transport,
+        "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
         "guided_decoding_request_backend": request_backend,
         "xgrammar_any_whitespace": (
             False if structured_output_transport == "response_format" else None

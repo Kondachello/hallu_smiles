@@ -29,8 +29,11 @@
   `local_files_only=True`, `HF_HUB_OFFLINE=1` и `CUDA_VISIBLE_DEVICES=""`.
 - KGGen LLM-clustering остаётся включённой. Full 20-QA pilot не ограничивает
   число элементов кластеризации и не подменяет её эвристикой.
-- Штатный `KGGen.cluster(..., context=...)` получает только текущий извлекаемый
-  текст; `G_c`, `G_q` и `G_a` не смешиваются. Mappings сохраняются в
+- Штатный `KGGen.cluster(..., context=...)` получает strict-equivalence policy и
+  только текущий извлекаемый текст; `G_c`, `G_q` и `G_a` не смешиваются.
+  Official control flow не заменяется, но versioned v4 schema contract связывает
+  relation endpoints, cluster candidates и representative с runtime inputs;
+  никаких parser repair/post-hoc graph edits нет. Mappings сохраняются в
   `cache/cluster-audit.jsonl`.
 - Structured output передаётся только нативным OpenAI-compatible полем
   `response_format` типа `json_schema`; сервер использует XGrammar. Bare
@@ -149,7 +152,7 @@ Preflight успешен только при terminal `SUCCESS` и наличи�
   `model_bytes_checked`;
 - `runtime-dependencies.json` со `status: ready`;
 - `preflight-schemas.json`, успешно скомпилированного XGrammar для relation,
-  verifier и clustering enum schemas;
+  verifier и всех input-dependent clustering schemas;
 - `runtime-manifest.json`, `server.freeze.txt`, `client.freeze.txt`;
 - `gate_metadata.json`, связывающий exact source commit, Docker ID, model
   revision и runtime fingerprint;

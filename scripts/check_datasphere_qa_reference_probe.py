@@ -29,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.dspy_adapter import STRUCTURED_OUTPUT_PROTOCOL_VERSION
+
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,6 +131,7 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
             "guided_decoding_request_backend": (
                 extractor.structured_output.request_backend
             ),
+            "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
             "xgrammar_any_whitespace": False,
         }
 
@@ -244,6 +247,7 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
         "guided_decoding_request_backend": (
             extractor.structured_output.request_backend
         ),
+        "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
         "xgrammar_any_whitespace": False,
         "elapsed_seconds": round(time.perf_counter() - started, 3),
     }

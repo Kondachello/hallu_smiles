@@ -102,7 +102,7 @@ def evaluation_runtime_metadata(cfg: Any) -> dict[str, Any]:
         "cluster_context_mode": config_value(
             extraction, "cluster_context_mode", "empty"
         ),
-        "cluster_context_protocol": "kggen-native-source-text-v1",
+        "cluster_context_protocol": "kggen-native-strict-equivalence-v2",
         "embedding_model": config_value(matching, "embedding_model"),
         "embedding_model_revision": config_value(
             matching, "embedding_model_revision"

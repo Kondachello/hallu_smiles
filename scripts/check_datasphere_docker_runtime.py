@@ -165,35 +165,131 @@ def main() -> None:
     args = parser.parse_args()
 
     from scripts.check_datasphere_vllm_guided_json import kggen_fallback_relation_schema
+    import dspy
+    from kg_gen.steps._3_cluster_graph import (
+        Cluster,
+        choose_rep,
+        get_check_existing_clusters_sig,
+        get_extract_cluster_sig,
+        get_validate_cluster_sig,
+    )
     from src.dspy_adapter import (
+        STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+        StructuredOutputSchemaError,
         XGRAMMAR_STRICT_REQUEST_BACKEND,
+        dspy_output_schema,
+        specialize_dspy_signature,
         validate_json_document,
     )
     from src.verifier import VERDICT_SCHEMA
 
     relation_schema = kggen_fallback_relation_schema()
-    enum_schema = {
-        "type": "object",
-        "properties": {
-            "clusters": {
-                "type": "array",
-                "items": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["Swiss chard", "chard"]},
-                },
-            }
-        },
-        "required": ["clusters"],
-        "additionalProperties": False,
-    }
+    empty_relation_schema = kggen_fallback_relation_schema([])
+    empty_relation_array = empty_relation_schema["properties"]["relations"]
+    if (
+        empty_relation_array.get("minItems") != 0
+        or empty_relation_array.get("maxItems") != 0
+    ):
+        raise RuntimeError("empty entity input does not force an empty relation array")
+    validate_json_document({"relations": []}, empty_relation_schema)
     validate_json_document({"relations": []}, relation_schema)
+    relation_model = next(iter(relation_schema.get("$defs", {}).values()))
+    endpoint_enum = relation_model["properties"]["subject"].get("enum")
+    if not endpoint_enum or endpoint_enum != relation_model["properties"]["object"].get("enum"):
+        raise RuntimeError("runtime relation endpoints are not bound to one entity enum")
+    valid_relation = {
+        "relations": [
+            {
+                "subject": endpoint_enum[0],
+                "predicate": "is distinct from",
+                "object": endpoint_enum[-1],
+            }
+        ]
+    }
+    validate_json_document(valid_relation, relation_schema)
+    try:
+        validate_json_document(
+            {
+                "relations": [
+                    {
+                        "subject": "out-of-contract endpoint",
+                        "predicate": "is distinct from",
+                        "object": endpoint_enum[0],
+                    }
+                ]
+            },
+            relation_schema,
+        )
+    except StructuredOutputSchemaError:
+        pass
+    else:
+        raise RuntimeError("relation endpoint enum accepted an out-of-contract value")
+
+    cluster_candidates = {
+        "Swiss chard",
+        "chard",
+        "spinach",
+        "Beta vulgaris subsp. maritima",
+        "sea beet",
+        "pizzoccheri",
+        'quoted "entity"',
+        "München",
+        "line\nbreak",
+        "is cultivated descendants of",
+        "is similar to",
+        "is extremely perishable",
+    }
+    current_candidates = cluster_candidates - {"spinach", "pizzoccheri"}
+    extract_cluster, _ = get_extract_cluster_sig(cluster_candidates)
+    extract_cluster_schema = dspy_output_schema(
+        specialize_dspy_signature(
+            extract_cluster,
+            {"items": current_candidates},
+        )
+    )
+    validate_cluster, _ = get_validate_cluster_sig(current_candidates)
+    validate_cluster_schema = dspy_output_schema(
+        specialize_dspy_signature(
+            validate_cluster,
+            {"cluster": current_candidates},
+        )
+    )
+    representative_schema = dspy_output_schema(
+        specialize_dspy_signature(
+            choose_rep.signature,
+            {"cluster": current_candidates},
+        )
+    )
+    existing_clusters = [
+        Cluster(representative="Swiss chard", members={"Swiss chard", "chard"}),
+        Cluster(representative="sea beet", members={"sea beet"}),
+    ]
+    check_existing = get_check_existing_clusters_sig(
+        {"München", 'quoted "entity"'}, existing_clusters
+    )
+    check_existing_schema = dspy_output_schema(
+        specialize_dspy_signature(
+            dspy.ChainOfThought(check_existing).predict.signature,
+            {
+                "items": ["München", 'quoted "entity"'],
+                "clusters": existing_clusters,
+            },
+        )
+    )
     validate_json_document({"verdict": "unknown"}, VERDICT_SCHEMA)
-    validate_json_document({"clusters": [["Swiss chard", "chard"]]}, enum_schema)
     report_path = Path(args.report)
     schemas_path = report_path.with_name("preflight-schemas.json")
     _atomic_json(
         schemas_path,
-        {"relations": relation_schema, "verifier": VERDICT_SCHEMA, "clustering_enum": enum_schema},
+        {
+            "relations": relation_schema,
+            "relations_empty_entities": empty_relation_schema,
+            "verifier": VERDICT_SCHEMA,
+            "cluster_extract": extract_cluster_schema,
+            "cluster_validate": validate_cluster_schema,
+            "cluster_representative": representative_schema,
+            "cluster_existing_assignment": check_existing_schema,
+        },
     )
 
     server = _inspect(
@@ -238,12 +334,14 @@ def main() -> None:
         "client": client,
         "native_build_toolchain": native_build_toolchain,
         "xgrammar_contract": xgrammar_contract,
+        "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
         "schemas": str(schemas_path),
         "checks": [
             "split server/client dependency imports",
             "exact CUDA 11.8 server and CPU-only client PyTorch builds",
             "gcc and Python development headers for XGrammar/Triton JIT",
-            "XGrammar bounded-whitespace compilation of relation, verifier and enum schemas",
+            "XGrammar bounded-whitespace compilation of relation, verifier and all dynamic KGGen clustering schemas",
+            "runtime-bound relation endpoints and current-item clustering contracts",
             "offline CPU SBERT embedding",
             "runtime source commit and embedded asset identity",
         ],

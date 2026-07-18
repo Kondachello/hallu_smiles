@@ -72,7 +72,23 @@ class ClusteringCollapseError(ExtractionError):
     """KGGen clustering discarded more of a probe graph than allowed."""
 
 
-CLUSTER_CONTEXT_PROTOCOL = "kggen-native-source-text-v1"
+CLUSTER_CONTEXT_PROTOCOL = "kggen-native-strict-equivalence-v2"
+
+CLUSTER_EQUIVALENCE_POLICY = """
+
+Strict clustering contract:
+- A cluster contains only surface variants that denote the same entity, or
+  relation labels with the same truth conditions. Aliases, spelling/case
+  variants, inflections, and direct paraphrases may be merged.
+- Topical relatedness, co-occurrence, a shared subject/object, comparison,
+  class membership, part-whole relations, and causal association are not
+  equivalence. Keep such items in separate clusters.
+- For example, "Paris" and "France" are related but are not the same entity;
+  "was born in" and "won an award" can share a subject but are not the same
+  relation.
+- When no two candidates are genuinely equivalent, an empty proposed cluster
+  is the correct answer. When uncertain, keep candidates separate.
+"""
 
 
 # --------------------------------------------------------------------------------------
@@ -295,8 +311,8 @@ class KGExtractor:
     # -- cache ----------------------------------------------------------------
     def _cache_key(self, text: str) -> str:
         params = {
-            "v": 9,
-            "extractor_protocol": "kggen-0.4-strict-cache-v3-grounded-clustering",
+            "v": 10,
+            "extractor_protocol": "kggen-0.4-strict-cache-v4-runtime-contracts",
             "backend": self.backend_fingerprint,
             "llm": llm_runtime_fingerprint(self.cfg),
             "api_base": config_value(self.cfg.llm, "api_base"),
@@ -415,7 +431,7 @@ class KGExtractor:
         """Build KGGen's documented clustering context without role leakage."""
         if self.cluster_context_mode == "empty":
             return ""
-        return "\n\nSource text:\n" + source_text
+        return CLUSTER_EQUIVALENCE_POLICY + "\nSource evidence:\n" + source_text
 
     @staticmethod
     def _cluster_map(value: Any) -> dict[str, list[str]] | None:
@@ -451,6 +467,7 @@ class KGExtractor:
             return {
                 "available": False,
                 "representatives_match_clustered_items": False,
+                "representatives_are_members": False,
                 "members_cover_raw_items": False,
                 "members_are_disjoint": False,
                 "duplicate_members": [],
@@ -462,6 +479,10 @@ class KGExtractor:
         checks = {
             "available": True,
             "representatives_match_clustered_items": set(clusters) == clustered_items,
+            "representatives_are_members": all(
+                representative in cluster_members
+                for representative, cluster_members in clusters.items()
+            ),
             "members_cover_raw_items": set(members) == raw_items,
             "members_are_disjoint": not duplicate_members,
             "duplicate_members": duplicate_members,
@@ -594,6 +615,7 @@ class KGExtractor:
                 for name in (
                     "available",
                     "representatives_match_clustered_items",
+                    "representatives_are_members",
                     "members_cover_raw_items",
                     "members_are_disjoint",
                 )

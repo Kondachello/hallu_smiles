@@ -37,13 +37,15 @@ KGGEN_CLUSTER_MAX_ITEMS="${KGGEN_CLUSTER_MAX_ITEMS:-}"
 # V100 time.  The Job is intentionally serial; vLLM remains the only GPU work.
 KGGEN_CONCURRENCY="${KGGEN_CONCURRENCY:-1}"
 CLUSTER_CONTEXT_MODE="source_text"
-CLUSTER_CONTEXT_PROTOCOL="kggen-native-source-text-v1"
+CLUSTER_CONTEXT_PROTOCOL="kggen-native-strict-equivalence-v2"
 # vLLM 0.8.5 accepts only the bare backend enum at the server CLI. Request-level
 # options disable XGrammar's unbounded syntactic-whitespace loops and forbid
 # fallback; neither option changes the JSON Schema or its accepted documents.
 STRUCTURED_OUTPUT_BACKEND="xgrammar"
 GUIDED_DECODING_BACKEND="xgrammar"
 STRUCTURED_OUTPUT_REQUEST_BACKEND="xgrammar:disable-any-whitespace,no-fallback"
+STRUCTURED_OUTPUT_PROTOCOL="strict-response-format-v4-xgrammar-runtime-input-contracts"
+export HALLU_STRUCTURED_OUTPUT_PROTOCOL="$STRUCTURED_OUTPUT_PROTOCOL"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 # LiteLLM otherwise fetches an optional model-cost map from GitHub on its first
 # import. Jobs need no cost pricing to call localhost, and an unreachable
@@ -143,6 +145,7 @@ RUNTIME_FINGERPRINT="$("$CLIENT_PYTHON" - \
   "$MODEL_REVISION" "$KGGEN_MAX_TOKENS" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" <<'PY'
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -168,6 +171,7 @@ server_launch = {
     "guided_decoding_backend": sys.argv[9],
     "structured_output_transport": "response_format",
     "structured_output_backend": sys.argv[10],
+    "structured_output_protocol": os.environ["HALLU_STRUCTURED_OUTPUT_PROTOCOL"],
     "gpu_memory_utilization": sys.argv[11],
     "max_num_seqs": 1,
     "enforce_eager": True,
@@ -179,7 +183,7 @@ server_launch = {
     "guided_decoding_request_backend": sys.argv[15],
     "xgrammar_any_whitespace": False,
     "cluster_context_mode": "source_text",
-    "cluster_context_protocol": "kggen-native-source-text-v1",
+    "cluster_context_protocol": "kggen-native-strict-equivalence-v2",
 }
 canonical = json.dumps(server_launch, sort_keys=True, separators=(",", ":"))
 generation_fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -195,9 +199,10 @@ identity = {
     "runtime_fingerprint": runtime_fingerprint,
     "server_launch": server_launch,
     "guided_decoding_request_backend": sys.argv[15],
+    "structured_output_protocol": os.environ["HALLU_STRUCTURED_OUTPUT_PROTOCOL"],
     "xgrammar_any_whitespace": False,
     "cluster_context_mode": "source_text",
-    "cluster_context_protocol": "kggen-native-source-text-v1",
+    "cluster_context_protocol": "kggen-native-strict-equivalence-v2",
 }
 Path(sys.argv[2]).write_text(
     json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -227,6 +232,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "server_launch": identity["server_launch"],
     "structured_output_transport": "response_format",
     "structured_output_backend": "xgrammar",
+    "structured_output_protocol": identity["structured_output_protocol"],
     "guided_decoding_request_backend": identity[
         "guided_decoding_request_backend"
     ],
@@ -422,6 +428,7 @@ if [[ -n "$QA_PILOT_LIMIT" ]]; then
   end_epoch="$(date +%s)"
   "$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$QA_PILOT_LIMIT" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" "$CLUSTER_CONTEXT_MODE" "$CLUSTER_CONTEXT_PROTOCOL" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -444,6 +451,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "source_commit": sys.argv[12],
     "structured_output_transport": "response_format",
     "structured_output_backend": "xgrammar",
+    "structured_output_protocol": os.environ["HALLU_STRUCTURED_OUTPUT_PROTOCOL"],
     "guided_decoding_backend": sys.argv[13],
     "guided_decoding_request_backend": sys.argv[14],
     "xgrammar_any_whitespace": False,
@@ -490,6 +498,7 @@ end_epoch="$(date +%s)"
 
 "$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" "$CLUSTER_CONTEXT_MODE" "$CLUSTER_CONTEXT_PROTOCOL" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -510,6 +519,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "source_commit": sys.argv[11],
     "structured_output_transport": "response_format",
     "structured_output_backend": "xgrammar",
+    "structured_output_protocol": os.environ["HALLU_STRUCTURED_OUTPUT_PROTOCOL"],
     "guided_decoding_backend": sys.argv[12],
     "guided_decoding_request_backend": sys.argv[13],
     "xgrammar_any_whitespace": False,

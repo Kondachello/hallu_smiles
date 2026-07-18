@@ -24,7 +24,8 @@ XGRAMMAR_STRICT_REQUEST_BACKEND = (
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CLUSTER_CONTEXT_MODE = "source_text"
-CLUSTER_CONTEXT_PROTOCOL = "kggen-native-source-text-v1"
+CLUSTER_CONTEXT_PROTOCOL = "kggen-native-strict-equivalence-v2"
+STRUCTURED_OUTPUT_PROTOCOL = "strict-response-format-v4-xgrammar-runtime-input-contracts"
 
 
 class GateArtifact:
@@ -85,6 +86,11 @@ def _validate_preflight(
     _expect(gate.get("model_id"), model_id, "preflight model")
     _expect(gate.get("runtime_protocol"), RUNTIME_PROTOCOL, "preflight runtime protocol")
     _expect(runtime.get("status"), "ready", "runtime report status")
+    _expect(
+        runtime.get("structured_output_protocol"),
+        STRUCTURED_OUTPUT_PROTOCOL,
+        "preflight structured-output protocol",
+    )
     xgrammar_contract = runtime.get("xgrammar_contract") or {}
     _expect(
         xgrammar_contract.get("request_backend"),
@@ -176,6 +182,11 @@ def _validate_cluster_probe(
     _expect(metadata.get("model_id"), model_id, "cluster model")
     _expect(metadata.get("guided_decoding_backend"), "xgrammar", "server backend")
     _expect(
+        metadata.get("structured_output_protocol"),
+        STRUCTURED_OUTPUT_PROTOCOL,
+        "cluster structured-output protocol",
+    )
+    _expect(
         metadata.get("guided_decoding_request_backend"),
         XGRAMMAR_STRICT_REQUEST_BACKEND,
         "request backend",
@@ -191,6 +202,11 @@ def _validate_cluster_probe(
     _expect(identity.get("datasphere_docker_image_id"), image_id, "runtime identity image")
     _expect(identity.get("runtime_protocol"), RUNTIME_PROTOCOL, "runtime identity protocol")
     _expect(
+        identity.get("structured_output_protocol"),
+        STRUCTURED_OUTPUT_PROTOCOL,
+        "runtime identity structured-output protocol",
+    )
+    _expect(
         identity.get("guided_decoding_request_backend"),
         XGRAMMAR_STRICT_REQUEST_BACKEND,
         "runtime identity request backend",
@@ -199,6 +215,11 @@ def _validate_cluster_probe(
         (identity.get("server_launch") or {}).get("guided_decoding_request_backend"),
         XGRAMMAR_STRICT_REQUEST_BACKEND,
         "runtime launch request backend",
+    )
+    _expect(
+        (identity.get("server_launch") or {}).get("structured_output_protocol"),
+        STRUCTURED_OUTPUT_PROTOCOL,
+        "runtime launch structured-output protocol",
     )
     _expect(
         (identity.get("server_launch") or {}).get("xgrammar_any_whitespace"),
@@ -237,6 +258,11 @@ def _validate_cluster_probe(
     ):
         report = artifact.json(report_name)
         _expect(report.get("status"), "ready", f"{report_name} status")
+        _expect(
+            report.get("structured_output_protocol"),
+            STRUCTURED_OUTPUT_PROTOCOL,
+            f"{report_name} structured-output protocol",
+        )
         _expect(
             report.get("guided_decoding_request_backend"),
             XGRAMMAR_STRICT_REQUEST_BACKEND,
@@ -360,6 +386,14 @@ def _validate_cluster_probe(
             )
         ):
             raise ValueError(f"graph cache {cache_key} is not canonical")
+        entity_set = set(entities)
+        if any(
+            relation[0] not in entity_set or relation[2] not in entity_set
+            for relation in relations
+        ):
+            raise ValueError(
+                f"graph cache {cache_key} contains a relation endpoint outside entities"
+            )
         canonical = json.dumps(
             graph, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
@@ -392,6 +426,11 @@ def _validate_cluster_probe(
                 checks.get("representatives_match_clustered_items"),
                 True,
                 f"cluster audit {index} {label} representatives",
+            )
+            _expect(
+                checks.get("representatives_are_members"),
+                True,
+                f"cluster audit {index} {label} representative membership",
             )
             _expect(checks.get("members_cover_raw_items"), True, f"cluster audit {index} {label} coverage")
             _expect(checks.get("members_are_disjoint"), True, f"cluster audit {index} {label} disjointness")

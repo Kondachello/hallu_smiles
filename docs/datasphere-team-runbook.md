@@ -47,8 +47,9 @@ fingerprints. Job не считается воспроизводимой, есл
 - Клиент запускается с `CUDA_VISIBLE_DEVICES=""`; GPU принадлежит только vLLM.
 - KGGen extraction и official LLM-clustering выполняются последовательно,
   concurrency = 1. Full pilot не ограничивает cluster items.
-- Official `KGGen.cluster` получает штатный `context`: только тот текст,
-  из которого сейчас строится соответствующий `G_c`, `G_q` или `G_a`.
+- Official `KGGen.cluster` получает штатный `context`: фиксированный strict-equivalence
+  policy и только тот текст, из которого сейчас строится соответствующий `G_c`, `G_q`
+  или `G_a`.
 - Strict/support используют один manifest, KG cache и verifier cache.
 - Tuning выполняется только на 16 train; test из четырёх строк оценивается один
   раз после заморозки параметров.
@@ -220,8 +221,8 @@ bash scripts/submit_datasphere_job.sh \
 
 - shared model ready marker, revision, size и RAGTruth;
 - импорты и exact versions отдельно в server/client environments;
-- компиляцию XGrammar для closed relation schema, verifier schema и enum
-  clustering schema;
+- компиляцию XGrammar для closed relation/verifier schemas и всех реальных
+  input-dependent KGGen clustering schemas;
 - local JSON Schema validation;
 - offline CPU S-BERT encode с exact snapshot;
 - соответствие source commit и embedding identity runtime manifest.
@@ -261,6 +262,23 @@ Schema/parse validation error считается детерминированн�
 fail-fast без повторного LLM-вызова или parser repair. Повторяются только
 ограниченные по числу transient timeout/connection/5xx/429 ошибки. Нельзя добавлять fallback на unconstrained JSON, оборачивать
 bare triple или отключать official LLM-clustering.
+
+Для pinned KGGen `0.4.0` действует versioned compatibility contract
+`strict-response-format-v4-xgrammar-runtime-input-contracts`. Он не заменяет
+`KGGen.cluster` и не меняет его LLM control flow, но делает заявленные
+динамические ограничения исполнимыми в XGrammar и в независимом parser check:
+
+- `Relation.subject/object` принадлежат текущему `entities`;
+- `ExtractCluster` и `ValidateCluster` возвращают только текущие кандидаты;
+- `ChooseRepresentative` выбирает member текущего validated cluster;
+- `CheckExistingClusters` возвращает ровно по одному existing representative
+  либо `null` на каждый item.
+
+Последнее правило для representative сознательно усиливает upstream «ideally»
+до `MUST`: иначе одинаковый свободный label для двух кластеров перезаписывает
+один из них в штатном словаре KGGen. Никакого post-hoc исправления ответа или
+графа нет. Clustering context дополнительно формулирует строгую эквивалентность:
+тематическая связь, co-occurrence и общий endpoint не являются синонимией.
 
 ## Gate 2: exact probes и три QA
 

@@ -175,7 +175,10 @@ The server receives the exact closed JSON Schema through native OpenAI
 disabled. Before any three-QA extraction, the runner checks the real KGGen relation schema once, the official KGGen
 typed-output plus LLM-clustering path, the support verifier schema, and the first selected
 RAGTruth reference graph. Official KGGen clustering receives its documented `context` argument:
-the exact text currently being clustered, separately for `G_c`, `G_q`, and `G_a`. Every live
+the exact text currently being clustered plus a fixed strict-equivalence policy, separately for
+`G_c`, `G_q`, and `G_a`. The policy permits aliases, surface variants and truth-conditionally
+equivalent relation labels, but explicitly rejects mere co-occurrence, topical relatedness or a
+shared endpoint as evidence of equivalence. Every live
 cluster pass records raw/clustered graphs and complete mappings in `cache/cluster-audit.jsonl`.
 The full Job then runs strict and support on one manifest, stops vLLM,
 and repeats both runs with `--cache-only`; missing cache entries, any live call, changed cache
@@ -216,7 +219,7 @@ gate criteria, the shared-storage contract, and monitoring.
 - **No test leakage:** α, θ, and the τ sweep are computed on the **train split only**; the test
   split is scored exactly once in `evaluate`.
 
-## Adaptation to the real `kg-gen` API (per spec §3 instruction — no fork / no monkey-patch)
+## Adaptation to the real `kg-gen` API (per spec §3 instruction)
 
 The installed `kg-gen` is used directly; two details differ from the §3 snippet and are handled
 in `src/extract.py`:
@@ -225,10 +228,21 @@ in `src/extract.py`:
    which chunks → aggregates across chunks → runs one clustering pass internally — exactly the
    behavior §3 asks for. We therefore map `extraction.context_chunk_chars` → `chunk_size` instead
    of merging chunks by hand.
-2. **Grounded official clustering.** KGGen's native `context` parameter receives only the exact
-   text that produced the graph currently being clustered. This keeps `G_c`, `G_q`, and `G_a`
-   isolated while preventing label-only clustering decisions.
-3. **Graph object.** `graph.entities` (`set[str]`) and `graph.relations` (`set[(s,p,o)]`) are used
+2. **Grounded official clustering.** KGGen's native `context` parameter receives a versioned
+   strict-equivalence policy and only the exact text that produced the graph currently being
+   clustered. This keeps `G_c`, `G_q`, and `G_a` isolated while preventing label-only or
+   topic-only clustering decisions.
+3. **Input-dependent KGGen 0.4 contracts.** The official `KGGen.cluster` control flow and LLM
+   stages remain unchanged, but the strict DSPy/XGrammar adapter closes four released schemas
+   over each call's actual inputs: relation endpoints are current entities; proposed/validated
+   members are current candidates; a representative is a member of its validated cluster; and
+   existing-cluster assignments contain one existing representative-or-null per item. The last
+   representative rule strengthens KGGen's “ideally from the cluster” wording to a structural
+   invariant, preventing duplicate free-string representatives from silently overwriting a
+   cluster in KGGen's `{representative: members}` result. This is a versioned compatibility
+   constraint, not parser repair: the server must generate a valid value and no response or graph
+   is rewritten afterward.
+4. **Graph object.** `graph.entities` (`set[str]`) and `graph.relations` (`set[(s,p,o)]`) are used
    as documented; `.edges` and `*_clusters` are retained in the clustering audit.
 
 ## Matching (HalluGraph `match`/`align` adapted to KGGen's untyped strings)

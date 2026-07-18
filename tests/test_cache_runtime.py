@@ -10,7 +10,12 @@ import pytest
 from src.cache import CacheOnlyMissError, evaluation_runtime_metadata
 from src.data import Instance
 from src.dspy_adapter import StructuredOutputSchemaError
-from src.extract import ClusteringCollapseError, FakeKGGen, KGExtractor
+from src.extract import (
+    CLUSTER_EQUIVALENCE_POLICY,
+    ClusteringCollapseError,
+    FakeKGGen,
+    KGExtractor,
+)
 from src.matching import SBERTEmbedder
 from src.verifier import RelationVerifier
 
@@ -349,7 +354,8 @@ def test_clustering_retention_gate_reports_and_rejects_collapse(tmp_path, capsys
         )
 
     assert Backend.seen_context == (
-        "\n\nSource text:\nA source about six entities."
+        CLUSTER_EQUIVALENCE_POLICY
+        + "\nSource evidence:\nA source about six entities."
     )
 
     output = capsys.readouterr().out

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from src.extract import Graph, KGExtractor
+from src.extract import CLUSTER_EQUIVALENCE_POLICY, Graph, KGExtractor
 from src.matching import DictEmbedder
 from src.micro_qa_demo import (
     audit_micro_graphs,
@@ -108,7 +108,8 @@ def test_kg_extractor_keeps_kggen_clustering_and_native_chunking(tmp_path):
             "input_data": "a context that exceeds eight characters",
             "cluster": True,
             "context": (
-                "\n\nSource text:\n"
+                CLUSTER_EQUIVALENCE_POLICY
+                + "\nSource evidence:\n"
                 "a context that exceeds eight characters"
             ),
             "chunk_size": 8,
@@ -137,8 +138,8 @@ def test_kg_extractor_can_schedule_kggen_chunks_serially_for_local_vllm(tmp_path
 
         def cluster(self, graph, context=""):
             self.calls.append(("cluster", next(iter(graph.entities)), context))
-            clustered = RawGraph("cluster")
-            clustered.entity_clusters = {"cluster": {"aggregate"}}
+            clustered = RawGraph("aggregate")
+            clustered.entity_clusters = {"aggregate": {"aggregate"}}
             clustered.edge_clusters = {"rel": {"rel"}}
             return clustered
 
@@ -157,7 +158,7 @@ def test_kg_extractor_can_schedule_kggen_chunks_serially_for_local_vllm(tmp_path
     monkeypatch.setattr(extractor, "_split_text", lambda text, size: ["first", "second"])
     graph = extractor._call_backend("a context that exceeds eight characters")
 
-    assert graph.entities == {"cluster"}
+    assert graph.entities == {"aggregate"}
     assert backend.calls == [
         ("generate", {"input_data": "first", "cluster": False}),
         ("generate", {"input_data": "second", "cluster": False}),
@@ -165,7 +166,8 @@ def test_kg_extractor_can_schedule_kggen_chunks_serially_for_local_vllm(tmp_path
         (
             "cluster",
             "aggregate",
-            "\n\nSource text:\na context that exceeds eight characters",
+            CLUSTER_EQUIVALENCE_POLICY
+            + "\nSource evidence:\na context that exceeds eight characters",
         ),
     ]
 

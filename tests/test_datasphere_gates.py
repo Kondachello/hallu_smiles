@@ -22,7 +22,8 @@ PROTOCOL = "hallu-datasphere-vllm085-cu118-v1"
 IMAGE_FINGERPRINT = "c" * 64
 REQUEST_BACKEND = "xgrammar:disable-any-whitespace,no-fallback"
 CLUSTER_CONTEXT_MODE = "source_text"
-CLUSTER_CONTEXT_PROTOCOL = "kggen-native-source-text-v1"
+CLUSTER_CONTEXT_PROTOCOL = "kggen-native-strict-equivalence-v2"
+STRUCTURED_OUTPUT_PROTOCOL = "strict-response-format-v4-xgrammar-runtime-input-contracts"
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -47,6 +48,7 @@ def _preflight_tar(tmp_path: Path) -> Path:
         root / "runtime-dependencies.json",
         {
             "status": "ready",
+            "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL,
             "runtime_manifest": manifest,
             "xgrammar_contract": {
                 "request_backend": REQUEST_BACKEND,
@@ -104,6 +106,7 @@ def _cluster_tar(tmp_path: Path) -> Path:
         "model_revision": "mrev",
         "runtime_fingerprint": runtime_fingerprint,
         "guided_decoding_backend": "xgrammar",
+        "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL,
         "guided_decoding_request_backend": REQUEST_BACKEND,
         "xgrammar_any_whitespace": False,
         "cluster_context_mode": CLUSTER_CONTEXT_MODE,
@@ -116,10 +119,12 @@ def _cluster_tar(tmp_path: Path) -> Path:
         "image_runtime_fingerprint": IMAGE_FINGERPRINT,
         "runtime_fingerprint": runtime_fingerprint,
         "guided_decoding_request_backend": REQUEST_BACKEND,
+        "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL,
         "cluster_context_mode": CLUSTER_CONTEXT_MODE,
         "cluster_context_protocol": CLUSTER_CONTEXT_PROTOCOL,
         "server_launch": {
             "guided_decoding_request_backend": REQUEST_BACKEND,
+            "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL,
             "xgrammar_any_whitespace": False,
             "cluster_context_mode": CLUSTER_CONTEXT_MODE,
         },
@@ -141,6 +146,7 @@ def _cluster_tar(tmp_path: Path) -> Path:
         payload = {
             "status": "ready",
             "guided_decoding_request_backend": REQUEST_BACKEND,
+            "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL,
             "xgrammar_any_whitespace": False,
         }
         if name == "qa-reference-probe.json":
@@ -169,6 +175,7 @@ def _cluster_tar(tmp_path: Path) -> Path:
                         label: {
                             "available": True,
                             "representatives_match_clustered_items": True,
+                            "representatives_are_members": True,
                             "members_cover_raw_items": True,
                             "members_are_disjoint": True,
                         }

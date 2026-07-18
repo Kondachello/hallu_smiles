@@ -28,6 +28,7 @@ from src.dspy_adapter import (
     XGRAMMAR_STRICT_REQUEST_BACKEND,
     dspy_output_schema,
     json_schema_response_format,
+    specialize_dspy_signature,
     strict_json_schema_adapter,
     validate_json_document,
 )
@@ -127,17 +128,23 @@ def _relation_signature(entities: list[str]) -> Any:
 
 
 def kggen_fallback_relation_schema(entities: list[str] | None = None) -> dict[str, Any]:
-    """Expose the exact raw DSPy schema for offline contract tests/preflight."""
-    return dspy_output_schema(_relation_signature(entities or SWISS_ENTITIES))
+    """Expose the exact runtime-specialized schema for tests/preflight."""
+    runtime_entities = SWISS_ENTITIES if entities is None else entities
+    signature = specialize_dspy_signature(
+        _relation_signature(runtime_entities),
+        {"entities": runtime_entities},
+    )
+    return dspy_output_schema(signature)
 
 
 def _request_fixture(source_text: str, entities: list[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    signature = _relation_signature(entities)
+    inputs = {"source_text": source_text, "entities": entities}
+    signature = specialize_dspy_signature(_relation_signature(entities), inputs)
     schema = dspy_output_schema(signature)
     messages = strict_json_schema_adapter().format(
         signature=signature,
         demos=[],
-        inputs={"source_text": source_text, "entities": entities},
+        inputs=inputs,
     )
     return messages, schema
 

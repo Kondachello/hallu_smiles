@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.config import load_config
+from src.dspy_adapter import STRUCTURED_OUTPUT_PROTOCOL_VERSION
 from src.verifier import RelationVerifier, VERDICT_SCHEMA, select_evidence
 
 
@@ -58,6 +59,7 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
         "model": verifier.model,
         "transport": verifier.structured_output.transport,
         "backend": verifier.structured_output.backend,
+        "structured_output_protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
         "guided_decoding_request_backend": (
             verifier.structured_output.request_backend
         ),

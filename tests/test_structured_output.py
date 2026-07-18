@@ -14,9 +14,12 @@ from src.dspy_adapter import (
     install_dspy_completion_guard,
     is_retryable_llm_exception,
     json_schema_response_format,
+    dspy_output_schema,
+    specialize_dspy_signature,
     strict_json_loads,
     strict_json_schema_adapter,
     structured_output_settings,
+    validate_json_document,
 )
 
 
@@ -173,6 +176,220 @@ def test_strict_async_adapter_uses_the_same_one_call_contract(monkeypatch):
     }
 
 
+def test_runtime_relation_contract_binds_endpoints_to_current_entities():
+    from kg_gen.steps._2_get_relations import fallback_extraction_sig
+
+    entities = ["Swiss chard", "spinach"]
+    _, extract_relations = fallback_extraction_sig(
+        entities, is_conversation=False
+    )
+
+    signature = specialize_dspy_signature(
+        extract_relations,
+        {"entities": entities},
+    )
+    schema = dspy_output_schema(signature)
+    relation_schema = next(iter(schema["$defs"].values()))
+
+    assert relation_schema["properties"]["subject"]["enum"] == [
+        "Swiss chard",
+        "spinach",
+    ]
+    assert relation_schema["properties"]["object"]["enum"] == [
+        "Swiss chard",
+        "spinach",
+    ]
+    predicate_schema = relation_schema["properties"]["predicate"]
+    assert predicate_schema["type"] == "string"
+    assert "enum" not in predicate_schema
+
+
+def test_runtime_cluster_contracts_use_current_candidates_and_members():
+    import dspy
+    from kg_gen.steps._3_cluster_graph import (
+        Cluster,
+        choose_rep,
+        get_check_existing_clusters_sig,
+        get_extract_cluster_sig,
+        get_validate_cluster_sig,
+    )
+
+    extract_cluster, _ = get_extract_cluster_sig(
+        {"already-processed", "remaining-b", "remaining-a"}
+    )
+
+    cluster_schema = dspy_output_schema(
+        specialize_dspy_signature(
+            extract_cluster,
+            {"items": {"remaining-b", "remaining-a"}},
+        )
+    )
+    assert cluster_schema["properties"]["cluster"]["items"]["enum"] == [
+        "remaining-a",
+        "remaining-b",
+    ]
+
+    validate_cluster, _ = get_validate_cluster_sig(
+        {"Swiss chard", "chard", "unrelated"}
+    )
+
+    validation_schema = dspy_output_schema(
+        specialize_dspy_signature(
+            validate_cluster,
+            {"cluster": {"Swiss chard", "chard"}},
+        )
+    )
+    assert validation_schema["properties"]["validated_items"]["items"][
+        "enum"
+    ] == ["Swiss chard", "chard"]
+
+    representative_schema = dspy_output_schema(
+        specialize_dspy_signature(
+            choose_rep.signature,
+            {"cluster": {"Swiss chard", "chard"}},
+        )
+    )
+    assert representative_schema["properties"]["representative"]["enum"] == [
+        "Swiss chard",
+        "chard",
+    ]
+
+    existing_clusters = [Cluster(representative="existing", members={"old"})]
+    check_existing = get_check_existing_clusters_sig(
+        {"new-a", "new-b"}, existing_clusters
+    )
+    assignment_signature = dspy.ChainOfThought(check_existing).predict.signature
+
+    assignment_schema = dspy_output_schema(
+        specialize_dspy_signature(
+            assignment_signature,
+            {
+                "items": ["new-a", "new-b"],
+                "clusters": existing_clusters,
+            },
+        )
+    )
+    assignments = assignment_schema["properties"][
+        "cluster_reps_that_items_belong_to"
+    ]
+    assert assignments["minItems"] == assignments["maxItems"] == 2
+    assert assignments["items"]["anyOf"] == [
+        {"const": "existing", "type": "string"},
+        {"type": "null"},
+    ]
+    all_null = {"cluster_reps_that_items_belong_to": [None, None]}
+    if "reasoning" in assignment_schema["properties"]:
+        all_null["reasoning"] = "Neither item is equivalent to the cluster."
+    validate_json_document(all_null, assignment_schema)
+
+
+def test_strict_adapter_sends_and_parses_the_same_runtime_specialized_schema(
+    monkeypatch,
+):
+    from dspy.adapters.base import Adapter
+    from kg_gen.steps._2_get_relations import fallback_extraction_sig
+
+    entities = ["Swiss chard", "spinach"]
+    _, extract_relations = fallback_extraction_sig(
+        entities, is_conversation=False
+    )
+
+    captured = {}
+
+    def fake_call(self, lm, lm_kwargs, signature, demos, inputs):  # noqa: ARG001
+        captured["signature"] = signature
+        captured["schema"] = lm_kwargs["response_format"]["json_schema"]["schema"]
+        return [{"relations": []}]
+
+    monkeypatch.setattr(Adapter, "__call__", fake_call)
+    adapter = strict_json_schema_adapter()
+    result = adapter(object(), {}, extract_relations, [], {
+        "entities": entities
+    })
+
+    assert result == [{"relations": []}]
+    assert captured["schema"] == dspy_output_schema(captured["signature"])
+    relation_schema = next(iter(captured["schema"]["$defs"].values()))
+    assert relation_schema["properties"]["subject"]["enum"] == [
+        "Swiss chard",
+        "spinach",
+    ]
+    with pytest.raises(StructuredOutputSchemaError):
+        adapter.parse(
+            captured["signature"],
+            json.dumps({
+                "relations": [{
+                    "subject": "chard",
+                    "predicate": "is similar to",
+                    "object": "spinach",
+                }]
+            }),
+        )
+
+
+def test_runtime_contract_is_per_call_immutable_and_concurrency_safe():
+    from concurrent.futures import ThreadPoolExecutor
+    from kg_gen.steps._2_get_relations import fallback_extraction_sig
+
+    _, base_signature = fallback_extraction_sig(
+        ["placeholder-a", "placeholder-b"], is_conversation=False
+    )
+    base_before = dspy_output_schema(base_signature)
+
+    def schema_for(entities):
+        signature = specialize_dspy_signature(
+            base_signature, {"entities": entities}
+        )
+        return signature, dspy_output_schema(signature)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(schema_for, ["alpha", "beta"])
+        second_future = pool.submit(schema_for, ["gamma", "delta"])
+        first_signature, first_schema = first_future.result()
+        second_signature, second_schema = second_future.result()
+
+    def endpoint_enum(schema):
+        relation = next(iter(schema["$defs"].values()))
+        return relation["properties"]["subject"]["enum"]
+
+    assert endpoint_enum(first_schema) == ["alpha", "beta"]
+    assert endpoint_enum(second_schema) == ["delta", "gamma"]
+    assert first_signature is not second_signature
+    assert dspy_output_schema(base_signature) == base_before
+
+    first_schema["$defs"].clear()
+    assert endpoint_enum(dspy_output_schema(first_signature)) == ["alpha", "beta"]
+
+
+def test_runtime_contract_handles_empty_relations_and_rejects_empty_cluster_calls():
+    from kg_gen.steps._2_get_relations import fallback_extraction_sig
+    from kg_gen.steps._3_cluster_graph import get_extract_cluster_sig
+
+    _, relation_signature = fallback_extraction_sig([], is_conversation=False)
+    empty_relation_signature = specialize_dspy_signature(
+        relation_signature, {"entities": []}
+    )
+    relation_schema = dspy_output_schema(empty_relation_signature)
+    relation_array = relation_schema["properties"]["relations"]
+    assert relation_array["minItems"] == relation_array["maxItems"] == 0
+    validate_json_document({"relations": []}, relation_schema)
+    with pytest.raises(StructuredOutputSchemaError):
+        validate_json_document(
+            {
+                "relations": [{
+                    "subject": "invented",
+                    "predicate": "mentions",
+                    "object": "invented",
+                }]
+            },
+            relation_schema,
+        )
+
+    extract_cluster, _ = get_extract_cluster_sig({"original"})
+    with pytest.raises(StructuredOutputSchemaError, match="no current candidate"):
+        specialize_dspy_signature(extract_cluster, {"items": set()})
+
+
 def test_strict_parser_rejects_bare_relation_and_json_repair(monkeypatch):
     monkeypatch.setattr("src.dspy_adapter.dspy_output_schema", lambda signature: RELATION_SCHEMA)
     adapter = strict_json_schema_adapter()
@@ -284,6 +501,11 @@ def test_direct_probe_builds_exact_kggen_fallback_inputs_without_canonicalizing(
             return [{"role": "user", "content": "fixture"}]
 
     monkeypatch.setattr(probe, "_relation_signature", lambda entities: signature)
+    monkeypatch.setattr(
+        probe,
+        "specialize_dspy_signature",
+        lambda value, inputs: value,
+    )
     monkeypatch.setattr(probe, "dspy_output_schema", lambda value: RELATION_SCHEMA)
     monkeypatch.setattr(probe, "strict_json_schema_adapter", lambda: Adapter())
 

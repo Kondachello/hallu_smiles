@@ -19,10 +19,12 @@ from functools import wraps
 from copy import deepcopy
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, get_args, get_origin
 
 
-STRUCTURED_OUTPUT_PROTOCOL_VERSION = "strict-response-format-v3-xgrammar-bounded-whitespace"
+STRUCTURED_OUTPUT_PROTOCOL_VERSION = (
+    "strict-response-format-v4-xgrammar-runtime-input-contracts"
+)
 STRUCTURED_OUTPUT_TRANSPORTS = frozenset({"none", "response_format", "guided_json"})
 STRUCTURED_OUTPUT_BACKENDS = frozenset({"xgrammar", "guidance"})
 XGRAMMAR_STRICT_REQUEST_BACKEND = (
@@ -244,8 +246,8 @@ def validate_json_document(instance: Any, schema: Mapping[str, Any]) -> None:
         ) from exc
 
 
-def dspy_output_schema(signature: Any) -> dict[str, Any]:
-    """Return DSPy's exact closed output schema, without legacy rewriting."""
+def _fresh_dspy_output_schema(signature: Any) -> dict[str, Any]:
+    """Build DSPy's closed output schema without consulting per-call overrides."""
     from dspy.adapters.json_adapter import _get_structured_outputs_response_format
 
     output_model = _get_structured_outputs_response_format(signature)
@@ -262,6 +264,289 @@ def dspy_output_schema(signature: Any) -> dict[str, Any]:
     except Exception as exc:
         raise StructuredOutputSchemaError("DSPy generated an invalid JSON Schema") from exc
     return copied
+
+
+def dspy_output_schema(signature: Any) -> dict[str, Any]:
+    """Return the exact closed schema shared by request and response parsing.
+
+    Runtime-specialized KGGen signatures carry their own immutable snapshot.
+    It lives on a fresh Signature class, not on the adapter, so concurrent and
+    async calls with different candidate sets cannot leak schemas into one
+    another. Every caller receives a deep copy.
+    """
+    override = getattr(signature, "_hallu_runtime_output_schema", None)
+    if override is not None:
+        if not isinstance(override, Mapping):
+            raise StructuredOutputSchemaError(
+                "runtime structured-output schema override is not an object"
+            )
+        copied = deepcopy(dict(override))
+        try:
+            from jsonschema import Draft202012Validator
+
+            Draft202012Validator.check_schema(copied)
+        except Exception as exc:
+            raise StructuredOutputSchemaError(
+                "runtime structured-output schema override is invalid"
+            ) from exc
+        return copied
+    return _fresh_dspy_output_schema(signature)
+
+
+def _runtime_literal(values: Any) -> Any | None:
+    """Return a deterministic ``Literal`` over non-empty runtime strings."""
+    if values is None or isinstance(values, (str, bytes)):
+        return None
+    try:
+        normalized = tuple(sorted({str(value) for value in values}))
+    except TypeError:
+        return None
+    if not normalized:
+        return None
+    return Literal[normalized]
+
+
+def _specialized_relation_list(annotation: Any, entities: Any) -> Any | None:
+    """Bind KGGen relation endpoints to the entities supplied for this call.
+
+    KGGen 0.4's prompt says that subject and object *must* come from its
+    ``entities`` input, but the released Pydantic model types both fields as
+    unconstrained strings (the upstream source even carries a TODO to use
+    Literals).  A constrained decoder therefore cannot enforce the stated
+    contract and a small local model can invent a surface alias which the
+    official clustering stage cannot map consistently.  Specialising the two
+    fields makes the wire schema match KGGen's existing instruction; it does
+    not repair or rewrite a model response.
+    """
+    if get_origin(annotation) is not list:
+        return None
+    model_args = get_args(annotation)
+    if len(model_args) != 1:
+        return None
+    relation_model = model_args[0]
+    endpoint_literal = _runtime_literal(entities)
+    if endpoint_literal is None:
+        try:
+            if entities is not None and len(entities) == 0:
+                # The per-call schema postprocessor below makes the relation
+                # array empty-only while retaining KGGen's normal list type.
+                return annotation
+        except TypeError:
+            pass
+        return None
+
+    try:
+        from pydantic import BaseModel, create_model
+
+        if not isinstance(relation_model, type) or not issubclass(
+            relation_model, BaseModel
+        ):
+            return None
+        if not {"subject", "predicate", "object"}.issubset(
+            relation_model.model_fields
+        ):
+            return None
+        fields: dict[str, tuple[Any, Any]] = {}
+        for name, field_info in relation_model.model_fields.items():
+            field_type = (
+                endpoint_literal
+                if name in {"subject", "object"}
+                else field_info.annotation
+            )
+            fields[name] = (field_type, deepcopy(field_info))
+        specialized_model = create_model(
+            f"{relation_model.__name__}RuntimeEntities",
+            __module__=relation_model.__module__,
+            **fields,
+        )
+        specialized_model.__doc__ = relation_model.__doc__
+        return list[specialized_model]
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _cluster_representatives(clusters: Any) -> tuple[str, ...]:
+    if clusters is None or isinstance(clusters, (str, bytes)):
+        return ()
+    representatives: set[str] = set()
+    try:
+        for cluster in clusters:
+            if isinstance(cluster, Mapping):
+                representative = cluster.get("representative")
+            else:
+                representative = getattr(cluster, "representative", None)
+            if representative is not None:
+                representatives.add(str(representative))
+    except TypeError:
+        return ()
+    return tuple(sorted(representatives))
+
+
+def specialize_dspy_signature(signature: Any, inputs: Mapping[str, Any]) -> Any:
+    """Close KGGen 0.4's dynamic output contracts over the actual inputs.
+
+    Three released KGGen signatures express a runtime invariant only in prose
+    or capture an earlier superset in their type:
+
+    * relation endpoints must be current ``entities``;
+    * an extracted/validated cluster may contain only current candidates;
+    * a representative must be a member of the validated cluster.
+
+    The batch assignment signature is likewise limited to an existing
+    representative or ``None``. Binding these constraints before formatting
+    means the prompt, XGrammar request, independent validator and DSPy
+    conversion all use one identical schema. Invalid output is made impossible
+    at inference time; no parser repair or post-hoc graph edit is introduced.
+    Unknown signatures are returned unchanged.
+    """
+    update = getattr(signature, "with_updated_fields", None)
+    output_fields = getattr(signature, "output_fields", None)
+    if not callable(update) or not isinstance(output_fields, Mapping):
+        return signature
+
+    specialized = signature
+    contract_applied = False
+    empty_relation_outputs: set[str] = set()
+    assignment_item_count: int | None = None
+
+    for output_name in ("relations", "fixed_relations"):
+        field = getattr(specialized, "output_fields", {}).get(output_name)
+        if field is None or "entities" not in inputs:
+            continue
+        relation_list = _specialized_relation_list(
+            getattr(field, "annotation", None), inputs.get("entities")
+        )
+        if relation_list is not None:
+            specialized = specialized.with_updated_fields(
+                output_name, type_=relation_list
+            )
+            endpoint_literal = _runtime_literal(inputs.get("entities"))
+            if endpoint_literal is not None and "entities" in specialized.input_fields:
+                specialized = specialized.with_updated_fields(
+                    "entities", type_=list[endpoint_literal]
+                )
+            contract_applied = True
+            try:
+                if len(inputs.get("entities")) == 0:
+                    empty_relation_outputs.add(output_name)
+            except TypeError:
+                pass
+
+    if "cluster" in getattr(specialized, "output_fields", {}) and "items" in inputs:
+        item_literal = _runtime_literal(inputs.get("items"))
+        if item_literal is None:
+            raise StructuredOutputSchemaError(
+                "KGGen ExtractCluster received no current candidate items"
+            )
+        specialized = specialized.with_updated_fields(
+            "cluster", type_=list[item_literal]
+        )
+        specialized = specialized.with_updated_fields(
+            "items", type_=set[item_literal]
+        )
+        contract_applied = True
+
+    if (
+        "validated_items" in getattr(specialized, "output_fields", {})
+        and "cluster" in inputs
+    ):
+        cluster_literal = _runtime_literal(inputs.get("cluster"))
+        if cluster_literal is None:
+            raise StructuredOutputSchemaError(
+                "KGGen ValidateCluster received an empty candidate cluster"
+            )
+        specialized = specialized.with_updated_fields(
+            "validated_items", type_=list[cluster_literal]
+        )
+        specialized = specialized.with_updated_fields(
+            "cluster", type_=set[cluster_literal]
+        )
+        contract_applied = True
+
+    if (
+        "representative" in getattr(specialized, "output_fields", {})
+        and "cluster" in inputs
+    ):
+        cluster_literal = _runtime_literal(inputs.get("cluster"))
+        if cluster_literal is None:
+            raise StructuredOutputSchemaError(
+                "KGGen ChooseRepresentative received an empty cluster"
+            )
+        specialized = specialized.with_updated_fields(
+            "representative", type_=cluster_literal
+        )
+        specialized = specialized.with_updated_fields(
+            "cluster", type_=set[cluster_literal]
+        )
+        contract_applied = True
+
+    assignment_name = "cluster_reps_that_items_belong_to"
+    if (
+        assignment_name in getattr(specialized, "output_fields", {})
+        and "items" in inputs
+        and "clusters" in inputs
+    ):
+        representatives = _cluster_representatives(inputs.get("clusters"))
+        representative_literal = _runtime_literal(representatives)
+        try:
+            item_count = len(inputs.get("items"))
+        except TypeError:
+            item_count = 0
+        if representative_literal is None or item_count <= 0:
+            raise StructuredOutputSchemaError(
+                "KGGen CheckExistingClusters requires items and existing representatives"
+            )
+        assignment_item = representative_literal | None
+        assignments = list[assignment_item]
+        specialized = specialized.with_updated_fields(
+            assignment_name, type_=assignments
+        )
+        item_literal = _runtime_literal(inputs.get("items"))
+        if item_literal is not None and "items" in specialized.input_fields:
+            specialized = specialized.with_updated_fields(
+                "items", type_=list[item_literal]
+            )
+        contract_applied = True
+        assignment_item_count = item_count
+
+    if contract_applied:
+        runtime_schema = _fresh_dspy_output_schema(specialized)
+        properties = runtime_schema.get("properties")
+        if not isinstance(properties, dict):
+            raise StructuredOutputSchemaError(
+                "DSPy runtime output schema has no properties object"
+            )
+        for output_name in empty_relation_outputs:
+            relation_array = properties.get(output_name)
+            if not isinstance(relation_array, dict) or relation_array.get("type") != "array":
+                raise StructuredOutputSchemaError(
+                    f"KGGen {output_name} output is not an array schema"
+                )
+            relation_array["minItems"] = 0
+            relation_array["maxItems"] = 0
+        if assignment_item_count is not None and assignment_name in properties:
+            assignment_array = properties[assignment_name]
+            if not isinstance(assignment_array, dict) or assignment_array.get("type") != "array":
+                raise StructuredOutputSchemaError(
+                    "KGGen existing-cluster assignments are not an array schema"
+                )
+            assignment_array["minItems"] = assignment_item_count
+            assignment_array["maxItems"] = assignment_item_count
+        try:
+            from jsonschema import Draft202012Validator
+
+            Draft202012Validator.check_schema(runtime_schema)
+        except Exception as exc:
+            raise StructuredOutputSchemaError(
+                "runtime-specialized DSPy schema is invalid"
+            ) from exc
+        setattr(
+            specialized,
+            "_hallu_runtime_output_schema",
+            deepcopy(runtime_schema),
+        )
+
+    return specialized
 
 
 def inline_local_json_schema_refs(schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -498,11 +783,12 @@ def strict_json_schema_adapter(*, request_backend: str | None = None) -> Any:
             demos: list[dict[str, Any]],
             inputs: dict[str, Any],
         ) -> list[dict[str, Any]]:
+            contract_signature = specialize_dspy_signature(signature, inputs)
             return Adapter.__call__(
                 self,
                 lm,
-                self._request_kwargs(lm_kwargs, signature),
-                signature,
+                self._request_kwargs(lm_kwargs, contract_signature),
+                contract_signature,
                 demos,
                 inputs,
             )
@@ -517,11 +803,12 @@ def strict_json_schema_adapter(*, request_backend: str | None = None) -> Any:
         ) -> list[dict[str, Any]]:
             # Do not let an async DSPy caller silently bypass the schema or
             # re-enter JSONAdapter's fallback path.
+            contract_signature = specialize_dspy_signature(signature, inputs)
             return await Adapter.acall(
                 self,
                 lm,
-                self._request_kwargs(lm_kwargs, signature),
-                signature,
+                self._request_kwargs(lm_kwargs, contract_signature),
+                contract_signature,
                 demos,
                 inputs,
             )
