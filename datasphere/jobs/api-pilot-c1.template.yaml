@@ -1,0 +1,44 @@
+# Render with scripts/render_datasphere_job.py; never submit this template directly.
+name: hallu-api-pilot-c1-__RUN_ID__
+desc: Continue the gated twenty-QA strict/support pilot through the Alibaba API.
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export RUN_DIR="$PWD/api-pilot-artifacts-__RUN_ID__";
+  mkdir -p "$RUN_DIR";
+  fallback_archive() {
+    status=$?;
+    trap - EXIT;
+    if test ! -s "$ARTIFACT_ARCHIVE"; then tar -C "$(dirname "$RUN_DIR")" -czf "$ARTIFACT_ARCHIVE" "$(basename "$RUN_DIR")" || true; fi;
+    exit "$status";
+  };
+  trap fallback_archive EXIT;
+  git init source;
+  git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
+  git -C source fetch --depth 1 origin __GIT_COMMIT__;
+  git -C source checkout --detach FETCH_HEAD;
+  actual_commit="$(git -C source rev-parse HEAD)";
+  test "$actual_commit" = "__GIT_COMMIT__";
+  test -n "$(printenv DASHSCOPE_API_KEY)";
+  test -s "$PROBE_ARTIFACT";
+  export EXPECTED_SOURCE_COMMIT="__GIT_COMMIT__";
+  export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
+  export PYTHONHASHSEED=42;
+  timeout --signal=TERM --kill-after=60s 43200 bash source/scripts/run_datasphere_api_job.sh --mode pilot --data-dir "$DATA_DIR" --run-dir "$RUN_DIR" --probe-artifact "$PROBE_ARTIFACT"'
+env:
+  python:
+    type: manual
+    version: "3.11"
+    requirements-file: requirements.datasphere.api.txt
+    local-paths:
+      - scripts
+inputs:
+  - __GATE_ARTIFACT__: PROBE_ARTIFACT
+outputs:
+  - api-pilot-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+flags:
+  - attach-project-disk
+cloud-instance-types:
+  - c1.4
+graceful-shutdown:
+  signal: SIGTERM
+  timeout: 60s

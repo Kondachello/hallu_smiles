@@ -18,11 +18,21 @@ import hashlib
 import json
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
-from tenacity import Retrying, stop_after_attempt, wait_exponential, retry_if_exception_type
+from .api_runtime import (
+    CacheOnlyMissError,
+    config_value,
+    configure_dspy_lm,
+    exception_status_code,
+    install_kggen_relation_contract,
+    llm_runtime_fingerprint,
+    provider_options,
+    strict_json_object_adapter,
+)
 
 
 # --------------------------------------------------------------------------------------
@@ -62,45 +72,40 @@ class ExtractionError(RuntimeError):
 # Cost / usage logging (best-effort; token accounting depends on LiteLLM being reachable)
 # --------------------------------------------------------------------------------------
 class UsageLogger:
-    def __init__(self, path: str | Path | None):
+    def __init__(
+        self,
+        path: str | Path | None,
+        provider_calls_path: str | Path | None = None,
+    ):
         self.path = Path(path) if path else None
+        self.provider_calls_path = (
+            Path(provider_calls_path)
+            if provider_calls_path
+            else (self.path.with_name("provider_calls.jsonl") if self.path else None)
+        )
         self.calls = 0
         self.total_requests = 0
         self.cache_hits = 0
         self.cost = 0.0
         self.prompt_tokens = 0
         self.completion_tokens = 0
-        self._litellm_hooked = False
+        self.provider_calls = 0
+        self.provider_successes = 0
+        self.provider_failures = 0
+        self.provider_contract_errors = 0
         self._lock = threading.Lock()
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.provider_calls_path:
+            self.provider_calls_path.parent.mkdir(parents=True, exist_ok=True)
 
     def try_hook_litellm(self) -> None:
-        """Attach a LiteLLM success callback to accumulate cost/tokens if available."""
-        if self._litellm_hooked:
-            return
-        try:
-            import litellm  # type: ignore
+        """Compatibility no-op; calls are recorded at the exact request boundary.
 
-            def _cb(kwargs, completion_response, start_time, end_time):  # pragma: no cover
-                try:
-                    usage = getattr(completion_response, "usage", None)
-                    if usage:
-                        self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
-                        self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
-                    cost = kwargs.get("response_cost")
-                    if cost is None:
-                        cost = litellm.completion_cost(completion_response=completion_response)
-                    self.cost += float(cost or 0.0)
-                except Exception:
-                    pass
-
-            if _cb not in (litellm.success_callback or []):
-                litellm.success_callback = list(litellm.success_callback or []) + [_cb]
-            self._litellm_hooked = True
-        except Exception:
-            # LiteLLM not importable (e.g. offline/fake mode) -- fall back to call counts.
-            self._litellm_hooked = False
+        A process-global LiteLLM callback can accidentally include unrelated requests
+        and receives prompt-bearing kwargs.  The API runtime instead wraps only the
+        KGGen LM and relation verifier instances and writes a fixed allowlist.
+        """
 
     def record_call(self, kind: str, cache_key: str, seconds: float, cached: bool) -> None:
         with self._lock:
@@ -119,6 +124,50 @@ class UsageLogger:
                     "cum_completion_tokens": self.completion_tokens,
                 }) + "\n")
 
+    def record_provider_call(
+        self,
+        *,
+        outcome: str,
+        seconds: float,
+        response: Any = None,
+        error: BaseException | None = None,
+        retry_index: int = 0,
+    ) -> None:
+        """Write one redacted provider-attempt record with no prompts or secrets."""
+        if outcome not in {"success", "failure", "contract_error"}:
+            raise ValueError(f"unsupported provider outcome {outcome!r}")
+        usage = _value(response, "usage")
+        prompt_tokens = int(_value(usage, "prompt_tokens") or 0)
+        completion_tokens = int(_value(usage, "completion_tokens") or 0)
+        total_tokens = int(_value(usage, "total_tokens") or 0)
+        request_id = _value(response, "id")
+        if request_id is None and error is not None:
+            request_id = getattr(error, "request_id", None)
+        status = exception_status_code(error) if error is not None else None
+        if status is None and response is not None:
+            status = 200
+        record = {
+            "outcome": outcome,
+            "request_id": str(request_id) if request_id is not None else None,
+            "latency_s": round(float(seconds), 6),
+            "http_status": status,
+            "retry_index": max(0, int(retry_index)),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "error_type": type(error).__name__ if error is not None else None,
+        }
+        with self._lock:
+            self.provider_calls += 1
+            self.provider_successes += int(outcome == "success")
+            self.provider_failures += int(outcome == "failure")
+            self.provider_contract_errors += int(outcome == "contract_error")
+            self.prompt_tokens += prompt_tokens
+            self.completion_tokens += completion_tokens
+            if self.provider_calls_path:
+                with open(self.provider_calls_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, sort_keys=True) + "\n")
+
     def summary(self) -> dict[str, Any]:
         return {
             "api_calls": self.calls,
@@ -129,14 +178,31 @@ class UsageLogger:
             "estimated_cost_usd": round(self.cost, 6),
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "provider_calls": self.provider_calls,
+            "provider_successes": self.provider_successes,
+            "provider_failures": self.provider_failures,
+            "provider_contract_errors": self.provider_contract_errors,
         }
+
+
+def _value(value: Any, name: str) -> Any:
+    if value is None:
+        return None
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
 
 
 # --------------------------------------------------------------------------------------
 # Extractor
 # --------------------------------------------------------------------------------------
 class KGExtractor:
-    def __init__(self, cfg, backend: Any | None = None, usage: UsageLogger | None = None):
+    def __init__(
+        self,
+        cfg,
+        backend: Any | None = None,
+        usage: UsageLogger | None = None,
+        *,
+        cache_only: bool = False,
+    ):
         self.cfg = cfg
         self.model = cfg.llm.model
         self.temperature = cfg.llm.temperature
@@ -150,15 +216,32 @@ class KGExtractor:
         )
         self.cluster = cfg.extraction.cluster
         self.chunk_chars = cfg.extraction.context_chunk_chars
-        self.max_retries = cfg.llm.max_retries
-        self.backoff_base = cfg.llm.retry_backoff_base_s
+        self.runtime_options = (
+            provider_options(cfg.llm)
+            if backend is None
+            else {
+                "response_format": {"type": "json_object"},
+                "extra_body": {"enable_thinking": False},
+                "timeout": float(config_value(cfg.llm, "request_timeout_s", 180)),
+            }
+        )
         self.cache_dir = Path(cfg.cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_only = bool(cache_only)
+        if not self.cache_only:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._backend = backend  # if None, lazily construct KGGen on first use
+        self._dspy_adapter = None
+        self.backend_fingerprint = (
+            "kggen-0.4"
+            if backend is None
+            else f"{type(backend).__module__}.{type(backend).__qualname__}"
+        )
         self.usage = usage or UsageLogger(None)
 
     # -- backend --------------------------------------------------------------
     def _get_backend(self):
+        if self.cache_only:
+            raise RuntimeError("cache-only mode forbids constructing a KGGen backend")
         if self._backend is None:
             from kg_gen import KGGen  # lazy import; not needed for offline tests
             from .config import resolve_api_key
@@ -173,18 +256,39 @@ class KGExtractor:
             if api_base:
                 kwargs["api_base"] = api_base
             self._backend = KGGen(**kwargs)
-            self.usage.try_hook_litellm()
+            install_kggen_relation_contract()
+            lm = getattr(self._backend, "lm", None)
+            if lm is None:
+                raise RuntimeError("KGGen backend did not expose its DSPy LM")
+            self._dspy_adapter = configure_dspy_lm(lm, self.cfg, self.usage)
         return self._backend
+
+    @contextmanager
+    def _dspy_context(self, backend: Any) -> Iterator[None]:
+        """Keep the strict adapter active across extraction and official clustering."""
+        lm = getattr(backend, "lm", None)
+        if lm is None:
+            # Injected offline backends do not use DSPy.
+            yield
+            return
+        import dspy
+
+        adapter = self._dspy_adapter or strict_json_object_adapter(
+            extra_body=self.runtime_options["extra_body"], usage=self.usage
+        )
+        with dspy.context(lm=lm, adapter=adapter):
+            yield
 
     # -- cache ----------------------------------------------------------------
     def _cache_key(self, text: str) -> str:
         params = {
-            "model": self.model,
-            "temperature": self.temperature,
+            "v": 3,
+            "extractor_protocol": "kggen-0.4-dashscope-strict-v1",
+            "backend": self.backend_fingerprint,
+            "llm": llm_runtime_fingerprint(self.cfg),
             "max_tokens": self.max_tokens,
             "cluster": self.cluster,
             "chunk_chars": self.chunk_chars,
-            "v": 2,  # max_tokens is now part of the backend contract/cache key
         }
         payload = json.dumps(params, sort_keys=True) + "\x00" + text
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -218,7 +322,10 @@ class KGExtractor:
         gen_kwargs: dict[str, Any] = {"input_data": text, "cluster": self.cluster}
         if len(text) > self.chunk_chars:
             gen_kwargs["chunk_size"] = self.chunk_chars
-        g = backend.generate(**gen_kwargs)
+        with self._dspy_context(backend):
+            # Keep KGGen's native generate -> official LLM cluster path and its
+            # empty clustering context exactly as in the scientific baseline.
+            g = backend.generate(**gen_kwargs)
         entities = {str(e) for e in getattr(g, "entities", set())}
         relations = {
             tuple(str(x) for x in r)
@@ -242,19 +349,13 @@ class KGExtractor:
         if cached is not None:
             self.usage.record_call(kind, key, 0.0, cached=True)
             return cached
+        if self.cache_only:
+            raise CacheOnlyMissError(f"KG cache miss for {kind} key {key}")
 
         start = time.perf_counter()
-        graph: Graph | None = None
-        for attempt in Retrying(
-            stop=stop_after_attempt(self.max_retries),
-            wait=wait_exponential(multiplier=self.backoff_base),
-            retry=retry_if_exception_type(Exception),
-            reraise=True,
-        ):
-            with attempt:
-                graph = self._call_backend(text)
-        # With reraise=True, we only reach here on success, so graph is bound.
-        assert graph is not None
+        # Each actual DSPy provider call owns its transient-only retry loop. A
+        # late 503 therefore retries only that request, never the whole graph.
+        graph = self._call_backend(text)
         elapsed = time.perf_counter() - start
         self._save_cache(key, graph)
         self.usage.record_call(kind, key, elapsed, cached=False)
@@ -265,6 +366,24 @@ class KGExtractor:
         g_c = self.extract(context, kind="context")
         g_q = self.extract(query or "", kind="query")
         return g_c, g_q
+
+    def relation_contract(
+        self, text: str, entities: Iterable[str]
+    ) -> set[tuple[str, str, str]]:
+        """Run KGGen's real relation signature through the exact live API path.
+
+        This deliberately bypasses the graph cache so repeated contract probes
+        exercise independent provider responses.
+        """
+        if self.cache_only:
+            raise RuntimeError("cache-only mode forbids a live relation contract probe")
+        backend = self._get_backend()
+        install_kggen_relation_contract()
+        with self._dspy_context(backend):
+            from .api_runtime import strict_kggen_get_relations
+
+            relations = strict_kggen_get_relations(text, list(entities))
+        return {tuple(str(x) for x in relation) for relation in relations}
 
 
 # --------------------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from src.extract import Graph, KGExtractor
@@ -12,6 +13,21 @@ from src.micro_qa_demo import (
     mermaid_graph,
     write_obsidian_artifacts,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_micro_demo_uses_config_as_the_only_model_source():
+    script = (ROOT / "scripts/run_micro_qa_demo.sh").read_text(encoding="utf-8")
+    assert 'llm[\'model\']' in script
+    assert 'config["llm"]["model"]' not in script
+    assert "openrouter/" not in script
+    assert "gemini/" not in script
+    assert '--config "$ROOT/config.yaml"' in script
+    example = (ROOT / ".env.micro_qa_demo.example").read_text(encoding="utf-8")
+    assignments = [line for line in example.splitlines() if line and not line.startswith("#")]
+    assert assignments == ["DASHSCOPE_API_KEY="]
 
 
 def test_graph_stats_excludes_self_loops_from_density():

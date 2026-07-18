@@ -4,32 +4,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="$ROOT/.venv/bin/python"
-MODEL="${1:-}"
-MAX_TOKENS="${KGGEN_DEMO_MAX_TOKENS:-1024}"
-
-if [[ -z "$MODEL" ]]; then
-  echo "Usage: $0 <LiteLLM-model-slug> [micro-demo options]"
-  echo "Example: $0 openrouter/nvidia/nemotron-nano-9b-v2:free"
-  echo "Gemini example: $0 gemini/gemini-3.1-flash-lite --audit"
-  echo "Audit example: $0 openrouter/nvidia/nemotron-nano-9b-v2:free --audit"
-  exit 2
-fi
-shift
-
-case "$MODEL" in
-  openrouter/*) API_KEY_ENV="OPENROUTER_API_KEY" ;;
-  gemini/*) API_KEY_ENV="GEMINI_API_KEY" ;;
-  *)
-    echo "Unsupported demo provider in model slug: $MODEL" >&2
-    echo "Use openrouter/... or gemini/..." >&2
-    exit 2
-    ;;
-esac
-if [[ ! "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "KGGEN_DEMO_MAX_TOKENS must be a positive integer (got: $MAX_TOKENS)" >&2
-  exit 2
-fi
-export KGGEN_DEMO_MAX_TOKENS="$MAX_TOKENS"
 if [[ ! -x "$PYTHON" ]]; then
   echo "Missing $PYTHON. Create the demo environment first:"
   echo "  bash scripts/setup_micro_qa_demo.sh"
@@ -55,6 +29,24 @@ if [[ ! -f "$ROOT/data/source_info.jsonl" || ! -f "$ROOT/data/response.jsonl" ]]
   exit 2
 fi
 
+# config.yaml is the only source for the provider model and credential name,
+# including this historical one-record demo.
+config_values="$("$PYTHON" - "$ROOT/config.yaml" <<'PY'
+import sys
+from pathlib import Path
+import yaml
+
+llm = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))["llm"]
+print(f"{llm['model']}\t{llm['api_key_env']}")
+PY
+)"
+IFS=$'\t' read -r MODEL API_KEY_ENV <<<"$config_values"
+[[ -n "$MODEL" && -n "$API_KEY_ENV" ]] || {
+  echo "config.yaml must define llm.model and llm.api_key_env" >&2
+  exit 2
+}
+echo "[demo] model=$MODEL (from config.yaml)"
+
 # Keep DSPy's optional cache writable and local to this project. This avoids a
 # warning when the caller's home cache is unavailable (for example in a
 # sandboxed terminal); KGGen extraction and clustering are unchanged.
@@ -78,33 +70,8 @@ if [[ -z "${!API_KEY_ENV:-}" ]]; then
   export "$API_KEY_ENV=$parsed_key"
 fi
 
-# ``-t`` delegates the filename template to macOS/BSD ``mktemp`` and avoids
-# suffix handling differences between macOS and GNU coreutils.
-DEMO_CONFIG="$(TMPDIR="${TMPDIR:-/tmp}" mktemp -t micro-qa-demo)"
-trap 'rm -f "$DEMO_CONFIG"' EXIT
-
-"$PYTHON" - "$ROOT/config.yaml" "$DEMO_CONFIG" "$MODEL" "$API_KEY_ENV" <<'PY'
-import sys
-import os
-from pathlib import Path
-
-import yaml
-
-source = Path(sys.argv[1])
-destination = Path(sys.argv[2])
-model = sys.argv[3]
-api_key_env = sys.argv[4]
-with source.open(encoding="utf-8") as fh:
-    config = yaml.safe_load(fh)
-config["llm"]["model"] = model
-config["llm"]["api_key_env"] = api_key_env
-config["llm"]["max_tokens"] = int(os.environ.get("KGGEN_DEMO_MAX_TOKENS", "1024"))
-with destination.open("w", encoding="utf-8") as fh:
-    yaml.safe_dump(config, fh, allow_unicode=True, sort_keys=False)
-PY
-
 "$PYTHON" "$ROOT/scripts/micro_qa_demo.py" \
-  --config "$DEMO_CONFIG" \
+  --config "$ROOT/config.yaml" \
   --data-dir "$ROOT/data" \
   --output-dir "$ROOT/results/micro_qa_demo" \
   "$@"

@@ -1,0 +1,18 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0
+kg-gen==0.4.0
+dspy==3.2.1
+litellm==1.91.1
+pydantic==2.10.6
+jsonschema==4.23.0
+sentence-transformers==5.6.0
+transformers==4.51.3
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.5.2
+pandas==2.2.3
+tenacity==9.0.0
+tqdm==4.67.1
+matplotlib==3.9.4
+tabulate==0.9.0
+PyYAML==6.0.2

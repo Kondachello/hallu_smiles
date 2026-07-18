@@ -16,13 +16,40 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import Retrying, retry_if_exception, stop_after_attempt
 
+from .api_runtime import (
+    CacheOnlyMissError,
+    StructuredOutputError,
+    config_value,
+    current_retry_index,
+    is_retryable_exception,
+    llm_runtime_fingerprint,
+    provider_options,
+    provider_retry_attempt,
+    provider_semaphore,
+    response_content,
+    strict_json_loads,
+    validate_completion_envelope,
+    validate_json_document,
+    wait_transient,
+)
 from .config import resolve_api_key
 from .matching import normalize
 
 
 VERDICTS = frozenset({"entailed", "contradicted", "unknown"})
+VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {
+            "type": "string",
+            "enum": ["entailed", "contradicted", "unknown"],
+        }
+    },
+    "required": ["verdict"],
+    "additionalProperties": False,
+}
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _WORD_RE = re.compile(r"[\w]+", re.UNICODE)
 _PREDICATE_STOPWORDS = {
@@ -133,7 +160,7 @@ def _contains_token(text: str, token: str) -> bool:
 class RelationVerifier:
     """Direct LiteLLM verifier that shares the pipeline's single ``llm.model``."""
 
-    def __init__(self, cfg, usage=None):
+    def __init__(self, cfg, usage=None, *, cache_only: bool = False):
         verifier_cfg = getattr(cfg, "relation_verifier", None)
         if verifier_cfg is None:
             raise ValueError("relation_verifier config is required for support scoring")
@@ -141,13 +168,20 @@ class RelationVerifier:
         self.model = cfg.llm.model
         self.api_base = getattr(cfg.llm, "api_base", None)
         self.temperature = float(cfg.llm.temperature)
+        self.max_tokens = int(config_value(cfg.llm, "max_tokens", 1024))
+        self.runtime_options = provider_options(cfg.llm)
+        self.provider_semaphore = provider_semaphore(cfg)
         self.max_retries = int(cfg.llm.max_retries)
+        if self.max_retries <= 0:
+            raise ValueError("llm.max_retries must be positive")
         self.backoff_base = float(cfg.llm.retry_backoff_base_s)
         self.max_sentences = int(verifier_cfg.max_evidence_sentences)
         self.prompt_version = str(verifier_cfg.prompt_version)
         self.stopwords = set(getattr(cfg.matching, "stopwords", []) or [])
         self.cache_dir = Path(verifier_cfg.cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_only = bool(cache_only)
+        if not self.cache_only:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.usage = usage
 
     def verify(
@@ -171,18 +205,21 @@ class RelationVerifier:
             if self.usage is not None:
                 self.usage.record_call("relation_verifier", key, 0.0, cached=True)
             return RelationVerdict(cached, tuple(evidence), cache_hit=True)
+        if self.cache_only:
+            raise CacheOnlyMissError(f"verifier cache miss for key {key}")
 
         start = time.perf_counter()
         try:
             verdict = None
             for attempt in Retrying(
                 stop=stop_after_attempt(self.max_retries),
-                wait=wait_exponential(multiplier=self.backoff_base),
-                retry=retry_if_exception_type(Exception),
+                wait=wait_transient(self.backoff_base),
+                retry=retry_if_exception(is_retryable_exception),
                 reraise=True,
             ):
                 with attempt:
-                    verdict = self._call_llm(canonical_triple, evidence)
+                    with provider_retry_attempt(attempt.retry_state.attempt_number - 1):
+                        verdict = self._call_llm(canonical_triple, evidence)
             assert verdict is not None
         except Exception as exc:  # noqa: BLE001
             raise RelationVerifierError(f"relation verifier failed for {canonical_triple!r}") from exc
@@ -222,25 +259,60 @@ class RelationVerifier:
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": 32,
+            "max_tokens": self.max_tokens,
+            "timeout": self.runtime_options["timeout"],
+            "num_retries": 0,
+            "response_format": self.runtime_options["response_format"],
+            "extra_body": self.runtime_options["extra_body"],
         }
         api_key = resolve_api_key(self.cfg)
         if api_key:
             kwargs["api_key"] = api_key
         if self.api_base:
             kwargs["api_base"] = self.api_base
-        response = completion(**kwargs)
-        content = response.choices[0].message.content
-        return _parse_verdict(content)
+        with self.provider_semaphore:
+            started = time.perf_counter()
+            try:
+                response = completion(**kwargs)
+            except Exception as exc:
+                if self.usage is not None:
+                    self.usage.record_provider_call(
+                        outcome="failure",
+                        seconds=time.perf_counter() - started,
+                        error=exc,
+                        retry_index=current_retry_index(),
+                    )
+                raise
+        try:
+            validate_completion_envelope(response, label="relation verifier completion")
+            verdict = _parse_verdict(response_content(response))
+        except StructuredOutputError as exc:
+            if self.usage is not None:
+                self.usage.record_provider_call(
+                    outcome="contract_error",
+                    seconds=time.perf_counter() - started,
+                    response=response,
+                    error=exc,
+                    retry_index=current_retry_index(),
+                )
+            raise
+        if self.usage is not None:
+            self.usage.record_provider_call(
+                outcome="success",
+                seconds=time.perf_counter() - started,
+                response=response,
+                retry_index=current_retry_index(),
+            )
+        return verdict
 
     def _cache_key(
         self, triple: tuple[str, str, str], evidence: list[EvidenceSpan], matching_params: dict[str, Any]
     ) -> str:
         payload = {
-            "v": 1,
-            "model": self.model,
-            "api_base": self.api_base,
-            "temperature": self.temperature,
+            "v": 2,
+            "verifier_protocol": "relation-entailment-dashscope-strict-v1",
+            "llm": llm_runtime_fingerprint(self.cfg),
+            "max_tokens": self.max_tokens,
             "prompt_version": self.prompt_version,
             "max_evidence_sentences": self.max_sentences,
             "matching": matching_params,
@@ -290,16 +362,7 @@ class FakeRelationVerifier:
 
 
 def _parse_verdict(content: Any) -> str:
-    if not isinstance(content, str):
-        raise RelationVerifierError("verifier response has no text content")
-    raw = content.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`").removeprefix("json").strip()
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RelationVerifierError(f"verifier did not return JSON: {content!r}") from exc
-    verdict = payload.get("verdict") if isinstance(payload, dict) else None
-    if verdict not in VERDICTS:
-        raise RelationVerifierError(f"invalid verifier verdict: {verdict!r}")
+    payload = strict_json_loads(content, label="relation verifier response")
+    validate_json_document(payload, VERDICT_SCHEMA)
+    verdict = payload["verdict"]
     return str(verdict)

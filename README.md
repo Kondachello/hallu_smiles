@@ -40,38 +40,35 @@ pip install -r requirements.txt
 python download_data.py            # -> data/source_info.jsonl, data/response.jsonl (~36 MB)
 ```
 
-## 3. Set the LLM model + API key
+## 3. Configure the Alibaba API key
 
-The backend LLM is defined in **exactly one place**: `llm.model` in `config.yaml`
-(a LiteLLM-style string). Nothing else hardcodes a model.
+The backend model is defined in **exactly one place**: `llm.model` in
+`config.yaml`. The checked-in configuration uses Alibaba Model Studio's
+Singapore OpenAI-compatible endpoint and reads its credential from
+`DASHSCOPE_API_KEY`:
 
-**OpenRouter**
 ```bash
-export OPENROUTER_API_KEY=sk-or-...
-```
-```yaml
-# config.yaml
-llm:
-  model: "openrouter/openai/gpt-4o-mini"   # or openrouter/meta-llama/llama-3.1-8b-instruct
-  api_key_env: "OPENROUTER_API_KEY"
+export DASHSCOPE_API_KEY=sk-...
 ```
 
-**NVIDIA NIM**
-```bash
-export NVIDIA_API_KEY=nvapi-...
-```
-```yaml
-llm:
-  model: "nvidia_nim/meta/llama-3.1-8b-instruct"
-  api_base: "https://integrate.api.nvidia.com/v1"   # optional; LiteLLM also infers it
-  api_key_env: "NVIDIA_API_KEY"
-```
+Thinking is disabled and every KGGen/DSPy request uses JSON-object transport.
+JSON-object mode is not treated as schema enforcement: the complete DSPy schema
+remains in the prompt, and the untouched response is checked locally against
+the exact closed schema. Bare nested objects, extra fields, code fences,
+truncated JSON, and any response that would require parser repair are rejected.
+Only network failures, HTTP 429 (including `Retry-After`), and HTTP 5xx are
+retried.
 
 ## 4. Run
 
 ```bash
 python run.py --config config.yaml --stage all
 ```
+
+For the reproducible DataSphere path, use the CPU-only three-QA gate before a
+full pilot. See [the DataSphere API runbook](docs/datasphere-api-runbook.md).
+The probe is submitted and monitored through `scripts/submit_datasphere_job.sh`;
+the 20-QA Job is implemented but is not started automatically.
 
 Stages (each resumable; artifacts persisted under `results/`):
 
@@ -102,14 +99,18 @@ zero torch. It exercises plumbing only — the numbers are meaningless.
   buckets, graph statistics, Mann-Whitney significance, degenerate-case counts, tuning trace.
 - `plots/h_distributions.png`, `plots/auc_vs_context_length.png`.
 - `audit/{response_id}.json` — the HalluGraph audit trail (see §7 of the spec).
-- `failed_extractions.jsonl`, `usage.jsonl` (per-call timing + cumulative cost/tokens).
+- `failed_extractions.jsonl`, `usage.jsonl`, and the redacted
+  `provider_calls.jsonl` (request ID, latency, status, retry index, and token
+  usage; never keys, authorization headers, or full prompts).
 
 ---
 
 ## Reproducibility & determinism
 
 - `temperature: 0.0` everywhere; fixed `eval.seed`.
-- **Disk cache** keyed by `sha256(model + prompt_params + input_text)` at `.cache/kg/`.
+- **Disk cache** keyed by the model, endpoint, structured-output/provider
+  options, pinned runtime versions, prompt/extraction parameters, and input
+  text at `.cache/kg/`. API keys are never part of a cache key.
   A warm cache makes **zero API calls** and reproduces **byte-identical** `metrics.csv`
   (verified: only `usage.jsonl` / the API-usage line of `report.md` differ, since they honestly
   report that 0 calls were made on the cached run).
@@ -120,10 +121,18 @@ zero torch. It exercises plumbing only — the numbers are meaningless.
 - **No test leakage:** α, θ, and the τ sweep are computed on the **train split only**; the test
   split is scored exactly once in `evaluate`.
 
-## Adaptation to the real `kg-gen` API (per spec §3 instruction — no fork / no monkey-patch)
+## Compatibility boundary around the real `kg-gen` API
 
-The installed `kg-gen` is used directly; two details differ from the §3 snippet and are handled
-in `src/extract.py`:
+The installed `kg-gen==0.4.0` package is not vendored or modified on disk. The
+scientific extraction prompts and official LLM clustering algorithm remain the
+upstream ones. The strict API runtime adds a narrow fail-fast boundary because
+KGGen's relation helper otherwise catches a typed-schema error and issues looser
+fallback/fixing prompts, which would violate this experiment's no-repair
+contract. The replacement executes the identical primary relation signature;
+the clustering shim only prevents provider/schema failures from being swallowed.
+
+Two normal API details differ from the §3 snippet and are handled in
+`src/extract.py`:
 
 1. **Chunking is native.** Long contexts use `kg.generate(input_data=..., chunk_size=..., cluster=True)`,
    which chunks → aggregates across chunks → runs one clustering pass internally — exactly the
@@ -150,15 +159,16 @@ such in the report.
 
 ## Expected runtime & cost
 
-Dominated by KGGen LLM calls. RAGTruth has ~2.7k test responses over 450 sources plus the train
+Dominated by KGGen API calls. RAGTruth has ~2.7k test responses over 450 sources plus the train
 split (~15k responses / ~2.6k sources), and each instance needs up to 3 extractions
-(`G_c` once per source, `G_q`, `G_a`). Order-of-magnitude with a small hosted model
-(e.g. `gpt-4o-mini` / an 8B model) at `concurrency: 4`:
+(`G_c` once per source, `G_q`, `G_a`). The checked-in live configuration is
+deliberately serial (`concurrency: 1`) so provider behavior and cache reuse are
+easy to audit:
 
 - **Extractions:** ≈ (#unique sources) + (#unique responses) + (#QA queries) LLM calls.
-  Ballpark tens of thousands of calls for the full corpus; a few dollars to low-tens of dollars
-  depending on the model and context lengths. `usage.jsonl` logs per-call timing and a cumulative
-  cost estimate (best-effort via LiteLLM).
+  A whole-corpus run can require tens of thousands of calls. Review current
+  Alibaba pricing, quota, and rate limits before expanding beyond the bounded
+  20-QA pilot.
 - **Everything after extraction** (embedding, matching, metrics, tuning, evaluation, plots) is
   local and runs in minutes on CPU.
 - Re-runs are ~free: the cache serves all previously-seen inputs.
@@ -168,7 +178,7 @@ Tip: start with `--limit 200` and/or a single task to validate config + budget b
 ## Tests
 
 ```bash
-pytest -q      # 36 tests, fully offline (serializer, normalization, match/align, EG/RP/CFI edge cases)
+pytest -q      # fully offline, including API-contract and DataSphere Job safety tests
 ```
 
 ## Layout

@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
+from src.api_runtime import CacheOnlyMissError
 from src.audit import build_audit_record, write_audit
 from src.config import load_config
 from src.data import Instance, load_instances, unique_sources
@@ -29,15 +30,29 @@ from src.tune import alpha_cv, h_array, prf_at_threshold, select_f1_threshold
 from src.verifier import FakeRelationVerifier, RelationVerifier
 
 
-def get_extractor(cfg, fake: bool, usage: UsageLogger) -> KGExtractor:
-    return KGExtractor(cfg, backend=FakeKGGen() if fake else None, usage=usage)
+def get_extractor(
+    cfg, fake: bool, usage: UsageLogger, *, cache_only: bool = False
+) -> KGExtractor:
+    return KGExtractor(
+        cfg,
+        backend=FakeKGGen() if fake else None,
+        usage=usage,
+        cache_only=cache_only,
+    )
 
 
 def get_embedder(cfg, fake: bool) -> Embedder:
     return DictEmbedder(dim=16) if fake else SBERTEmbedder(cfg.matching.embedding_model)
 
 
-def get_verifier(cfg, fake: bool, usage: UsageLogger, relation_mode: str):
+def get_verifier(
+    cfg,
+    fake: bool,
+    usage: UsageLogger,
+    relation_mode: str,
+    *,
+    cache_only: bool = False,
+):
     if relation_mode == "strict":
         return None
     if fake:
@@ -45,7 +60,7 @@ def get_verifier(cfg, fake: bool, usage: UsageLogger, relation_mode: str):
         # receive a deterministic verdict without importing LiteLLM.
         return FakeRelationVerifier(default="entailed")
     usage.try_hook_litellm()
-    return RelationVerifier(cfg, usage=usage)
+    return RelationVerifier(cfg, usage=usage, cache_only=cache_only)
 
 
 # --------------------------------------------------------------------------------------
@@ -65,6 +80,8 @@ def extract_all(
         source_id, inst = item
         try:
             return source_id, extractor.extract_reference(inst.context, inst.query), None
+        except CacheOnlyMissError:
+            raise
         except Exception as exc:  # noqa: BLE001
             return source_id, None, {"stage": "reference", "source_id": source_id, "error": repr(exc)}
 
@@ -85,6 +102,8 @@ def extract_all(
             }
         try:
             return inst.response_id, extractor.extract(inst.response, kind="response"), None
+        except CacheOnlyMissError:
+            raise
         except Exception as exc:  # noqa: BLE001
             return inst.response_id, None, {
                 "stage": "response", "response_id": inst.response_id,
@@ -374,7 +393,7 @@ def _select_instances(args, cfg, out_dir: Path) -> list[Instance]:
     if args.qa_pilot_manifest:
         selected = load_manifest_instances(args.qa_pilot_manifest, all_instances)
         print(f"[pilot] loaded {len(selected)} fixed QA rows from {args.qa_pilot_manifest}")
-        return selected
+        return _limit_qa_pilot(selected, args.qa_pilot_limit)
     if args.qa_pilot:
         selected = select_qa_pilot(
             all_instances, seed=args.sample_seed,
@@ -387,10 +406,36 @@ def _select_instances(args, cfg, out_dir: Path) -> list[Instance]:
             train_sources=args.qa_pilot_train_sources, test_sources=args.qa_pilot_test_sources,
         )
         print(f"[pilot] selected {len(selected)} QA rows -> {manifest_path}")
-        return selected
+        return _limit_qa_pilot(selected, args.qa_pilot_limit)
     if args.limit:
         return all_instances[: args.limit]
     return all_instances
+
+
+def _limit_qa_pilot(instances: list[Instance], limit: int | None) -> list[Instance]:
+    """Use a deterministic prefix only for a bounded runtime probe.
+
+    The complete 20-record manifest is written before applying this cap, so a
+    successful probe and the later pilot share the exact same selection.
+    """
+    if limit is None:
+        return instances
+    if limit <= 0:
+        raise SystemExit("--qa-pilot-limit must be positive")
+    if limit > len(instances):
+        raise SystemExit(
+            f"--qa-pilot-limit={limit} exceeds fixed pilot size {len(instances)}"
+        )
+    print(f"[pilot] runtime probe cap: {limit}/{len(instances)} fixed QA rows")
+    return instances[:limit]
+
+
+def _assert_cache_only_no_live_calls(cache_only: bool, usage: UsageLogger) -> None:
+    if cache_only and (usage.calls != 0 or usage.provider_calls != 0):
+        raise RuntimeError(
+            "cache-only replay reached a live inference boundary: "
+            f"logical_calls={usage.calls}, provider_calls={usage.provider_calls}"
+        )
 
 
 def main() -> None:
@@ -405,10 +450,26 @@ def main() -> None:
     parser.add_argument("--qa-pilot", action="store_true", help="create a fixed 20-source QA pilot")
     parser.add_argument("--qa-pilot-manifest", default=None, help="reuse an existing QA pilot manifest")
     parser.add_argument("--qa-pilot-manifest-out", default=None, help="where a new pilot manifest is written")
+    parser.add_argument(
+        "--qa-pilot-limit",
+        type=int,
+        default=None,
+        help="process only a deterministic prefix of a full QA manifest (probes only)",
+    )
     parser.add_argument("--qa-pilot-train-sources", type=int, default=16)
     parser.add_argument("--qa-pilot-test-sources", type=int, default=4)
     parser.add_argument("--sample-seed", type=int, default=42)
     parser.add_argument("--fake-extractor", action="store_true", help="offline FakeKGGen/DictEmbedder/FakeVerifier")
+    parser.add_argument(
+        "--cache-only",
+        action="store_true",
+        help="require warm KG and verifier caches and forbid live inference",
+    )
+    parser.add_argument(
+        "--kg-cache-only",
+        action="store_true",
+        help="require warm KG caches while allowing live verifier calls",
+    )
     parser.add_argument("--no-audit", action="store_true", help="skip writing per-response audit JSON")
     args = parser.parse_args()
 
@@ -417,7 +478,11 @@ def main() -> None:
     out_dir = Path(args.output_dir or cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
-    print(f"[cfg] model={cfg.llm.model} mode={args.relation_mode} fake={args.fake_extractor} stage={args.stage}")
+    print(
+        f"[cfg] model={cfg.llm.model} mode={args.relation_mode} "
+        f"fake={args.fake_extractor} cache_only={args.cache_only} "
+        f"kg_cache_only={args.kg_cache_only} stage={args.stage}"
+    )
     if not args.fake_extractor and "PLACEHOLDER" in str(cfg.llm.model):
         print("[!] llm.model is PLACEHOLDER; configure it before a live run.")
 
@@ -426,9 +491,20 @@ def main() -> None:
     n_test = sum(inst.split == "test" for inst in instances)
     print(f"[data] {len(instances)} responses (train={n_train}, test={n_test})")
     usage = UsageLogger(out_dir / "usage.jsonl")
-    extractor = get_extractor(cfg, args.fake_extractor, usage)
+    extractor = get_extractor(
+        cfg,
+        args.fake_extractor,
+        usage,
+        cache_only=args.cache_only or args.kg_cache_only,
+    )
     embedder = get_embedder(cfg, args.fake_extractor)
-    verifier = get_verifier(cfg, args.fake_extractor, usage, args.relation_mode)
+    verifier = get_verifier(
+        cfg,
+        args.fake_extractor,
+        usage,
+        args.relation_mode,
+        cache_only=args.cache_only,
+    )
     scored_path = out_dir / "scored.jsonl"
     tuning_path = out_dir / "tuning.json"
 
@@ -441,6 +517,7 @@ def main() -> None:
         ref_graphs, resp_graphs, failures = extract_all(cfg, instances, extractor, out_dir)
         print(f"[extract] refs={len(ref_graphs)} responses={len(resp_graphs)} failures={len(failures)}")
     if args.stage == "extract":
+        _assert_cache_only_no_live_calls(args.cache_only, usage)
         print(f"[done] extract only; elapsed={time.perf_counter() - start:.1f}s")
         return
 
@@ -450,6 +527,7 @@ def main() -> None:
             relation_mode=args.relation_mode, verifier=verifier,
         )
         persist_scored(scored_path, instances, results, args.relation_mode)
+        _assert_cache_only_no_live_calls(args.cache_only, usage)
         print(f"[done] score only; wrote {len(results)} rows -> {scored_path}")
         return
 
@@ -466,6 +544,7 @@ def main() -> None:
             raise SystemExit("tuning.json relation mode differs from --relation-mode")
 
     if args.stage == "tune":
+        _assert_cache_only_no_live_calls(args.cache_only, usage)
         print(f"[done] tune only; elapsed={time.perf_counter() - start:.1f}s")
         return
 
@@ -496,6 +575,7 @@ def main() -> None:
             results = {record["response_id"]: ScoreResult.from_dict(record["score"]) for record in scored}
         write_all_audits(instances, results, info, float(cfg.metrics.empty_response_impute_h), out_dir)
         print(f"[audit] wrote {len(results)} records -> {out_dir / 'audit'}")
+    _assert_cache_only_no_live_calls(args.cache_only, usage)
     print(f"[done] stage={args.stage}; elapsed={time.perf_counter() - start:.1f}s usage={usage.summary()}")
 
 

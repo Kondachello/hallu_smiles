@@ -1,21 +1,25 @@
 # --- Core pipeline (needed for a live run) ---
-kg-gen>=0.1.6            # KGGen extractor (LiteLLM + DSPy under the hood)
-litellm>=1.0.0           # direct, cache-backed relation verifier
-sentence-transformers    # S-BERT embeddings for fuzzy entity/relation matching
-scikit-learn             # ROC-AUC, PR curves
-scipy                    # Wilcoxon signed-rank
-numpy
-pandas
-tenacity                 # retries with backoff
+kg-gen==0.4.0             # KGGen extractor and official LLM clustering
+dspy==3.2.1               # pinned adapter/signature runtime
+litellm==1.91.1           # Alibaba OpenAI-compatible transport
+pydantic==2.10.6          # typed KGGen/DSPy response models
+jsonschema==4.23.0        # exact local validation; provider guarantees JSON only
+sentence-transformers==5.6.0  # CPU S-BERT matching
+transformers==4.51.3
+scikit-learn==1.5.2       # ROC-AUC, PR curves
+scipy==1.13.1             # Wilcoxon signed-rank
+numpy==1.26.4
+pandas==2.2.3
+tenacity==9.0.0           # explicit transient-only retries
 tqdm
 
 # --- Reporting ---
-matplotlib               # diagnostic plots (histograms, AUC-vs-length). Optional; guarded.
-tabulate                 # pandas DataFrame.to_markdown() for the report tables
+matplotlib==3.9.4         # diagnostic plots (histograms, AUC-vs-length). Optional; guarded.
+tabulate==0.9.0           # pandas DataFrame.to_markdown() for the report tables
 
 # --- Dev / tests ---
 pytest
-PyYAML
+PyYAML==6.0.2
 
 # NOTE on Python versions:
 #   Light deps above (numpy/scipy/sklearn/pandas/pyyaml/tenacity/tqdm/pytest) install on
