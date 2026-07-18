@@ -20,3 +20,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+
+# Local OpenRouter credential for the KGGen micro demo. Never commit it.
+.env.micro_qa_demo
