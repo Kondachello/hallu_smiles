@@ -92,7 +92,9 @@ def test_kg_extractor_keeps_kggen_clustering_and_native_chunking(tmp_path):
             max_retries=1,
             retry_backoff_base_s=0.0,
         ),
-        extraction=SimpleNamespace(cluster=True, context_chunk_chars=8),
+        extraction=SimpleNamespace(
+            cluster=True, cluster_context_mode="source_text", context_chunk_chars=8
+        ),
         cache_dir=str(tmp_path / "cache"),
     )
     backend = Backend()
@@ -105,6 +107,10 @@ def test_kg_extractor_keeps_kggen_clustering_and_native_chunking(tmp_path):
         {
             "input_data": "a context that exceeds eight characters",
             "cluster": True,
+            "context": (
+                "\n\nSource text:\n"
+                "a context that exceeds eight characters"
+            ),
             "chunk_size": 8,
         }
     ]
@@ -115,6 +121,7 @@ def test_kg_extractor_can_schedule_kggen_chunks_serially_for_local_vllm(tmp_path
         def __init__(self, value):
             self.entities = {value}
             self.relations = {(value, "rel", value)}
+            self.edges = {"rel"}
 
     class Backend:
         def __init__(self):
@@ -128,13 +135,21 @@ def test_kg_extractor_can_schedule_kggen_chunks_serially_for_local_vllm(tmp_path
             self.calls.append(("aggregate", [next(iter(graph.entities)) for graph in graphs]))
             return RawGraph("aggregate")
 
-        def cluster(self, graph):
-            self.calls.append(("cluster", next(iter(graph.entities))))
-            return RawGraph("cluster")
+        def cluster(self, graph, context=""):
+            self.calls.append(("cluster", next(iter(graph.entities)), context))
+            clustered = RawGraph("cluster")
+            clustered.entity_clusters = {"cluster": {"aggregate"}}
+            clustered.edge_clusters = {"rel": {"rel"}}
+            return clustered
 
     cfg = SimpleNamespace(
         llm=SimpleNamespace(model="test", temperature=0.0, max_retries=1, retry_backoff_base_s=0.0),
-        extraction=SimpleNamespace(cluster=True, context_chunk_chars=8, serial_chunking=True),
+        extraction=SimpleNamespace(
+            cluster=True,
+            cluster_context_mode="source_text",
+            context_chunk_chars=8,
+            serial_chunking=True,
+        ),
         cache_dir=str(tmp_path / "cache"),
     )
     backend = Backend()
@@ -147,7 +162,11 @@ def test_kg_extractor_can_schedule_kggen_chunks_serially_for_local_vllm(tmp_path
         ("generate", {"input_data": "first", "cluster": False}),
         ("generate", {"input_data": "second", "cluster": False}),
         ("aggregate", ["first", "second"]),
-        ("cluster", "aggregate"),
+        (
+            "cluster",
+            "aggregate",
+            "\n\nSource text:\na context that exceeds eight characters",
+        ),
     ]
 
 

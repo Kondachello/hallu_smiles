@@ -87,6 +87,7 @@ def evaluation_runtime_metadata(cfg: Any) -> dict[str, Any]:
     """
     matching = cfg.matching
     llm = cfg.llm
+    extraction = config_value(cfg, "extraction")
     return {
         "llm_model": config_value(llm, "model"),
         "llm_model_revision": config_value(llm, "model_revision"),
@@ -98,6 +99,10 @@ def evaluation_runtime_metadata(cfg: Any) -> dict[str, Any]:
             llm, "structured_output_backend", "none"
         ),
         "structured_output_request_backend": _structured_output_request_backend(llm),
+        "cluster_context_mode": config_value(
+            extraction, "cluster_context_mode", "empty"
+        ),
+        "cluster_context_protocol": "kggen-native-source-text-v1",
         "embedding_model": config_value(matching, "embedding_model"),
         "embedding_model_revision": config_value(
             matching, "embedding_model_revision"

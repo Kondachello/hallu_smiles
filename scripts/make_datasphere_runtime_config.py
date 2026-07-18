@@ -41,6 +41,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--cluster-context-mode",
+        choices=("empty", "source_text"),
+        default="source_text",
+        help=(
+            "KGGen native clustering context. DataSphere uses the exact text "
+            "currently being clustered so G_c/G_q/G_a remain role-local."
+        ),
+    )
+    parser.add_argument(
         "--disable-clustering",
         action="store_true",
         help=(
@@ -171,6 +180,7 @@ def main() -> None:
     )
     config["llm"]["vllm_guided_json"] = args.vllm_guided_json
     config["extraction"]["serial_chunking"] = args.serial_chunking
+    config["extraction"]["cluster_context_mode"] = args.cluster_context_mode
     config["extraction"]["cluster_max_items"] = args.cluster_max_items
     config["extraction"]["cluster_min_retention_ratio"] = args.cluster_min_retention_ratio
     config["matching"]["embedding_model_path"] = args.embedding_model_path

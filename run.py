@@ -7,6 +7,7 @@ on train rows, then score test rows once with frozen parameters.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import time
@@ -154,6 +155,113 @@ def extract_all(
         for failure in failures:
             handle.write(json.dumps(failure) + "\n")
     return ref_graphs, resp_graphs, failures
+
+
+def _graph_summary(graph: Graph) -> dict[str, Any]:
+    payload = graph.to_dict()
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return {
+        "entities": len(graph.entities),
+        "relations": len(graph.relations),
+        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
+def write_extraction_summary(
+    instances: list[Instance],
+    ref_graphs: dict[str, tuple[Graph, Graph]],
+    resp_graphs: dict[str, Graph],
+    failures: list[dict[str, Any]],
+    extractor: KGExtractor,
+    out_dir: Path,
+) -> Path:
+    """Write a machine-checkable proof of every selected reference/answer pair."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    expected_records = [
+        {
+            "source_id": inst.source_id,
+            "response_id": inst.response_id,
+            "split": inst.split,
+            "y": int(inst.y),
+        }
+        for inst in instances
+    ]
+    expected_sources = {inst.source_id for inst in instances}
+    expected_responses = {inst.response_id for inst in instances}
+    completed_records: list[dict[str, Any]] = []
+    graph_records: list[dict[str, Any]] = []
+    cache_records: dict[str, dict[str, Any]] = {}
+
+    def cache_record(text: str | None, kind: str) -> dict[str, Any] | None:
+        normalized = (text or "").strip()
+        if not normalized:
+            return None
+        key = extractor._cache_key(normalized)
+        path = extractor._cache_path(key)
+        record = {
+            "cache_key": key,
+            "kind": kind,
+            "text_sha256": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+            "cache_file": path.name,
+            "cache_file_exists": path.is_file(),
+        }
+        cache_records.setdefault(key, record)
+        return record
+
+    for inst in instances:
+        reference = ref_graphs.get(inst.source_id)
+        answer = resp_graphs.get(inst.response_id)
+        if reference is None or answer is None:
+            continue
+        context_graph, query_graph = reference
+        identity = {
+            "source_id": inst.source_id,
+            "response_id": inst.response_id,
+            "split": inst.split,
+            "y": int(inst.y),
+        }
+        completed_records.append(identity)
+        graph_records.append({
+            **identity,
+            "context": _graph_summary(context_graph),
+            "query": _graph_summary(query_graph),
+            "answer": _graph_summary(answer),
+            "cache": {
+                "context": cache_record(inst.context, "context"),
+                "query": cache_record(inst.query, "query"),
+                "answer": cache_record(inst.response, "response"),
+            },
+        })
+
+    complete = (
+        not failures
+        and set(ref_graphs) == expected_sources
+        and set(resp_graphs) == expected_responses
+        and completed_records == expected_records
+        and all(record["cache_file_exists"] for record in cache_records.values())
+    )
+    summary = {
+        "protocol": "hallu-extraction-summary-v1",
+        "status": "ready" if complete else "error",
+        "expected_records": expected_records,
+        "completed_records": completed_records,
+        "expected_sources": len(expected_sources),
+        "references_completed": len(ref_graphs),
+        "responses_completed": len(resp_graphs),
+        "pairs_completed": len(completed_records),
+        "failures": failures,
+        "graph_records": graph_records,
+        "expected_cache_keys": sorted(cache_records),
+        "cache_records": [cache_records[key] for key in sorted(cache_records)],
+    }
+    path = out_dir / "extraction_summary.json"
+    path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 # --------------------------------------------------------------------------------------
@@ -537,7 +645,11 @@ def main() -> None:
 
     if args.stage in {"extract", "score", "tune", "all"}:
         ref_graphs, resp_graphs, failures = extract_all(cfg, instances, extractor, out_dir)
+        extraction_summary = write_extraction_summary(
+            instances, ref_graphs, resp_graphs, failures, extractor, out_dir
+        )
         print(f"[extract] refs={len(ref_graphs)} responses={len(resp_graphs)} failures={len(failures)}")
+        print(f"[extract] summary={extraction_summary}")
     if args.stage == "extract":
         _assert_cache_only_no_live_calls(args.cache_only, usage)
         print(f"[done] extract only; elapsed={time.perf_counter() - start:.1f}s")

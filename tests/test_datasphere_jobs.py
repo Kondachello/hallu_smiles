@@ -94,6 +94,7 @@ def test_runtime_config_keeps_every_mutable_path_in_job_work_dir(tmp_path):
     assert config["llm"]["model_revision"] == REVISION
     assert config["llm"]["runtime_fingerprint"] == RUNTIME_FINGERPRINT
     assert config["extraction"]["serial_chunking"] is True
+    assert config["extraction"]["cluster_context_mode"] == "source_text"
     assert config["extraction"]["cluster_max_items"] is None
     assert config["matching"]["embedding_model_path"] == "/opt/hallu/models/all-MiniLM-L6-v2"
     assert config["matching"]["embedding_device"] == "cpu"
@@ -179,6 +180,7 @@ def test_gpu_job_template_is_pinned_and_has_no_gpu_time_download_or_pip(tmp_path
     assert "--structured-output-transport response_format" in runner
     assert "--structured-output-backend" in runner
     assert "require_complete_extraction" in runner
+    assert "hallu-extraction-summary-v1" in runner
     assert 'GUIDED_DECODING_BACKEND="xgrammar"' in runner
     assert '--guided-decoding-backend "$GUIDED_DECODING_BACKEND"' in runner
     assert (

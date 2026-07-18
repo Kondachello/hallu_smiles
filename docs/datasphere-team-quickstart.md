@@ -29,6 +29,9 @@
   `local_files_only=True`, `HF_HUB_OFFLINE=1` и `CUDA_VISIBLE_DEVICES=""`.
 - KGGen LLM-clustering остаётся включённой. Full 20-QA pilot не ограничивает
   число элементов кластеризации и не подменяет её эвристикой.
+- Штатный `KGGen.cluster(..., context=...)` получает только текущий извлекаемый
+  текст; `G_c`, `G_q` и `G_a` не смешиваются. Mappings сохраняются в
+  `cache/cluster-audit.jsonl`.
 - Structured output передаётся только нативным OpenAI-compatible полем
   `response_format` типа `json_schema`; сервер использует XGrammar. Bare
   relation object не оборачивается постфактум в `{"relations": [...]}`.
@@ -182,7 +185,8 @@ bash scripts/submit_datasphere_job.sh \
 
 Проверьте `vllm-response-format-probe.json`, `kggen-probe.json`,
 `verifier-probe.json`, `qa-reference-probe.json`, `run_metadata.json` и
-`strict/failed_extractions.jsonl`. Последний файл должен быть пустым. Пики GPU
+`cache/cluster-audit.jsonl`, а также `strict/failed_extractions.jsonl`.
+Последний файл должен быть пустым, а cluster audit — проходить structural checks. Пики GPU
 utilisation подтверждают работу inference; нулевой GPU во время CPU preflight
 или scoring сам по себе не является зависанием.
 

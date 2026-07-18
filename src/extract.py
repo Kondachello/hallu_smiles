@@ -72,6 +72,9 @@ class ClusteringCollapseError(ExtractionError):
     """KGGen clustering discarded more of a probe graph than allowed."""
 
 
+CLUSTER_CONTEXT_PROTOCOL = "kggen-native-source-text-v1"
+
+
 # --------------------------------------------------------------------------------------
 # Cost / usage logging (best-effort; token accounting depends on LiteLLM being reachable)
 # --------------------------------------------------------------------------------------
@@ -176,6 +179,13 @@ class KGExtractor:
             else getattr(cfg.llm, "max_tokens", None)
         )
         self.cluster = cfg.extraction.cluster
+        self.cluster_context_mode = str(
+            config_value(cfg.extraction, "cluster_context_mode", "empty")
+        )
+        if self.cluster_context_mode not in {"empty", "source_text"}:
+            raise ValueError(
+                "extraction.cluster_context_mode must be 'empty' or 'source_text'"
+            )
         raw_cluster_max_items = (
             cfg.extraction.get("cluster_max_items", None)
             if hasattr(cfg.extraction, "get")
@@ -238,6 +248,8 @@ class KGExtractor:
         if not self.cache_only:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._backend = backend  # if None, lazily construct KGGen on first use
+        self._cluster_audit_lock = threading.Lock()
+        self.last_cluster_audit: dict[str, Any] | None = None
         # Never let an offline FakeKGGen smoke artifact masquerade as a live
         # KGGen graph.  A cache-only production replay uses ``backend=None``
         # and therefore receives the same stable ``kggen`` namespace as the
@@ -283,13 +295,15 @@ class KGExtractor:
     # -- cache ----------------------------------------------------------------
     def _cache_key(self, text: str) -> str:
         params = {
-            "v": 8,
-            "extractor_protocol": "kggen-0.4-strict-cache-v2",
+            "v": 9,
+            "extractor_protocol": "kggen-0.4-strict-cache-v3-grounded-clustering",
             "backend": self.backend_fingerprint,
             "llm": llm_runtime_fingerprint(self.cfg),
             "api_base": config_value(self.cfg.llm, "api_base"),
             "max_tokens": self.max_tokens,
             "cluster": self.cluster,
+            "cluster_context_mode": self.cluster_context_mode,
+            "cluster_context_protocol": CLUSTER_CONTEXT_PROTOCOL,
             "cluster_max_items": self.cluster_max_items,
             "cluster_min_retention_ratio": self.cluster_min_retention_ratio,
             "cluster_retention_min_items": self.cluster_retention_min_items,
@@ -397,7 +411,84 @@ class KGExtractor:
         )
         return False
 
-    def _cluster_backend_graph(self, backend: Any, graph: Any) -> Any:
+    def _cluster_context(self, source_text: str) -> str:
+        """Build KGGen's documented clustering context without role leakage."""
+        if self.cluster_context_mode == "empty":
+            return ""
+        return "\n\nSource text:\n" + source_text
+
+    @staticmethod
+    def _cluster_map(value: Any) -> dict[str, list[str]] | None:
+        if value is None:
+            return None
+        return {
+            str(representative): sorted(str(member) for member in (members or set()))
+            for representative, members in sorted(
+                value.items(), key=lambda item: str(item[0])
+            )
+        }
+
+    def _write_cluster_audit(self, record: dict[str, Any]) -> None:
+        """Persist and emit a complete, source-text-free clustering trail."""
+        self.last_cluster_audit = record
+        line = json.dumps(record, ensure_ascii=False, sort_keys=True)
+        print(f"[kg] cluster:audit {line}", flush=True)
+        path = self.cache_dir.parent / "cluster-audit.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._cluster_audit_lock:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+
+    @staticmethod
+    def _cluster_mapping_checks(
+        *,
+        raw_items: set[str],
+        clustered_items: set[str],
+        clusters: dict[str, list[str]] | None,
+    ) -> dict[str, Any]:
+        """Audit structural invariants without constraining semantic choices."""
+        if clusters is None:
+            return {
+                "available": False,
+                "representatives_match_clustered_items": False,
+                "members_cover_raw_items": False,
+                "members_are_disjoint": False,
+                "duplicate_members": [],
+            }
+        members = [member for values in clusters.values() for member in values]
+        duplicate_members = sorted(
+            member for member in set(members) if members.count(member) > 1
+        )
+        checks = {
+            "available": True,
+            "representatives_match_clustered_items": set(clusters) == clustered_items,
+            "members_cover_raw_items": set(members) == raw_items,
+            "members_are_disjoint": not duplicate_members,
+            "duplicate_members": duplicate_members,
+        }
+        return checks
+
+    @staticmethod
+    def _cluster_member_map(
+        clusters: dict[str, list[str]] | None,
+    ) -> dict[str, str]:
+        if clusters is None:
+            return {}
+        return {
+            member: representative
+            for representative, members in clusters.items()
+            for member in members
+        }
+
+    def _cluster_backend_graph(
+        self,
+        backend: Any,
+        graph: Any,
+        *,
+        source_text: str = "",
+        cache_key: str | None = None,
+        kind: str = "graph",
+    ) -> Any:
         """Run KGGen's own cluster pass with observable phase boundaries."""
         if not self._should_cluster_backend_graph(graph):
             return graph
@@ -412,7 +503,8 @@ class KGExtractor:
             f"predicates={len(edges)} relations={len(raw_relations)}",
             flush=True,
         )
-        clustered = backend.cluster(graph)
+        cluster_context = self._cluster_context(source_text)
+        clustered = backend.cluster(graph, context=cluster_context)
         clustered_entities = getattr(clustered, "entities", set()) or set()
         clustered_relations = getattr(clustered, "relations", set()) or set()
         clustered_edges = getattr(clustered, "edges", set()) or {
@@ -426,17 +518,92 @@ class KGExtractor:
             f"predicates={len(clustered_edges)} relations={len(clustered_relations)}",
             flush=True,
         )
-        print(
-            "[kg] cluster:retention "
-            f"entities={len(clustered_entities)}/{len(entities)} "
-            f"({entity_retention:.6f}) predicates={len(clustered_edges)}/{len(edges)} "
-            f"({predicate_retention:.6f}) relations={len(clustered_relations)}/{len(raw_relations)}",
-            flush=True,
+        entity_clusters = self._cluster_map(
+            getattr(clustered, "entity_clusters", None)
         )
+        edge_clusters = self._cluster_map(getattr(clustered, "edge_clusters", None))
+        raw_entities = {str(value) for value in entities}
+        raw_edges = {str(value) for value in edges}
+        clustered_entity_names = {str(value) for value in clustered_entities}
+        clustered_edge_names = {str(value) for value in clustered_edges}
+        raw_triples = {
+            tuple(str(value) for value in relation)
+            for relation in raw_relations
+            if isinstance(relation, (tuple, list)) and len(relation) == 3
+        }
+        clustered_triples = {
+            tuple(str(value) for value in relation)
+            for relation in clustered_relations
+            if isinstance(relation, (tuple, list)) and len(relation) == 3
+        }
+        entity_checks = self._cluster_mapping_checks(
+            raw_items={str(value) for value in entities},
+            clustered_items=clustered_entity_names,
+            clusters=entity_clusters,
+        )
+        predicate_checks = self._cluster_mapping_checks(
+            raw_items=raw_edges,
+            clustered_items=clustered_edge_names,
+            clusters=edge_clusters,
+        )
+        entity_member_map = self._cluster_member_map(entity_clusters)
+        edge_member_map = self._cluster_member_map(edge_clusters)
+        expected_clustered_triples = {
+            (
+                subject
+                if subject in clustered_entity_names
+                else entity_member_map.get(subject, subject),
+                predicate
+                if predicate in clustered_edge_names
+                else edge_member_map.get(predicate, predicate),
+                obj
+                if obj in clustered_entity_names
+                else entity_member_map.get(obj, obj),
+            )
+            for subject, predicate, obj in raw_triples
+        }
+        relation_checks = {
+            "raw_rows_are_triples": len(raw_triples) == len(raw_relations),
+            "raw_endpoints_in_entities": all(
+                subject in raw_entities and obj in raw_entities
+                for subject, _, obj in raw_triples
+            ),
+            "raw_predicates_in_edges": all(
+                predicate in raw_edges for _, predicate, _ in raw_triples
+            ),
+            "clustered_rows_are_triples": len(clustered_triples) == len(clustered_relations),
+            "clustered_endpoints_in_entities": all(
+                subject in clustered_entity_names and obj in clustered_entity_names
+                for subject, _, obj in clustered_triples
+            ),
+            "clustered_predicates_in_edges": all(
+                predicate in clustered_edge_names
+                for _, predicate, _ in clustered_triples
+            ),
+            "relations_match_cluster_remap": (
+                expected_clustered_triples == clustered_triples
+            ),
+        }
+        failures: list[str] = []
+        for label, checks in (
+            ("entity", entity_checks),
+            ("predicate", predicate_checks),
+        ):
+            if not all(
+                checks[name]
+                for name in (
+                    "available",
+                    "representatives_match_clustered_items",
+                    "members_cover_raw_items",
+                    "members_are_disjoint",
+                )
+            ):
+                failures.append(f"inconsistent {label} mapping")
+        if not all(relation_checks.values()):
+            failures.append("inconsistent clustered relations")
+        if raw_relations and not clustered_relations:
+            failures.append("all relations disappeared")
         if self.cluster_min_retention_ratio is not None:
-            failures: list[str] = []
-            if raw_relations and not clustered_relations:
-                failures.append("all relations disappeared")
             if (
                 len(entities) >= self.cluster_retention_min_items
                 and entity_retention < self.cluster_min_retention_ratio
@@ -447,10 +614,54 @@ class KGExtractor:
                 and predicate_retention < self.cluster_min_retention_ratio
             ):
                 failures.append(f"predicate retention={predicate_retention:.6f}")
-            if failures:
-                raise ClusteringCollapseError(
-                    "KGGen clustering retention gate failed: " + "; ".join(failures)
-                )
+        audit_record = {
+            "protocol": CLUSTER_CONTEXT_PROTOCOL,
+            "context_mode": self.cluster_context_mode,
+            "cache_key": cache_key,
+            "kind": kind,
+            "source_text_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+            "source_text_chars": len(source_text),
+            "status": "error" if failures else "ready",
+            "failures": failures,
+            "raw": {
+                "entities": sorted(raw_entities),
+                "predicates": sorted(raw_edges),
+                "relations": sorted([list(relation) for relation in raw_triples]),
+            },
+            "clustered": {
+                "entities": sorted(clustered_entity_names),
+                "predicates": sorted(clustered_edge_names),
+                "relations": sorted([list(relation) for relation in clustered_triples]),
+            },
+            "entity_clusters": entity_clusters,
+            "edge_clusters": edge_clusters,
+            "structural_checks": {
+                "entities": entity_checks,
+                "predicates": predicate_checks,
+                "relations": relation_checks,
+            },
+            "retention": {
+                "entities": entity_retention,
+                "predicates": predicate_retention,
+                "relations": (
+                    len(clustered_relations) / len(raw_relations)
+                    if raw_relations else 1.0
+                ),
+            },
+        }
+        self._write_cluster_audit(audit_record)
+        print(
+            "[kg] cluster:retention "
+            f"entities={len(clustered_entities)}/{len(entities)} "
+            f"({entity_retention:.6f}) predicates={len(clustered_edges)}/{len(edges)} "
+            f"({predicate_retention:.6f}) relations={len(clustered_relations)}/{len(raw_relations)}",
+            flush=True,
+        )
+        if failures:
+            raise ClusteringCollapseError(
+                "KGGen clustering structural/retention gate failed: "
+                + "; ".join(failures)
+            )
         return clustered
 
     @contextmanager
@@ -483,7 +694,13 @@ class KGExtractor:
         with dspy.context(lm=lm, adapter=adapter):
             yield
 
-    def _call_backend(self, text: str) -> Graph:
+    def _call_backend(
+        self,
+        text: str,
+        *,
+        cache_key: str | None = None,
+        kind: str = "graph",
+    ) -> Graph:
         backend = self._get_backend()
         with self.dspy_context(backend):
             if self.serial_chunking and len(text) > self.chunk_chars:
@@ -497,7 +714,13 @@ class KGExtractor:
                     for chunk in self._split_text(text, self.chunk_chars)
                 ]
                 g = backend.aggregate(graphs)
-                g = self._cluster_backend_graph(backend, g)
+                g = self._cluster_backend_graph(
+                    backend,
+                    g,
+                    source_text=text,
+                    cache_key=cache_key,
+                    kind=kind,
+                )
             else:
                 # ``KGGen.generate(cluster=True)`` is implemented as raw extraction
                 # followed by ``KGGen.cluster(graph)``.  Keep that exact upstream
@@ -513,11 +736,19 @@ class KGExtractor:
                     "input_data": text,
                     "cluster": False if explicit_cluster_phase else self.cluster,
                 }
+                if self.cluster and not explicit_cluster_phase:
+                    gen_kwargs["context"] = self._cluster_context(text)
                 if len(text) > self.chunk_chars:
                     gen_kwargs["chunk_size"] = self.chunk_chars
                 g = backend.generate(**gen_kwargs)
                 if explicit_cluster_phase:
-                    g = self._cluster_backend_graph(backend, g)
+                    g = self._cluster_backend_graph(
+                        backend,
+                        g,
+                        source_text=text,
+                        cache_key=cache_key,
+                        kind=kind,
+                    )
         entities = {str(e) for e in getattr(g, "entities", set())}
         relations = {
             tuple(str(x) for x in r)
@@ -561,7 +792,7 @@ class KGExtractor:
                         self.debug_dump_after_s, repeat=False, exit=False
                     )
                 try:
-                    graph = self._call_backend(text)
+                    graph = self._call_backend(text, cache_key=key, kind=kind)
                 finally:
                     if self.debug_dump_after_s is not None:
                         faulthandler.cancel_dump_traceback_later()

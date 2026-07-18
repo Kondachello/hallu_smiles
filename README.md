@@ -174,7 +174,10 @@ The server receives the exact closed JSON Schema through native OpenAI
 `response_format: {type: json_schema, ...}` and uses XGrammar constrained decoding with fallback
 disabled. Before any three-QA extraction, the runner checks the real KGGen relation schema once, the official KGGen
 typed-output plus LLM-clustering path, the support verifier schema, and the first selected
-RAGTruth reference graph. The full Job then runs strict and support on one manifest, stops vLLM,
+RAGTruth reference graph. Official KGGen clustering receives its documented `context` argument:
+the exact text currently being clustered, separately for `G_c`, `G_q`, and `G_a`. Every live
+cluster pass records raw/clustered graphs and complete mappings in `cache/cluster-audit.jsonl`.
+The full Job then runs strict and support on one manifest, stops vLLM,
 and repeats both runs with `--cache-only`; missing cache entries, any live call, changed cache
 hashes, or non-identical `metrics.csv` fails the Job.
 
@@ -194,6 +197,7 @@ gate criteria, the shared-storage contract, and monitoring.
   buckets, graph statistics, Mann-Whitney significance, degenerate-case counts, tuning trace.
 - `plots/h_distributions.png`, `plots/auc_vs_context_length.png`.
 - `audit/{response_id}.json` — the HalluGraph audit trail (see §7 of the spec).
+- `cache/cluster-audit.jsonl` — source-hashed raw/clustered KGGen mappings and structural checks.
 - `failed_extractions.jsonl`, `usage.jsonl` (per-call timing + cumulative cost/tokens).
 
 ---
@@ -221,8 +225,11 @@ in `src/extract.py`:
    which chunks → aggregates across chunks → runs one clustering pass internally — exactly the
    behavior §3 asks for. We therefore map `extraction.context_chunk_chars` → `chunk_size` instead
    of merging chunks by hand.
-2. **Graph object.** `graph.entities` (`set[str]`) and `graph.relations` (`set[(s,p,o)]`) are used
-   as documented; the object also exposes `.edges` / `*_clusters`, which we don't need.
+2. **Grounded official clustering.** KGGen's native `context` parameter receives only the exact
+   text that produced the graph currently being clustered. This keeps `G_c`, `G_q`, and `G_a`
+   isolated while preventing label-only clustering decisions.
+3. **Graph object.** `graph.entities` (`set[str]`) and `graph.relations` (`set[(s,p,o)]`) are used
+   as documented; `.edges` and `*_clusters` are retained in the clustering audit.
 
 ## Matching (HalluGraph `match`/`align` adapted to KGGen's untyped strings)
 

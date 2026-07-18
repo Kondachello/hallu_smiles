@@ -33,6 +33,7 @@ def _cfg(tmp_path):
         ),
         extraction=SimpleNamespace(
             cluster=True,
+            cluster_context_mode="source_text",
             cluster_max_items=None,
             cluster_min_retention_ratio=None,
             cluster_retention_min_items=5,
@@ -69,6 +70,10 @@ def test_graph_cache_key_fingerprints_runtime_revision_and_clustering(tmp_path):
     changed_clustering = copy.deepcopy(cfg)
     changed_clustering.extraction.cluster_max_items = 25
     assert KGExtractor(changed_clustering, backend=FakeKGGen())._cache_key("same text") != original
+
+    changed_context = copy.deepcopy(cfg)
+    changed_context.extraction.cluster_context_mode = "empty"
+    assert KGExtractor(changed_context, backend=FakeKGGen())._cache_key("same text") != original
 
     changed_concurrency = copy.deepcopy(cfg)
     changed_concurrency.llm.concurrency = 2
@@ -144,6 +149,56 @@ def test_pipeline_does_not_downgrade_cache_only_miss_to_failed_extraction(tmp_pa
             MissingExtractor(),
             tmp_path,
         )
+
+
+def test_extraction_summary_proves_exact_reference_answer_pairs_and_cache(tmp_path):
+    from run import write_extraction_summary
+    from src.extract import Graph
+
+    cfg = _cfg(tmp_path)
+    extractor = KGExtractor(cfg, backend=FakeKGGen())
+    instances = [
+        Instance(
+            response_id="r1",
+            source_id="s1",
+            task="QA",
+            gen_model="fixture",
+            split="test",
+            context="Context one",
+            query="Question one",
+            response="Answer one",
+            y=0,
+        ),
+        Instance(
+            response_id="r2",
+            source_id="s2",
+            task="QA",
+            gen_model="fixture",
+            split="test",
+            context="Context two",
+            query="Question two",
+            response="Answer two",
+            y=1,
+        ),
+    ]
+    graph = Graph({"entity"}, {("entity", "rel", "entity")})
+    for inst in instances:
+        for text in (inst.context, inst.query, inst.response):
+            key = extractor._cache_key(text)
+            extractor._save_cache(key, graph)
+    refs = {inst.source_id: (graph, graph) for inst in instances}
+    answers = {inst.response_id: graph for inst in instances}
+
+    path = write_extraction_summary(
+        instances, refs, answers, [], extractor, tmp_path / "result"
+    )
+    payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "ready"
+    assert payload["pairs_completed"] == 2
+    assert payload["completed_records"] == payload["expected_records"]
+    assert len(payload["expected_cache_keys"]) == 6
+    assert all(record["cache_file_exists"] for record in payload["cache_records"])
 
 
 def test_cache_only_zero_live_call_invariant_rejects_any_recorded_call():
@@ -268,23 +323,34 @@ def test_clustering_retention_gate_reports_and_rejects_collapse(tmp_path, capsys
     raw = SimpleNamespace(
         entities={f"entity-{index}" for index in range(6)},
         edges={f"predicate-{index}" for index in range(6)},
-        relations={(f"entity-{index}", f"predicate-{index}", "target") for index in range(6)},
+        relations={(f"entity-{index}", f"predicate-{index}", "entity-0") for index in range(6)},
     )
     collapsed = SimpleNamespace(
         entities={"entity-0"},
         edges={"predicate-0"},
-        relations={("entity-0", "predicate-0", "target")},
+        relations={("entity-0", "predicate-0", "entity-0")},
+        entity_clusters={"entity-0": set(raw.entities)},
+        edge_clusters={"predicate-0": set(raw.edges)},
     )
 
     class Backend:
+        seen_context = None
+
         @staticmethod
-        def cluster(graph):
+        def cluster(graph, context=""):
             assert graph is raw
+            Backend.seen_context = context
             return collapsed
 
     extractor = KGExtractor(cfg, backend=Backend())
     with pytest.raises(ClusteringCollapseError, match="retention gate failed"):
-        extractor._cluster_backend_graph(Backend(), raw)
+        extractor._cluster_backend_graph(
+            Backend(), raw, source_text="A source about six entities."
+        )
+
+    assert Backend.seen_context == (
+        "\n\nSource text:\nA source about six entities."
+    )
 
     output = capsys.readouterr().out
     assert "cluster:start entities=6 predicates=6 relations=6" in output

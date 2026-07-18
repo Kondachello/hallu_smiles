@@ -47,6 +47,8 @@ fingerprints. Job не считается воспроизводимой, есл
 - Клиент запускается с `CUDA_VISIBLE_DEVICES=""`; GPU принадлежит только vLLM.
 - KGGen extraction и official LLM-clustering выполняются последовательно,
   concurrency = 1. Full pilot не ограничивает cluster items.
+- Official `KGGen.cluster` получает штатный `context`: только тот текст,
+  из которого сейчас строится соответствующий `G_c`, `G_q` или `G_a`.
 - Strict/support используют один manifest, KG cache и verifier cache.
 - Tuning выполняется только на 16 train; test из четырёх строк оценивается один
   раз после заморозки параметров.
@@ -283,6 +285,7 @@ Runner на одном V100 делает:
 
 Gate пройден только при terminal `SUCCESS`, всех probe reports `ready`, пустом
 `strict/failed_extractions.jsonl`, завершённых reference/answer graph pairs и
+валидном `cache/cluster-audit.jsonl` с полным покрытием cluster mappings, а также
 наличии GPU activity во время inference. Timeout и 180-second idle watchdog
 ограничивают цену сбоя. AUC здесь не считается.
 
@@ -310,7 +313,7 @@ bash scripts/submit_datasphere_job.sh \
 8. byte comparison metrics и SHA-256 cache tree.
 
 Cache keys включают model ID/revision, runtime fingerprint, structured-output
-transport/backend/schema contract, extraction parameters и content. Fake/live
+transport/backend/schema contract, `cluster_context_mode`, extraction parameters и content. Fake/live
 namespaces разделены. `--cache-only` запрещает live inference; cache miss —
 немедленная ошибка. S-BERT тоже работает только с embedded local path.
 

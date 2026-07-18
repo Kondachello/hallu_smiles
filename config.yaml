@@ -22,6 +22,10 @@ llm:
 
 extraction:
   cluster: true                       # KGGen entity/edge resolution ON
+  # KGGen 0.4 exposes a native clustering ``context`` parameter.  Ground its
+  # otherwise label-only LLM decisions in the exact text currently being
+  # clustered (G_c, G_q, or G_a respectively); this does not mix graph roles.
+  cluster_context_mode: "source_text"
   # Optional safety bound for the *post-extraction* KGGen LLM clustering.
   # null preserves KGGen's native behaviour.  The DataSphere runtime sets a
   # finite value for the small local Llama server: if a model emits an

@@ -36,6 +36,8 @@ KGGEN_CLUSTER_MAX_ITEMS="${KGGEN_CLUSTER_MAX_ITEMS:-}"
 # chunk/response thread pools produced a local-vLLM deadlock and hours of idle
 # V100 time.  The Job is intentionally serial; vLLM remains the only GPU work.
 KGGEN_CONCURRENCY="${KGGEN_CONCURRENCY:-1}"
+CLUSTER_CONTEXT_MODE="source_text"
+CLUSTER_CONTEXT_PROTOCOL="kggen-native-source-text-v1"
 # vLLM 0.8.5 accepts only the bare backend enum at the server CLI. Request-level
 # options disable XGrammar's unbounded syntactic-whitespace loops and forbid
 # fallback; neither option changes the JSON Schema or its accepted documents.
@@ -176,6 +178,8 @@ server_launch = {
     "max_tokens": int(sys.argv[14]),
     "guided_decoding_request_backend": sys.argv[15],
     "xgrammar_any_whitespace": False,
+    "cluster_context_mode": "source_text",
+    "cluster_context_protocol": "kggen-native-source-text-v1",
 }
 canonical = json.dumps(server_launch, sort_keys=True, separators=(",", ":"))
 generation_fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -192,6 +196,8 @@ identity = {
     "server_launch": server_launch,
     "guided_decoding_request_backend": sys.argv[15],
     "xgrammar_any_whitespace": False,
+    "cluster_context_mode": "source_text",
+    "cluster_context_protocol": "kggen-native-source-text-v1",
 }
 Path(sys.argv[2]).write_text(
     json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -225,6 +231,8 @@ Path(sys.argv[1]).write_text(json.dumps({
         "guided_decoding_request_backend"
     ],
     "xgrammar_any_whitespace": False,
+    "cluster_context_mode": identity["cluster_context_mode"],
+    "cluster_context_protocol": identity["cluster_context_protocol"],
     "runs": ["strict", "support", "cache-only-strict", "cache-only-support"],
 }, indent=2) + "\n", encoding="utf-8")
 PY
@@ -239,6 +247,7 @@ runtime_config_args=(
   --api-base "http://127.0.0.1:${PORT}/v1"
   --data-dir "$DATA_DIR"
   --max-tokens "$KGGEN_MAX_TOKENS"
+  --cluster-context-mode "$CLUSTER_CONTEXT_MODE"
   --structured-output-transport response_format
   --structured-output-backend "$STRUCTURED_OUTPUT_BACKEND"
   --structured-output-request-backend "$STRUCTURED_OUTPUT_REQUEST_BACKEND"
@@ -388,16 +397,30 @@ run_extraction_with_gpu_watchdog env CUDA_VISIBLE_DEVICES="" "$CLIENT_PYTHON" "$
 require_complete_extraction() {
   local output_dir="$1"
   local failures="$output_dir/failed_extractions.jsonl"
+  local summary="$output_dir/extraction_summary.json"
   if [[ -s "$failures" ]]; then
     echo "[error] KG extraction was incomplete; refusing to mark this run successful." >&2
     cat "$failures" >&2
     return 1
   fi
+  "$CLIENT_PYTHON" - "$summary" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    summary = json.load(handle)
+if summary.get("protocol") != "hallu-extraction-summary-v1":
+    raise SystemExit("extraction summary protocol mismatch")
+if summary.get("status") != "ready" or summary.get("failures") != []:
+    raise SystemExit("extraction summary is not complete")
+if summary.get("completed_records") != summary.get("expected_records"):
+    raise SystemExit("extraction summary record mismatch")
+PY
 }
 require_complete_extraction "$STRICT_OUT"
 if [[ -n "$QA_PILOT_LIMIT" ]]; then
   end_epoch="$(date +%s)"
-  "$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$QA_PILOT_LIMIT" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" <<'PY'
+  "$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$QA_PILOT_LIMIT" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" "$CLUSTER_CONTEXT_MODE" "$CLUSTER_CONTEXT_PROTOCOL" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -424,6 +447,8 @@ Path(sys.argv[1]).write_text(json.dumps({
     "guided_decoding_backend": sys.argv[13],
     "guided_decoding_request_backend": sys.argv[14],
     "xgrammar_any_whitespace": False,
+    "cluster_context_mode": sys.argv[15],
+    "cluster_context_protocol": sys.argv[16],
     "runs": ["strict-extract"],
 }, indent=2) + "\n", encoding="utf-8")
 PY
@@ -463,7 +488,7 @@ find "$RUN_ROOT/cache" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_RO
 cmp "$RUN_ROOT/cache-before.sha256" "$RUN_ROOT/cache-after.sha256"
 end_epoch="$(date +%s)"
 
-"$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" <<'PY'
+"$CLIENT_PYTHON" - "$METADATA" "$started" "$((end_epoch - start_epoch))" "$MODEL_ID" "$MODEL_PATH" "$MODEL_REVISION" "$UNITS_PER_SECOND" "$GPU_TIME_LIMIT_SECONDS" "$DATASPHERE_DOCKER_IMAGE_ID" "$RUNTIME_FINGERPRINT" "$EXPECTED_SOURCE_COMMIT" "$GUIDED_DECODING_BACKEND" "$STRUCTURED_OUTPUT_REQUEST_BACKEND" "$CLUSTER_CONTEXT_MODE" "$CLUSTER_CONTEXT_PROTOCOL" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -488,6 +513,8 @@ Path(sys.argv[1]).write_text(json.dumps({
     "guided_decoding_backend": sys.argv[12],
     "guided_decoding_request_backend": sys.argv[13],
     "xgrammar_any_whitespace": False,
+    "cluster_context_mode": sys.argv[14],
+    "cluster_context_protocol": sys.argv[15],
     "runs": ["strict", "support", "cache-only-strict", "cache-only-support"],
 }, indent=2) + "\n", encoding="utf-8")
 PY

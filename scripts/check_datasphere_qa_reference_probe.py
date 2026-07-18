@@ -184,7 +184,13 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
             # official clustering uses the same response_format and XGrammar
             # request options as extraction.
             with extractor.dspy_context(backend):
-                graph = extractor._cluster_backend_graph(backend, raw_graph)
+                graph = extractor._cluster_backend_graph(
+                    backend,
+                    raw_graph,
+                    source_text=text,
+                    cache_key=cache_key,
+                    kind="context",
+                )
         finally:
             if dump_after is not None:
                 faulthandler.cancel_dump_traceback_later()
@@ -233,6 +239,8 @@ def run_probe(config_path: str | Path) -> dict[str, Any]:
         "relations": len(extracted.relations),
         "clustering_ran": clustering_ran,
         "cluster_max_items": extractor.cluster_max_items,
+        "cluster_context_mode": extractor.cluster_context_mode,
+        "cluster_audit": extractor.last_cluster_audit,
         "guided_decoding_request_backend": (
             extractor.structured_output.request_backend
         ),
