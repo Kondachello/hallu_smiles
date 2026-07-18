@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
-"""HalluGraph-KGGen single entrypoint.
+"""HalluGraph-KGGen entrypoint with strict and text-verified relation modes.
 
-    python run.py --config config.yaml --stage all
-
-Stages:
-    extract   : build G_c, G_q (once per source) and G_a (per response); fills the disk cache.
-    score     : compute EG / RP / audit lists for every response -> results/scored.jsonl
-    tune       : alpha (5-fold CV), theta (F1), tau_e x tau_r sweep -> results/tuning.json  [TRAIN ONLY]
-    evaluate  : AUC/P/R/F1/ablation/bootstrap/diagnostics on TEST -> metrics.csv + report.md
-    all       : the above in order.
-
-Offline plumbing check (no API key, no torch):
-    python run.py --stage all --fake-extractor --limit 40
+``--stage all`` has an intentionally leak-free order: extract graphs, tune only
+on train rows, then score test rows once with frozen parameters.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -25,28 +17,35 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
+from src.audit import build_audit_record, write_audit
 from src.config import load_config
 from src.data import Instance, load_instances, unique_sources
-from src.extract import ExtractionError, FakeKGGen, Graph, KGExtractor, UsageLogger
+from src.evaluate import run_evaluation
+from src.extract import FakeKGGen, Graph, KGExtractor, UsageLogger
 from src.matching import DictEmbedder, Embedder, RefGraph, SBERTEmbedder
 from src.metrics import ScoreResult, score_response
-from src.tune import alpha_cv, h_array, prf_at_threshold, safe_auc, select_f1_threshold
-from src.audit import build_audit_record, write_audit
-from src.evaluate import run_evaluation
+from src.sampling import load_manifest_instances, select_qa_pilot, write_manifest
+from src.tune import alpha_cv, h_array, prf_at_threshold, select_f1_threshold
+from src.verifier import FakeRelationVerifier, RelationVerifier
 
 
-# --------------------------------------------------------------------------------------
-# Backends
-# --------------------------------------------------------------------------------------
 def get_extractor(cfg, fake: bool, usage: UsageLogger) -> KGExtractor:
-    backend = FakeKGGen() if fake else None
-    return KGExtractor(cfg, backend=backend, usage=usage)
+    return KGExtractor(cfg, backend=FakeKGGen() if fake else None, usage=usage)
 
 
 def get_embedder(cfg, fake: bool) -> Embedder:
+    return DictEmbedder(dim=16) if fake else SBERTEmbedder(cfg.matching.embedding_model)
+
+
+def get_verifier(cfg, fake: bool, usage: UsageLogger, relation_mode: str):
+    if relation_mode == "strict":
+        return None
     if fake:
-        return DictEmbedder(dim=16)  # deterministic, offline
-    return SBERTEmbedder(cfg.matching.embedding_model)
+        # Fake extraction is only a plumbing check; all text-grounded toy edges
+        # receive a deterministic verdict without importing LiteLLM.
+        return FakeRelationVerifier(default="entailed")
+    usage.try_hook_litellm()
+    return RelationVerifier(cfg, usage=usage)
 
 
 # --------------------------------------------------------------------------------------
@@ -55,349 +54,454 @@ def get_embedder(cfg, fake: bool) -> Embedder:
 def extract_all(
     cfg, instances: list[Instance], extractor: KGExtractor, out_dir: Path
 ) -> tuple[dict[str, tuple[Graph, Graph]], dict[str, Graph], list[dict[str, Any]]]:
-    """Return (ref_graphs[source_id]=(G_c,G_q), resp_graphs[response_id]=G_a, failures)."""
+    """Return reference and answer graphs; references are built once per source."""
     failures: list[dict[str, Any]] = []
     ref_graphs: dict[str, tuple[Graph, Graph]] = {}
     resp_graphs: dict[str, Graph] = {}
+    sources = unique_sources(instances)
+    concurrency = max(1, int(cfg.llm.concurrency))
 
-    sources = unique_sources(instances)  # G_c/G_q computed ONCE per source_id
-    conc = max(1, int(cfg.llm.concurrency))
-
-    # --- reference graphs (context + query), once per source ---
-    def do_ref(sid_inst):
-        sid, inst = sid_inst
+    def do_ref(item):
+        source_id, inst = item
         try:
-            gc, gq = extractor.extract_reference(inst.context, inst.query)
-            return sid, (gc, gq), None
-        except Exception as e:  # noqa: BLE001
-            return sid, None, {"stage": "reference", "source_id": sid, "error": repr(e)}
+            return source_id, extractor.extract_reference(inst.context, inst.query), None
+        except Exception as exc:  # noqa: BLE001
+            return source_id, None, {"stage": "reference", "source_id": source_id, "error": repr(exc)}
 
-    with ThreadPoolExecutor(max_workers=conc) as ex:
-        for sid, val, err in tqdm(
-            ex.map(do_ref, sources.items()), total=len(sources), desc="extract G_c/G_q"
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        for source_id, graphs, error in tqdm(
+            pool.map(do_ref, sources.items()), total=len(sources), desc="extract G_c/G_q"
         ):
-            if err:
-                failures.append(err)
+            if error:
+                failures.append(error)
             else:
-                ref_graphs[sid] = val
+                ref_graphs[source_id] = graphs
 
-    # --- response graphs, per response ---
-    def do_resp(inst: Instance):
+    def do_response(inst: Instance):
         if inst.source_id not in ref_graphs:
             return inst.response_id, None, {
-                "stage": "response(skipped: ref failed)",
-                "response_id": inst.response_id, "source_id": inst.source_id,
-                "error": "reference extraction failed",
+                "stage": "response(skipped: ref failed)", "response_id": inst.response_id,
+                "source_id": inst.source_id, "error": "reference extraction failed",
             }
         try:
-            ga = extractor.extract(inst.response, kind="response")
-            return inst.response_id, ga, None
-        except Exception as e:  # noqa: BLE001
+            return inst.response_id, extractor.extract(inst.response, kind="response"), None
+        except Exception as exc:  # noqa: BLE001
             return inst.response_id, None, {
                 "stage": "response", "response_id": inst.response_id,
-                "source_id": inst.source_id, "error": repr(e),
+                "source_id": inst.source_id, "error": repr(exc),
             }
 
-    with ThreadPoolExecutor(max_workers=conc) as ex:
-        futs = [ex.submit(do_resp, inst) for inst in instances]
-        for f in tqdm(as_completed(futs), total=len(futs), desc="extract G_a"):
-            rid, ga, err = f.result()
-            if err:
-                failures.append(err)
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(do_response, inst) for inst in instances]
+        for future in tqdm(as_completed(futures), total=len(futures), desc="extract G_a"):
+            response_id, graph, error = future.result()
+            if error:
+                failures.append(error)
             else:
-                resp_graphs[rid] = ga
+                resp_graphs[response_id] = graph
 
-    # persist failures
-    fpath = out_dir / "failed_extractions.jsonl"
-    with open(fpath, "w", encoding="utf-8") as fh:
-        for r in failures:
-            fh.write(json.dumps(r) + "\n")
-    if failures:
-        print(f"[warn] {len(failures)} extraction failures -> {fpath}")
+    failure_path = out_dir / "failed_extractions.jsonl"
+    with open(failure_path, "w", encoding="utf-8") as handle:
+        for failure in failures:
+            handle.write(json.dumps(failure) + "\n")
     return ref_graphs, resp_graphs, failures
 
 
 # --------------------------------------------------------------------------------------
-# Stage: score
+# Matching and scoring
 # --------------------------------------------------------------------------------------
-def build_refgraph(cfg, gc: Graph, gq: Graph, embedder: Embedder,
-                   tau_e: float | None = None, tau_r: float | None = None) -> RefGraph:
-    m = cfg.matching
-    # allow threshold overrides for the sweep without mutating global config
+def build_refgraph(
+    cfg, gc: Graph, gq: Graph, embedder: Embedder,
+    tau_e: float | None = None, tau_r: float | None = None,
+) -> RefGraph:
+    matching = cfg.matching
     if tau_e is None and tau_r is None:
-        return RefGraph(gc.entities | gq.entities, gc.relations | gq.relations, m, embedder)
+        return RefGraph(gc.entities | gq.entities, gc.relations | gq.relations, matching, embedder)
 
-    class _M:  # lightweight override view
-        entity_sim_threshold = tau_e if tau_e is not None else m.entity_sim_threshold
-        relation_sim_threshold = tau_r if tau_r is not None else m.relation_sim_threshold
-        allow_substring_match = m.allow_substring_match
-        direction_sensitive_edges = m.direction_sensitive_edges
-        inverse_edge_match = getattr(m, "inverse_edge_match", False)
-        min_substring_chars = getattr(m, "min_substring_chars", 2)
-        stopwords = getattr(m, "stopwords", [])
+    class ThresholdView:
+        entity_sim_threshold = tau_e if tau_e is not None else matching.entity_sim_threshold
+        relation_sim_threshold = tau_r if tau_r is not None else matching.relation_sim_threshold
+        allow_substring_match = matching.allow_substring_match
+        direction_sensitive_edges = matching.direction_sensitive_edges
+        inverse_edge_match = getattr(matching, "inverse_edge_match", False)
+        min_substring_chars = getattr(matching, "min_substring_chars", 2)
+        stopwords = getattr(matching, "stopwords", [])
 
-    return RefGraph(gc.entities | gq.entities, gc.relations | gq.relations, _M, embedder)
+    return RefGraph(gc.entities | gq.entities, gc.relations | gq.relations, ThresholdView, embedder)
 
 
 def score_all(
-    cfg, instances: list[Instance],
-    ref_graphs: dict[str, tuple[Graph, Graph]], resp_graphs: dict[str, Graph],
-    embedder: Embedder, tau_e: float | None = None, tau_r: float | None = None,
+    cfg,
+    instances: list[Instance],
+    ref_graphs: dict[str, tuple[Graph, Graph]],
+    resp_graphs: dict[str, Graph],
+    embedder: Embedder,
+    *,
+    tau_e: float | None = None,
+    tau_r: float | None = None,
+    relation_mode: str = "strict",
+    verifier=None,
 ) -> dict[str, ScoreResult]:
-    """Score every response whose graphs are available. RefGraph is built once per source."""
+    """Score all available rows; support mode verifies each grounded answer edge."""
+    if relation_mode == "support" and verifier is None:
+        raise ValueError("support scoring requires a relation verifier")
     results: dict[str, ScoreResult] = {}
     refgraph_cache: dict[str, RefGraph] = {}
-    for inst in tqdm(instances, desc=f"score (tau_e={tau_e},tau_r={tau_r})"):
+    description = f"score {relation_mode} (tau_e={tau_e},tau_r={tau_r})"
+    for inst in tqdm(instances, desc=description):
         if inst.source_id not in ref_graphs or inst.response_id not in resp_graphs:
             continue
         gc, gq = ref_graphs[inst.source_id]
-        rg = refgraph_cache.get(inst.source_id)
-        if rg is None:
-            rg = build_refgraph(cfg, gc, gq, embedder, tau_e, tau_r)
-            refgraph_cache[inst.source_id] = rg
-        results[inst.response_id] = score_response(resp_graphs[inst.response_id], rg, gc, gq)
+        refgraph = refgraph_cache.get(inst.source_id)
+        if refgraph is None:
+            refgraph = build_refgraph(cfg, gc, gq, embedder, tau_e, tau_r)
+            refgraph_cache[inst.source_id] = refgraph
+        results[inst.response_id] = score_response(
+            resp_graphs[inst.response_id], refgraph, gc, gq,
+            context=inst.context, query=inst.query,
+            verifier=verifier if relation_mode == "support" else None,
+            verifier_matching_params={
+                "tau_e": float(cfg.matching.entity_sim_threshold if tau_e is None else tau_e),
+                "tau_r": float(cfg.matching.relation_sim_threshold if tau_r is None else tau_r),
+                "allow_substring_match": bool(cfg.matching.allow_substring_match),
+                "min_substring_chars": int(cfg.matching.min_substring_chars),
+                "stopwords": list(cfg.matching.stopwords),
+            },
+        )
     return results
 
 
-def persist_scored(path: Path, instances: list[Instance], results: dict[str, ScoreResult]) -> None:
-    by_id = {i.response_id: i for i in instances}
-    with open(path, "w", encoding="utf-8") as f:
-        for rid, res in results.items():
-            inst = by_id[rid]
-            rec = {
-                "response_id": rid, "source_id": inst.source_id, "task": inst.task,
+def persist_scored(
+    path: Path, instances: list[Instance], results: dict[str, ScoreResult], relation_mode: str
+) -> None:
+    by_id = {inst.response_id: inst for inst in instances}
+    with open(path, "w", encoding="utf-8") as handle:
+        for response_id, result in results.items():
+            inst = by_id[response_id]
+            record = {
+                "response_id": response_id, "source_id": inst.source_id, "task": inst.task,
                 "gen_model": inst.gen_model, "split": inst.split, "y": inst.y,
                 "context_len": len(inst.context), "gt_span_types": inst.gt_span_types,
-                "score": res.to_dict(),
+                "relation_mode": relation_mode, "score": result.to_dict(),
             }
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def load_scored(path: Path) -> list[dict[str, Any]]:
-    out = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                out.append(json.loads(line))
-    return out
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-# --------------------------------------------------------------------------------------
-# Rows for evaluation / tuning
-# --------------------------------------------------------------------------------------
-def build_rows(scored: list[dict[str, Any]], alpha: float, impute_h: float) -> list[dict[str, Any]]:
-    rows = []
-    for rec in scored:
-        res = ScoreResult.from_dict(rec["score"])
+def build_rows(
+    scored: list[dict[str, Any]],
+    alpha_strict: float,
+    alpha_support: float,
+    relation_mode: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for record in scored:
+        result = ScoreResult.from_dict(record["score"])
+        h_strict = result.h_for_mode(alpha_strict, "strict")
+        h_support = (
+            result.h_for_mode(alpha_support, "support")
+            if relation_mode == "support"
+            else None
+        )
+        primary_h = h_support if relation_mode == "support" else h_strict
+        primary_rp_h = result.support_rp_only_h() if relation_mode == "support" else result.rp_only_h()
+        statuses = [entry.get("status") for entry in result.relation_audits if entry.get("status")]
         rows.append({
-            "response_id": rec["response_id"], "source_id": rec["source_id"],
-            "task": rec["task"], "gen_model": rec["gen_model"], "split": rec["split"],
-            "y": int(rec["y"]), "context_len": int(rec["context_len"]),
-            "Vc": res.Vc, "Ec": res.Ec, "Vq": res.Vq, "Eq": res.Eq, "Va": res.Va, "Ea": res.Ea,
-            "EG": res.EG, "RP": res.RP, "RP_defined": res.RP_defined,
-            "unscorable": res.unscorable, "ref_empty": res.ref_empty,
-            "H": res.h(alpha),
-            "H_eg": res.eg_only_h(),
-            "H_rp": res.rp_only_h(),
+            "response_id": record["response_id"], "source_id": record["source_id"],
+            "task": record["task"], "gen_model": record["gen_model"], "split": record["split"],
+            "y": int(record["y"]), "context_len": int(record["context_len"]),
+            "Vc": result.Vc, "Ec": result.Ec, "Vq": result.Vq, "Eq": result.Eq,
+            "Va": result.Va, "Ea": result.Ea,
+            "EG": result.EG,
+            "RP": result.RP, "RP_defined": result.RP_defined,
+            "RP_strict": result.RP_strict,
+            "RP_grounded": result.RP_grounded,
+            "RP_entailed_cond": result.RP_entailed_cond,
+            "RP_support": result.RP_support,
+            "RP_support_defined": result.RP_support_defined,
+            "unscorable": result.unscorable, "ref_empty": result.ref_empty,
+            "CFI_strict": result.cfi_for_mode(alpha_strict, "strict"),
+            "H_strict": h_strict,
+            "CFI_support": (
+                result.cfi_for_mode(alpha_support, "support")
+                if relation_mode == "support"
+                else None
+            ),
+            "H_support": h_support,
+            "H": primary_h,
+            "H_eg": result.eg_only_h(), "H_rp": primary_rp_h,
+            "H_rp_strict": result.rp_only_h(), "H_rp_support": result.support_rp_only_h(),
+            "relation_statuses": json.dumps(statuses),
         })
     return rows
 
 
-def scored_to_results(scored: list[dict[str, Any]]) -> tuple[list[ScoreResult], list[dict[str, Any]]]:
-    res = [ScoreResult.from_dict(r["score"]) for r in scored]
-    return res, scored
-
-
 # --------------------------------------------------------------------------------------
-# Stage: tune (TRAIN ONLY)
+# Train-only joint threshold/alpha tuning
 # --------------------------------------------------------------------------------------
-def tau_sweep(
-    cfg, instances: list[Instance],
-    ref_graphs, resp_graphs, embedder, alpha: float, seed: int, sweep_limit: int,
-) -> list[dict[str, Any]]:
-    """Re-score a sample of TRAIN responses for each (tau_e, tau_r); report train AUC."""
-    train = [i for i in instances if i.split == "train"
-             and i.source_id in ref_graphs and i.response_id in resp_graphs]
-    if sweep_limit and len(train) > sweep_limit:
-        rng = np.random.default_rng(seed)
-        idx = rng.choice(len(train), size=sweep_limit, replace=False)
-        train = [train[i] for i in sorted(idx)]
-    out = []
-    for te in cfg.eval.tau_e_sweep:
-        for tr in cfg.eval.tau_r_sweep:
-            results = score_all(cfg, train, ref_graphs, resp_graphs, embedder, tau_e=te, tau_r=tr)
-            reslist = [results[i.response_id] for i in train if i.response_id in results]
-            y = np.array([i.y for i in train if i.response_id in results])
-            H, mask = h_array(reslist, alpha)
-            auc = safe_auc(H[mask], y[mask])
-            out.append({"tau_e": te, "tau_r": tr, "n": int(mask.sum()), "train_AUC": auc})
-    return out
-
-
-def tune(
-    cfg, instances: list[Instance], scored: list[dict[str, Any]],
-    ref_graphs, resp_graphs, embedder, out_dir: Path,
+def tune_joint(
+    cfg,
+    instances: list[Instance],
+    ref_graphs,
+    resp_graphs,
+    embedder,
+    verifier,
+    relation_mode: str,
+    out_dir: Path,
 ) -> dict[str, Any]:
+    train = [
+        inst for inst in instances
+        if inst.split == "train" and inst.source_id in ref_graphs and inst.response_id in resp_graphs
+    ]
+    if not train:
+        raise ValueError("no train instances available for tuning")
     seed = int(cfg.eval.seed)
-    train_recs = [r for r in scored if r["split"] == "train"]
-    train_res = [ScoreResult.from_dict(r["score"]) for r in train_recs]
-    train_y = [int(r["y"]) for r in train_recs]
+    alpha_grid = [float(value) for value in cfg.eval.alpha_grid]
+    folds = int(cfg.eval.alpha_cv_folds)
+    default_te = float(cfg.matching.entity_sim_threshold)
+    default_tr = float(cfg.matching.relation_sim_threshold)
+    rows: list[dict[str, Any]] = []
+    score_cache: dict[tuple[float, float], dict[str, ScoreResult]] = {}
 
-    # alpha via 5-fold CV
-    grid = list(cfg.eval.alpha_grid)
-    if cfg.metrics.alpha is not None:
-        alpha = float(cfg.metrics.alpha)
-        alpha_trace = {a: float("nan") for a in grid}
-        print(f"[tune] alpha fixed by config = {alpha}")
+    tau_r_candidates = [default_tr] if relation_mode == "support" else list(map(float, cfg.eval.tau_r_sweep))
+    for tau_e in map(float, cfg.eval.tau_e_sweep):
+        for tau_r in tau_r_candidates:
+            results = score_all(
+                cfg, train, ref_graphs, resp_graphs, embedder,
+                tau_e=tau_e, tau_r=tau_r, relation_mode=relation_mode, verifier=verifier,
+            )
+            score_cache[(tau_e, tau_r)] = results
+            scores = [results[i.response_id] for i in train if i.response_id in results]
+            labels = [i.y for i in train if i.response_id in results]
+            if cfg.metrics.alpha is not None:
+                fixed = float(cfg.metrics.alpha)
+                _, trace = alpha_cv(scores, labels, [fixed], folds, seed, mode=relation_mode)
+            else:
+                _, trace = alpha_cv(scores, labels, alpha_grid, folds, seed, mode=relation_mode)
+            for alpha, cv_auc in trace.items():
+                rows.append({
+                    "tau_e": tau_e, "tau_r": tau_r, "alpha": float(alpha),
+                    "n_train": len(scores), "cv_mean_auc": cv_auc,
+                })
+
+    valid = [row for row in rows if not math.isnan(float(row["cv_mean_auc"]))]
+    if valid:
+        best = max(
+            valid,
+            key=lambda row: (
+                float(row["cv_mean_auc"]),
+                -abs(float(row["tau_e"]) - default_te) - abs(float(row["tau_r"]) - default_tr)
+                - abs(float(row["alpha"]) - 0.7),
+            ),
+        )
     else:
-        alpha, alpha_trace = alpha_cv(train_res, train_y, grid, int(cfg.eval.alpha_cv_folds), seed)
-        print(f"[tune] alpha (CV) = {alpha}")
+        best = min(
+            rows,
+            key=lambda row: (
+                abs(float(row["tau_e"]) - default_te) + abs(float(row["tau_r"]) - default_tr),
+                abs(float(row["alpha"]) - 0.7),
+            ),
+        )
 
-    # theta via F1 on train, using tuned alpha
-    H, mask = h_array(train_res, alpha)
-    theta, train_f1 = select_f1_threshold(H[mask], np.array(train_y)[mask])
-    print(f"[tune] theta = {theta:.4f} (train F1 = {train_f1:.4f})")
-
-    # tau sensitivity sweep (train only) -- needs graphs
-    sweep = []
-    if ref_graphs and resp_graphs:
-        sweep = tau_sweep(cfg, instances, ref_graphs, resp_graphs, embedder, alpha, seed,
-                          int(getattr(cfg.eval, "sweep_limit", 300) or 300))
-
-    info = {"alpha": alpha, "theta": theta, "train_f1": train_f1,
-            "alpha_cv": alpha_trace, "tau_sweep": sweep}
-    (out_dir / "tuning.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+    selected = score_cache[(float(best["tau_e"]), float(best["tau_r"]))]
+    train_scores = [selected[i.response_id] for i in train if i.response_id in selected]
+    train_y = np.array([i.y for i in train if i.response_id in selected])
+    alpha = float(best["alpha"])
+    H, mask = h_array(train_scores, alpha, mode=relation_mode)
+    theta, train_f1 = select_f1_threshold(H[mask], train_y[mask])
+    selected_trace = {
+        str(row["alpha"]): row["cv_mean_auc"]
+        for row in rows
+        if row["tau_e"] == best["tau_e"] and row["tau_r"] == best["tau_r"]
+    }
+    info = {
+        "relation_mode": relation_mode,
+        "alpha": alpha,
+        "theta": theta,
+        "train_f1": train_f1,
+        "tau_e": float(best["tau_e"]),
+        "tau_r": float(best["tau_r"]),
+        "selected_cv_auc": best["cv_mean_auc"],
+        "alpha_cv": selected_trace,
+        "joint_cv": rows,
+    }
+    (out_dir / "tuning.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     return info
 
 
-# --------------------------------------------------------------------------------------
-# Audit
-# --------------------------------------------------------------------------------------
-def write_all_audits(instances, results: dict[str, ScoreResult], alpha, impute_h, out_dir: Path):
-    by_id = {i.response_id: i for i in instances}
+def write_all_audits(
+    instances: list[Instance],
+    results: dict[str, ScoreResult],
+    info: dict[str, Any],
+    impute_h: float,
+    out_dir: Path,
+) -> None:
+    by_id = {inst.response_id: inst for inst in instances}
     audit_dir = out_dir / "audit"
-    for rid, res in tqdm(results.items(), desc="audit", total=len(results)):
-        inst = by_id.get(rid)
+    relation_mode = str(info.get("relation_mode", "strict"))
+    for response_id, result in tqdm(results.items(), desc="audit", total=len(results)):
+        inst = by_id.get(response_id)
         if inst is None:
             continue
-        rec = build_audit_record(inst, res, alpha, impute_h=impute_h)
-        write_audit(rec, audit_dir)
+        record = build_audit_record(
+            inst, result, float(info["alpha"]), alpha_support=float(info["alpha"]),
+            relation_mode=relation_mode, impute_h=impute_h,
+        )
+        write_audit(record, audit_dir)
 
 
-# --------------------------------------------------------------------------------------
-# Main
-# --------------------------------------------------------------------------------------
-def main():
-    ap = argparse.ArgumentParser(description="HalluGraph-KGGen on RAGTruth")
-    ap.add_argument("--config", default="config.yaml")
-    ap.add_argument("--stage", default="all",
-                    choices=["extract", "score", "tune", "evaluate", "all"])
-    ap.add_argument("--data-dir", default=None, help="override data.dir")
-    ap.add_argument("--output-dir", default=None, help="override output_dir")
-    ap.add_argument("--limit", type=int, default=None, help="cap #instances (smoke tests)")
-    ap.add_argument("--fake-extractor", action="store_true",
-                    help="use offline FakeKGGen + DictEmbedder (no API, no torch)")
-    ap.add_argument("--no-audit", action="store_true", help="skip writing per-response audits")
-    args = ap.parse_args()
-
-    cfg = load_config(args.config)
+def _apply_cli_overrides(cfg, args) -> None:
     if args.data_dir:
         cfg.data._data["dir"] = args.data_dir  # noqa: SLF001
         cfg.data.dir = args.data_dir
-    out_dir = Path(args.output_dir or cfg.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if args.cache_dir:
+        cfg._data["cache_dir"] = args.cache_dir  # noqa: SLF001
+        cfg.cache_dir = args.cache_dir
+        verdict_dir = str(Path(args.cache_dir).parent / "verdicts")
+        cfg.relation_verifier._data["cache_dir"] = verdict_dir  # noqa: SLF001
+        cfg.relation_verifier.cache_dir = verdict_dir
 
-    t0 = time.perf_counter()
-    print(f"[cfg] model={cfg.llm.model} fake={args.fake_extractor} stage={args.stage}")
-    if not args.fake_extractor and "PLACEHOLDER" in str(cfg.llm.model):
-        print("[!] llm.model is still 'PLACEHOLDER'. Set a real model in config.yaml, or "
-              "use --fake-extractor for an offline plumbing run.")
 
-    # --- data ---
-    instances = load_instances(
+def _select_instances(args, cfg, out_dir: Path) -> list[Instance]:
+    all_instances = load_instances(
         cfg.data.dir, exclude_implicit_true=bool(cfg.data.exclude_implicit_true)
     )
+    if args.qa_pilot and args.qa_pilot_manifest:
+        raise SystemExit("use either --qa-pilot or --qa-pilot-manifest, not both")
+    if args.qa_pilot_manifest:
+        selected = load_manifest_instances(args.qa_pilot_manifest, all_instances)
+        print(f"[pilot] loaded {len(selected)} fixed QA rows from {args.qa_pilot_manifest}")
+        return selected
+    if args.qa_pilot:
+        selected = select_qa_pilot(
+            all_instances, seed=args.sample_seed,
+            train_sources=args.qa_pilot_train_sources,
+            test_sources=args.qa_pilot_test_sources,
+        )
+        manifest_path = Path(args.qa_pilot_manifest_out or out_dir / "qa_pilot_manifest.json")
+        write_manifest(
+            manifest_path, selected, seed=args.sample_seed,
+            train_sources=args.qa_pilot_train_sources, test_sources=args.qa_pilot_test_sources,
+        )
+        print(f"[pilot] selected {len(selected)} QA rows -> {manifest_path}")
+        return selected
     if args.limit:
-        # keep sources intact: take the first N responses but ensure their sources are present
-        instances = instances[: args.limit]
-    n_train = sum(i.split == "train" for i in instances)
-    n_test = sum(i.split == "test" for i in instances)
-    print(f"[data] {len(instances)} responses  (train={n_train}, test={n_test})")
+        return all_instances[: args.limit]
+    return all_instances
 
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="HalluGraph-KGGen on RAGTruth")
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--stage", default="all", choices=["extract", "score", "tune", "evaluate", "all"])
+    parser.add_argument("--data-dir", default=None, help="override data.dir")
+    parser.add_argument("--output-dir", default=None, help="override output_dir")
+    parser.add_argument("--cache-dir", default=None, help="override shared KG cache directory")
+    parser.add_argument("--limit", type=int, default=None, help="cap #instances (smoke tests)")
+    parser.add_argument("--relation-mode", choices=["strict", "support"], default="strict")
+    parser.add_argument("--qa-pilot", action="store_true", help="create a fixed 20-source QA pilot")
+    parser.add_argument("--qa-pilot-manifest", default=None, help="reuse an existing QA pilot manifest")
+    parser.add_argument("--qa-pilot-manifest-out", default=None, help="where a new pilot manifest is written")
+    parser.add_argument("--qa-pilot-train-sources", type=int, default=16)
+    parser.add_argument("--qa-pilot-test-sources", type=int, default=4)
+    parser.add_argument("--sample-seed", type=int, default=42)
+    parser.add_argument("--fake-extractor", action="store_true", help="offline FakeKGGen/DictEmbedder/FakeVerifier")
+    parser.add_argument("--no-audit", action="store_true", help="skip writing per-response audit JSON")
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    _apply_cli_overrides(cfg, args)
+    out_dir = Path(args.output_dir or cfg.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    start = time.perf_counter()
+    print(f"[cfg] model={cfg.llm.model} mode={args.relation_mode} fake={args.fake_extractor} stage={args.stage}")
+    if not args.fake_extractor and "PLACEHOLDER" in str(cfg.llm.model):
+        print("[!] llm.model is PLACEHOLDER; configure it before a live run.")
+
+    instances = _select_instances(args, cfg, out_dir)
+    n_train = sum(inst.split == "train" for inst in instances)
+    n_test = sum(inst.split == "test" for inst in instances)
+    print(f"[data] {len(instances)} responses (train={n_train}, test={n_test})")
     usage = UsageLogger(out_dir / "usage.jsonl")
     extractor = get_extractor(cfg, args.fake_extractor, usage)
     embedder = get_embedder(cfg, args.fake_extractor)
-
+    verifier = get_verifier(cfg, args.fake_extractor, usage, args.relation_mode)
     scored_path = out_dir / "scored.jsonl"
     tuning_path = out_dir / "tuning.json"
 
     ref_graphs: dict[str, tuple[Graph, Graph]] = {}
     resp_graphs: dict[str, Graph] = {}
-    results: dict[str, ScoreResult] = {}
     failures: list[dict[str, Any]] = []
+    results: dict[str, ScoreResult] = {}
 
-    need_graphs = args.stage in ("extract", "score", "tune", "all")
-    if need_graphs:
+    if args.stage in {"extract", "score", "tune", "all"}:
         ref_graphs, resp_graphs, failures = extract_all(cfg, instances, extractor, out_dir)
-        print(f"[extract] refs={len(ref_graphs)} responses={len(resp_graphs)} "
-              f"failures={len(failures)}  usage={usage.summary()}")
-
-    if args.stage in ("score", "tune", "all"):
-        results = score_all(cfg, instances, ref_graphs, resp_graphs, embedder)
-        persist_scored(scored_path, instances, results)
-        print(f"[score] scored {len(results)} responses -> {scored_path}")
-
+        print(f"[extract] refs={len(ref_graphs)} responses={len(resp_graphs)} failures={len(failures)}")
     if args.stage == "extract":
-        print(f"[done] extract only. elapsed={time.perf_counter()-t0:.1f}s")
+        print(f"[done] extract only; elapsed={time.perf_counter() - start:.1f}s")
         return
 
-    # load scored (from disk if a prior stage produced it)
-    if not scored_path.exists():
-        raise SystemExit(f"{scored_path} missing; run --stage score/all first.")
-    scored = load_scored(scored_path)
+    if args.stage == "score":
+        results = score_all(
+            cfg, instances, ref_graphs, resp_graphs, embedder,
+            relation_mode=args.relation_mode, verifier=verifier,
+        )
+        persist_scored(scored_path, instances, results, args.relation_mode)
+        print(f"[done] score only; wrote {len(results)} rows -> {scored_path}")
+        return
 
-    # --- tune (train only) ---
-    if args.stage in ("tune", "all"):
-        info = tune(cfg, instances, scored, ref_graphs, resp_graphs, embedder, out_dir)
+    if args.stage in {"tune", "all"}:
+        info = tune_joint(
+            cfg, instances, ref_graphs, resp_graphs, embedder, verifier, args.relation_mode, out_dir
+        )
+        print(f"[tune] alpha={info['alpha']} tau_e={info['tau_e']} tau_r={info['tau_r']} theta={info['theta']:.4f}")
     else:
         if not tuning_path.exists():
-            raise SystemExit(f"{tuning_path} missing; run --stage tune/all first.")
+            raise SystemExit(f"{tuning_path} missing; run --stage tune/all first")
         info = json.loads(tuning_path.read_text(encoding="utf-8"))
-    alpha, theta = info["alpha"], info["theta"]
+        if info.get("relation_mode") != args.relation_mode:
+            raise SystemExit("tuning.json relation mode differs from --relation-mode")
 
     if args.stage == "tune":
-        print(f"[done] tune only. alpha={alpha} theta={theta:.4f} "
-              f"elapsed={time.perf_counter()-t0:.1f}s")
+        print(f"[done] tune only; elapsed={time.perf_counter() - start:.1f}s")
         return
 
-    # --- evaluate (test scored once) ---
-    impute_h = float(cfg.metrics.empty_response_impute_h)
-    rows = build_rows(scored, alpha, impute_h)
-    tuning_info = {"alpha_cv": info.get("alpha_cv", {}), "tau_sweep": info.get("tau_sweep", [])}
+    if args.stage == "all":
+        # This is the only all-instance score after train-only parameter selection.
+        results = score_all(
+            cfg, instances, ref_graphs, resp_graphs, embedder,
+            tau_e=float(info["tau_e"]), tau_r=float(info["tau_r"]),
+            relation_mode=args.relation_mode, verifier=verifier,
+        )
+        persist_scored(scored_path, instances, results, args.relation_mode)
+    if not scored_path.exists():
+        raise SystemExit(f"{scored_path} missing; run --stage score/all first")
+    scored = load_scored(scored_path)
+
+    alpha = float(info["alpha"])
+    rows = build_rows(scored, alpha, alpha, args.relation_mode)
     summary = run_evaluation(
-        rows, alpha, theta, cfg, out_dir,
-        tuning_info=tuning_info, usage_summary=usage.summary(), n_failed=len(failures),
+        rows, alpha, float(info["theta"]), cfg, out_dir,
+        tuning_info={"alpha_cv": info.get("alpha_cv", {}), "joint_cv": info.get("joint_cv", [])},
+        usage_summary=usage.summary(), n_failed=len(failures), relation_mode=args.relation_mode,
+        tau_e=float(info["tau_e"]), tau_r=float(info["tau_r"]),
     )
     print("[eval] summary:", json.dumps(_short(summary), indent=2))
 
-    # --- audit for every scored response ---
     if not args.no_audit:
         if not results:
-            # reconstruct ScoreResults from disk if scoring happened in an earlier process
-            by_id = {i.response_id: i for i in instances}
-            results = {r["response_id"]: ScoreResult.from_dict(r["score"])
-                       for r in scored if r["response_id"] in by_id}
-        write_all_audits(instances, results, alpha, impute_h, out_dir)
-        print(f"[audit] wrote {len(results)} records -> {out_dir/'audit'}")
-
-    print(f"[done] stage={args.stage}. elapsed={time.perf_counter()-t0:.1f}s  usage={usage.summary()}")
+            results = {record["response_id"]: ScoreResult.from_dict(record["score"]) for record in scored}
+        write_all_audits(instances, results, info, float(cfg.metrics.empty_response_impute_h), out_dir)
+        print(f"[audit] wrote {len(results)} records -> {out_dir / 'audit'}")
+    print(f"[done] stage={args.stage}; elapsed={time.perf_counter() - start:.1f}s usage={usage.summary()}")
 
 
 def _short(summary: dict[str, Any]) -> dict[str, Any]:
-    keys = ["alpha", "theta", "tau_e", "tau_r",
-            "overall_AUC_exclude_unscorable", "overall_F1", "overall_AUC_impute"]
-    return {k: summary.get(k) for k in keys}
+    keys = ["relation_mode", "alpha", "theta", "tau_e", "tau_r", "overall_AUC_exclude_unscorable", "overall_F1"]
+    return {key: summary.get(key) for key in keys}
 
 
 if __name__ == "__main__":

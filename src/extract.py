@@ -65,6 +65,8 @@ class UsageLogger:
     def __init__(self, path: str | Path | None):
         self.path = Path(path) if path else None
         self.calls = 0
+        self.total_requests = 0
+        self.cache_hits = 0
         self.cost = 0.0
         self.prompt_tokens = 0
         self.completion_tokens = 0
@@ -102,6 +104,8 @@ class UsageLogger:
 
     def record_call(self, kind: str, cache_key: str, seconds: float, cached: bool) -> None:
         with self._lock:
+            self.total_requests += 1
+            self.cache_hits += int(cached)
             self.calls += 0 if cached else 1
             if not self.path:
                 return
@@ -109,6 +113,7 @@ class UsageLogger:
                 f.write(json.dumps({
                     "kind": kind, "cache_key": cache_key, "seconds": round(seconds, 4),
                     "cached": cached, "cum_calls": self.calls,
+                    "cum_requests": self.total_requests, "cum_cache_hits": self.cache_hits,
                     "cum_cost_usd": round(self.cost, 6),
                     "cum_prompt_tokens": self.prompt_tokens,
                     "cum_completion_tokens": self.completion_tokens,
@@ -117,6 +122,10 @@ class UsageLogger:
     def summary(self) -> dict[str, Any]:
         return {
             "api_calls": self.calls,
+            "requests_total": self.total_requests,
+            "cache_hits": self.cache_hits,
+            "cache_hit_rate": round(self.cache_hits / self.total_requests, 6)
+            if self.total_requests else 0.0,
             "estimated_cost_usd": round(self.cost, 6),
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,

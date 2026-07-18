@@ -24,6 +24,7 @@ def h_array(
     alpha: float,
     impute: float | None = None,
     include_unscorable: bool = False,
+    mode: str = "strict",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return (H, mask) where mask marks entries that carry a usable score.
 
@@ -33,7 +34,7 @@ def h_array(
     H = np.full(len(scores), np.nan, dtype=float)
     mask = np.zeros(len(scores), dtype=bool)
     for i, s in enumerate(scores):
-        h = s.h(alpha, impute=impute if include_unscorable else None)
+        h = s.h_for_mode(alpha, mode=mode, impute=impute if include_unscorable else None)
         if h is None:
             continue
         H[i] = h
@@ -54,6 +55,7 @@ def alpha_cv(
     grid: Sequence[float],
     folds: int = 5,
     seed: int = 42,
+    mode: str = "strict",
 ) -> tuple[float, dict[float, float]]:
     """Pick alpha maximizing mean cross-validated ROC-AUC of H on the train split.
 
@@ -73,7 +75,7 @@ def alpha_cv(
     if n_splits < 2:
         # Not enough per-class samples to CV; fall back to whole-train AUC.
         for a in grid:
-            H, m = h_array(sub, a)
+            H, m = h_array(sub, a, mode=mode)
             per_alpha[a] = safe_auc(H[m], y_s[m])
         best = _argmax_alpha(per_alpha)
         return best, per_alpha
@@ -81,7 +83,7 @@ def alpha_cv(
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     folds_idx = list(skf.split(np.zeros(len(sub)), y_s))
     for a in grid:
-        H, m = h_array(sub, a)
+        H, m = h_array(sub, a, mode=mode)
         fold_aucs = []
         for _, val_idx in folds_idx:
             vi = val_idx[m[val_idx]]
