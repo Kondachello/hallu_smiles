@@ -1,0 +1,40 @@
+name: Build DataSphere Vertex CPU runtime image
+
+on:
+  push:
+    branches: [new-metrics]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: datasphere-vertex-cpu-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Kondachello/hallu_smiles'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 1
+      - run: python3 scripts/render_datasphere_cpu_vertex_dockerfile.py --commit "$GITHUB_SHA" --branch new-metrics --output datasphere/docker/rendered/Dockerfile.cpu-vertex
+      - env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - id: publish
+        run: |
+          image_name="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hallu-smiles-datasphere-vertex-cpu"
+          metadata="$RUNNER_TEMP/runtime.json"
+          docker buildx create --name hallu-vertex-cpu-builder --driver docker-container --use
+          docker buildx build --platform linux/amd64 --file datasphere/docker/rendered/Dockerfile.cpu-vertex --tag "$image_name:$GITHUB_SHA" --label "org.opencontainers.image.revision=$GITHUB_SHA" --provenance=false --push --metadata-file "$metadata" .
+          digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["containerimage.digest"])' "$metadata")"
+          echo "runtime_image=$image_name@$digest" >> "$GITHUB_OUTPUT"
+          printf 'Immutable CPU runtime: `%s@%s`\n' "$image_name" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - env:
+          RUNTIME_IMAGE: ${{ steps.publish.outputs.runtime_image }}
+        run: docker logout ghcr.io && docker buildx imagetools inspect "$RUNTIME_IMAGE"

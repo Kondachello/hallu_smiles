@@ -45,7 +45,16 @@ python download_data.py            # -> data/source_info.jsonl, data/response.js
 The backend LLM is defined in **exactly one place**: `llm.model` in `config.yaml`
 (a LiteLLM-style string). Nothing else hardcodes a model.
 
-**OpenRouter**
+**Active DataSphere profile — Gemini through Cloud Run + Vertex AI**
+
+The checked-in logical model is `openai/gemini-2.5-flash`. DataSphere uses an
+OpenAI-compatible Cloud Run URL and its own `HALLU_GATEWAY_API_KEY` Project
+secret; it never calls Gemini Developer API and never stores Google credentials.
+The Job fetches a credential-protected gateway manifest before generating its
+job-local config, so endpoint and gateway revision participate in cache keys.
+See [the CPU 3-QA gateway runbook](docs/vertex-gateway-datasphere.md).
+
+**OpenRouter (alternative local profile)**
 ```bash
 export OPENROUTER_API_KEY=sk-or-...
 ```
@@ -116,7 +125,10 @@ python run.py --stage all --relation-mode support \
 `.cache/verdicts/`. The verifier uses the same `llm.model` as KGGen and returns only
 `entailed`, `contradicted`, or `unknown` for a canonical triple plus up to four source sentences.
 
-### DataSphere batch job
+### Legacy DataSphere local-vLLM batch job
+
+The following GPU/Llama route is retained only to reproduce earlier artifacts.
+Use the CPU gateway runbook above for new Gemini/Vertex experiments.
 
 The laptop only renders and submits Jobs. Llama 3.1 8B inference runs on `127.0.0.1` inside a
 DataSphere `g1.1` Job; no model or GPU runtime is installed locally. The model and RAGTruth are

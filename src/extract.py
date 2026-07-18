@@ -311,8 +311,8 @@ class KGExtractor:
     # -- cache ----------------------------------------------------------------
     def _cache_key(self, text: str) -> str:
         params = {
-            "v": 10,
-            "extractor_protocol": "kggen-0.4-strict-cache-v4-runtime-contracts",
+            "v": 11,
+            "extractor_protocol": "kggen-0.4-strict-cache-v5-vertex-runtime-contracts",
             "backend": self.backend_fingerprint,
             "llm": llm_runtime_fingerprint(self.cfg),
             "api_base": config_value(self.cfg.llm, "api_base"),

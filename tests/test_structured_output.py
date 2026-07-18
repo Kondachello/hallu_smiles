@@ -469,6 +469,42 @@ def test_structured_output_settings_validate_and_keep_legacy_mapping_explicit():
         )
 
 
+def test_vertex_structured_output_uses_the_same_schema_without_vllm_extra_body(monkeypatch):
+    from dspy.adapters.base import Adapter
+
+    class OutputModel:
+        @staticmethod
+        def model_json_schema():
+            return RELATION_SCHEMA
+
+    monkeypatch.setattr(
+        "dspy.adapters.json_adapter._get_structured_outputs_response_format",
+        lambda signature: OutputModel,
+    )
+    settings = structured_output_settings(
+        SimpleNamespace(
+            structured_output_transport="response_format",
+            structured_output_backend="vertex",
+            structured_output_request_backend=None,
+            model_revision="gateway-release",
+            runtime_fingerprint="gateway-manifest",
+        )
+    )
+    assert settings.request_backend is None
+    calls = []
+
+    def fake_call(self, lm, lm_kwargs, signature, demos, inputs):
+        calls.append(dict(lm_kwargs))
+        return [{"relations": []}]
+
+    monkeypatch.setattr(Adapter, "__call__", fake_call)
+    strict_json_schema_adapter(request_backend=settings.request_backend)(
+        object(), {"extra_body": {"guided_json": {"legacy": True}}}, _Signature, [], {}
+    )
+    assert calls[0]["response_format"]["json_schema"]["schema"] == RELATION_SCHEMA
+    assert "extra_body" not in calls[0]
+
+
 def test_retry_classifier_retries_only_transient_failures():
     class ServiceUnavailable(Exception):
         status_code = 503

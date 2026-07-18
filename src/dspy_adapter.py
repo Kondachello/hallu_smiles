@@ -1,4 +1,4 @@
-"""Strict and legacy DSPy adapters for explicitly configured local runtimes.
+"""Strict and legacy DSPy adapters for explicitly configured runtimes.
 
 The research runtime uses native OpenAI ``response_format.type=json_schema``
 and deliberately bypasses DSPy's JSON repair and fallback requests.  The old
@@ -22,11 +22,9 @@ from dataclasses import dataclass
 from typing import Any, Literal, get_args, get_origin
 
 
-STRUCTURED_OUTPUT_PROTOCOL_VERSION = (
-    "strict-response-format-v4-xgrammar-runtime-input-contracts"
-)
+STRUCTURED_OUTPUT_PROTOCOL_VERSION = "strict-response-format-v5-provider-neutral-json-schema"
 STRUCTURED_OUTPUT_TRANSPORTS = frozenset({"none", "response_format", "guided_json"})
-STRUCTURED_OUTPUT_BACKENDS = frozenset({"xgrammar", "guidance"})
+STRUCTURED_OUTPUT_BACKENDS = frozenset({"xgrammar", "guidance", "vertex"})
 XGRAMMAR_STRICT_REQUEST_BACKEND = (
     "xgrammar:disable-any-whitespace,no-fallback"
 )
