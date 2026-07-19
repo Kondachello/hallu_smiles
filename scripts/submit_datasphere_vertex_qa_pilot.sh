@@ -17,11 +17,12 @@ Options:
   --timeout-seconds N     Job wall-time ceiling (default: 43200)
   --commit SHA            Pushed source commit (default: HEAD)
   --branch NAME           Remote branch containing the commit (default: current)
+  --skip-origin-fetch     Verify locally cached origin/BRANCH (only for a transient DNS outage)
   --docker-image REF      Optional immutable image; must match the committed build
   --profile NAME          DataSphere CLI profile (default: default)
 EOF
 }
-PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; IMAGE=""; PROFILE="default"
+PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; IMAGE=""; PROFILE="default"; SKIP_ORIGIN_FETCH=0
 QA_SAMPLE_SIZE=100; QA_TEST_FRACTION="0.2"; CV_FOLDS=5; CONCURRENCY=1; TIMEOUT_SECONDS=43200
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --gate-artifact) GATE_ARTIFACT="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --commit) COMMIT="$2"; shift 2 ;;
+    --skip-origin-fetch) SKIP_ORIGIN_FETCH=1; shift ;;
     --docker-image) IMAGE="$2"; shift 2 ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --qa-sample-size) QA_SAMPLE_SIZE="$2"; shift 2 ;;
@@ -44,8 +46,21 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$PROJECT_ID" && -n "$RUN_ID" && -n "$GATEWAY_URL" && -n "$GATE_ARTIFACT" ]] || { usage >&2; exit 2; }
 test -f "$GATE_ARTIFACT" || { echo "3-QA gate artifact is missing: $GATE_ARTIFACT" >&2; exit 2; }
-git fetch --quiet origin "refs/heads/$BRANCH"
-git merge-base --is-ancestor "$COMMIT" FETCH_HEAD || { echo "Commit is not pushed to origin/$BRANCH." >&2; exit 2; }
+if [[ "$SKIP_ORIGIN_FETCH" -eq 1 ]]; then
+  REMOTE_REF="refs/remotes/origin/$BRANCH"
+  git show-ref --verify --quiet "$REMOTE_REF" || {
+    echo "No locally cached origin/$BRANCH ref; cannot use --skip-origin-fetch." >&2
+    exit 2
+  }
+  git merge-base --is-ancestor "$COMMIT" "$REMOTE_REF" || {
+    echo "Commit is not present in locally cached origin/$BRANCH." >&2
+    exit 2
+  }
+  echo "Using locally cached origin/$BRANCH after --skip-origin-fetch."
+else
+  git fetch --quiet origin "refs/heads/$BRANCH"
+  git merge-base --is-ancestor "$COMMIT" FETCH_HEAD || { echo "Commit is not pushed to origin/$BRANCH." >&2; exit 2; }
+fi
 RESOLVED_IMAGE="$(python3 scripts/resolve_datasphere_runtime_image.py --repository "${DATASPHERE_VERTEX_CPU_RUNTIME_REPOSITORY:-ghcr.io/kondachello/hallu-smiles-datasphere-vertex-cpu}" --commit "$COMMIT" --wait-seconds "${DATASPHERE_RUNTIME_WAIT_SECONDS:-1800}")"
 if [[ -n "$IMAGE" && "$IMAGE" != "$RESOLVED_IMAGE" ]]; then
   echo "--docker-image does not match the immutable runtime published for source commit $COMMIT." >&2

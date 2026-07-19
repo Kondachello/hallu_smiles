@@ -91,6 +91,11 @@ immutable CPU image для точного commit. Submitter дождётся п�
 digest (до 30 минут по умолчанию), сверит его с commit и только затем создаст
 DataSphere Job.
 
+Если на локальной машине временно не разрешается `github.com`, но `git branch -vv` уже показывает нужный commit у `origin/new-metrics`, к команде ниже можно
+добавить `--skip-origin-fetch`. Этот флаг не отключает проверку SHA: он сверяет
+commit с локально сохранённой remote-ссылкой. Не используйте его, если branch
+ещё не был успешно отправлен в GitHub.
+
 ```bash
 export PROJECT_ID=bt1i64odluitglbaj5st
 export GATEWAY_URL=https://hallu-vertex-gateway-453887629111.europe-west4.run.app
