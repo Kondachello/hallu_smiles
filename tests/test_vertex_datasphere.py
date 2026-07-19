@@ -46,6 +46,8 @@ def test_vertex_runtime_config_derives_identity_from_authenticated_manifest(tmp_
     assert cfg["llm"]["structured_output_request_backend"] is None
     assert cfg["llm"]["max_tokens"] == 4096
     assert cfg["llm"]["concurrency"] == 1
+    assert cfg["llm"]["max_retries"] == 7
+    assert cfg["llm"]["retry_backoff_base_s"] == 5.0
     assert cfg["extraction"]["serial_chunking"] is False
     assert cfg["cache_dir"] == str(tmp_path / "work" / "cache" / "kg")
     assert cfg["vertex_gateway"]["gateway_manifest"] == _manifest()
@@ -93,7 +95,7 @@ def test_cpu_vertex_job_is_pinned_cpu_only_and_keeps_the_secret_out_of_yaml(tmp_
     assert "--qa-pilot-limit 3" in runner
     assert "--cache-only" in runner
     assert "check_vertex_verifier_probe.py" in runner
-    assert "--max-tokens 4096 --concurrency 1" in runner
+    assert "--max-tokens 4096 --concurrency 1 --max-retries 7 --retry-backoff-base-s 5" in runner
     assert "usage-counts.json" in runner
     # Cloud Run's public frontend intercepts the reserved /healthz path;
     # the authenticated manifest is the runner's readiness probe instead.

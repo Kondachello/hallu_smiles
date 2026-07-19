@@ -79,11 +79,22 @@ def main() -> None:
     # on-demand capacity probe.
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--concurrency", type=int, default=1)
+    # Public/on-demand Vertex capacity can briefly return HTTP 429 even for a
+    # single in-flight request.  The bounded CPU probe must distinguish that
+    # transient provider condition from malformed structured output, while
+    # keeping its total wait finite.  Seven attempts wait for at most 315
+    # seconds (5 + 10 + 20 + 40 + 80 + 160) before the final attempt.
+    parser.add_argument("--max-retries", type=int, default=7)
+    parser.add_argument("--retry-backoff-base-s", type=float, default=5.0)
     args = parser.parse_args()
     if args.max_tokens <= 0:
         raise ValueError("--max-tokens must be positive")
     if args.concurrency <= 0:
         raise ValueError("--concurrency must be positive")
+    if args.max_retries <= 0:
+        raise ValueError("--max-retries must be positive")
+    if args.retry_backoff_base_s <= 0:
+        raise ValueError("--retry-backoff-base-s must be positive")
 
     with open(args.base_config, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -118,6 +129,8 @@ def main() -> None:
     llm["runtime_fingerprint"] = f"vertex-gateway:{combined_hash}"
     llm["max_tokens"] = args.max_tokens
     llm["concurrency"] = args.concurrency
+    llm["max_retries"] = args.max_retries
+    llm["retry_backoff_base_s"] = args.retry_backoff_base_s
     llm["structured_output_transport"] = "response_format"
     llm["structured_output_backend"] = "vertex"
     llm["structured_output_request_backend"] = None
