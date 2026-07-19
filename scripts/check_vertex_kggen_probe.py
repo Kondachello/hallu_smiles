@@ -35,6 +35,24 @@ def _has_endpoints(relations, left: str, right: str) -> bool:
     )
 
 
+def _has_ada_lovelace_anchor(relations) -> bool:
+    """Accept either faithful KGGen encoding of the synthetic source fact.
+
+    The source says that Lovelace wrote notes about Babbage's Analytical
+    Engine.  A graph may represent that as a direct Lovelace--Engine edge or
+    as Lovelace--Babbage plus Babbage--Engine; both preserve the source fact.
+    """
+    return (
+        _has_endpoints(relations, "Ada Lovelace", "Analytical Engine")
+        or _has_endpoints(relations, "Ada Lovelace", "Charles Babbage")
+    )
+
+
+def _write_report(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -44,15 +62,12 @@ def main() -> None:
     cfg = load_config(args.config)
     usage = UsageLogger(None)
     graph = KGExtractor(cfg, usage=usage).extract(PROBE_TEXT, kind="vertex_probe")
-    if len(graph.entities) < 4 or len(graph.relations) < 2:
-        raise RuntimeError("synthetic KGGen probe produced too few entities or relations")
-    if not _has_endpoints(graph.relations, "Ada Lovelace", "Analytical Engine"):
-        raise RuntimeError("synthetic KGGen probe omitted the Ada Lovelace fact")
-    if not _has_endpoints(graph.relations, "Marie Curie", "Warsaw"):
-        raise RuntimeError("synthetic KGGen probe omitted the Marie Curie fact")
+    anchors = {
+        "ada_lovelace": _has_ada_lovelace_anchor(graph.relations),
+        "marie_curie_warsaw": _has_endpoints(graph.relations, "Marie Curie", "Warsaw"),
+    }
     report = {
         "checked_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "status": "ready",
         "elapsed_seconds": round(time.perf_counter() - started, 3),
         "model": cfg.llm.model,
         "api_base": cfg.llm.api_base,
@@ -60,9 +75,25 @@ def main() -> None:
         "structured_output_backend": cfg.llm.structured_output_backend,
         "entities": len(graph.entities),
         "relations": len(graph.relations),
+        "semantic_anchors": anchors,
+        # This graph is deliberately synthetic, never C/Q/A data.  Keeping it
+        # makes a remote probe failure diagnosable without logging prompts.
+        "synthetic_graph": graph.to_dict(),
         "usage": usage.summary(),
     }
-    Path(args.report).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    failure = None
+    if len(graph.entities) < 4 or len(graph.relations) < 2:
+        failure = "synthetic KGGen probe produced too few entities or relations"
+    elif not anchors["ada_lovelace"]:
+        failure = "synthetic KGGen probe omitted the Ada Lovelace fact"
+    elif not anchors["marie_curie_warsaw"]:
+        failure = "synthetic KGGen probe omitted the Marie Curie fact"
+    report["status"] = "failed" if failure else "ready"
+    if failure:
+        report["error"] = failure
+    _write_report(Path(args.report), report)
+    if failure:
+        raise RuntimeError(failure)
     print(json.dumps(report, sort_keys=True))
 
 
