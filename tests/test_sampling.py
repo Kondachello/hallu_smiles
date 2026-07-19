@@ -2,7 +2,14 @@
 from collections import Counter
 
 from src.data import Instance
-from src.sampling import load_manifest_instances, select_qa_pilot, write_manifest
+import pytest
+
+from src.sampling import (
+    load_manifest_instances,
+    qa_sample_quotas,
+    select_qa_pilot,
+    write_manifest,
+)
 
 
 def _instances():
@@ -33,3 +40,12 @@ def test_select_qa_pilot_is_balanced_one_response_per_source_and_reproducible(tm
     path = write_manifest(tmp_path / "pilot.json", first, seed=42, train_sources=16, test_sources=4)
     restored = load_manifest_instances(path, source)
     assert [i.response_id for i in restored] == [i.response_id for i in first]
+
+
+def test_qa_sample_quotas_make_a_100_record_80_20_split_without_rounding():
+    assert qa_sample_quotas(100, "0.2") == (80, 20)
+    assert qa_sample_quotas(20, "1/5") == (16, 4)
+    with pytest.raises(ValueError, match="integer test size"):
+        qa_sample_quotas(101, "0.2")
+    with pytest.raises(ValueError, match="positive and even"):
+        qa_sample_quotas(10, "0.1")

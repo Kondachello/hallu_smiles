@@ -26,7 +26,12 @@ from src.evaluate import run_evaluation
 from src.extract import FakeKGGen, Graph, KGExtractor, UsageLogger
 from src.matching import DictEmbedder, Embedder, RefGraph, SBERTEmbedder
 from src.metrics import ScoreResult, score_response
-from src.sampling import load_manifest_instances, select_qa_pilot, write_manifest
+from src.sampling import (
+    load_manifest_instances,
+    qa_sample_quotas,
+    select_qa_sample,
+    write_manifest,
+)
 from src.tune import alpha_cv, h_array, prf_at_threshold, select_f1_threshold
 from src.verifier import FakeRelationVerifier, RelationVerifier
 
@@ -526,44 +531,49 @@ def _select_instances(args, cfg, out_dir: Path) -> list[Instance]:
     all_instances = load_instances(
         cfg.data.dir, exclude_implicit_true=bool(cfg.data.exclude_implicit_true)
     )
-    if args.qa_pilot and args.qa_pilot_manifest:
-        raise SystemExit("use either --qa-pilot or --qa-pilot-manifest, not both")
-    if args.qa_pilot_manifest:
-        selected = load_manifest_instances(args.qa_pilot_manifest, all_instances)
-        print(f"[pilot] loaded {len(selected)} fixed QA rows from {args.qa_pilot_manifest}")
-        return _limit_qa_pilot(selected, args.qa_pilot_limit)
-    if args.qa_pilot:
-        selected = select_qa_pilot(
-            all_instances, seed=args.sample_seed,
-            train_sources=args.qa_pilot_train_sources,
-            test_sources=args.qa_pilot_test_sources,
+    if args.qa_sample and args.qa_manifest:
+        raise SystemExit("use either --qa-sample or --qa-manifest, not both")
+    if args.qa_manifest:
+        selected = load_manifest_instances(args.qa_manifest, all_instances)
+        print(f"[qa-sample] loaded {len(selected)} fixed QA rows from {args.qa_manifest}")
+        return _limit_qa_sample(selected, args.qa_sample_limit)
+    if args.qa_sample:
+        train_sources, test_sources = qa_sample_quotas(
+            args.qa_sample_size, args.qa_test_fraction,
         )
-        manifest_path = Path(args.qa_pilot_manifest_out or out_dir / "qa_pilot_manifest.json")
+        selected = select_qa_sample(
+            all_instances, seed=args.sample_seed,
+            train_sources=train_sources, test_sources=test_sources,
+        )
+        manifest_path = Path(args.qa_manifest_out or out_dir / "qa_sample_manifest.json")
         write_manifest(
             manifest_path, selected, seed=args.sample_seed,
-            train_sources=args.qa_pilot_train_sources, test_sources=args.qa_pilot_test_sources,
+            train_sources=train_sources, test_sources=test_sources,
         )
-        print(f"[pilot] selected {len(selected)} QA rows -> {manifest_path}")
-        return _limit_qa_pilot(selected, args.qa_pilot_limit)
+        print(
+            f"[qa-sample] selected {len(selected)} QA rows "
+            f"(train={train_sources}, test={test_sources}) -> {manifest_path}"
+        )
+        return _limit_qa_sample(selected, args.qa_sample_limit)
     if args.limit:
         return all_instances[: args.limit]
     return all_instances
 
 
-def _limit_qa_pilot(instances: list[Instance], limit: int | None) -> list[Instance]:
-    """Cap a fixed pilot only for a bounded runtime compatibility probe.
+def _limit_qa_sample(instances: list[Instance], limit: int | None) -> list[Instance]:
+    """Cap a fixed QA sample only for a bounded runtime compatibility probe.
 
     The full manifest is written before this cap is applied, so the probe and
-    the later 20-record evaluation use exactly the same deterministic prefix.
+    the later full evaluation use exactly the same deterministic prefix.
     It is never used for metric tuning or evaluation.
     """
     if limit is None:
         return instances
     if limit <= 0:
-        raise SystemExit("--qa-pilot-limit must be positive")
+        raise SystemExit("--qa-sample-limit must be positive")
     if limit > len(instances):
-        raise SystemExit(f"--qa-pilot-limit={limit} exceeds the fixed pilot size {len(instances)}")
-    print(f"[pilot] runtime probe cap: {limit}/{len(instances)} fixed QA rows")
+        raise SystemExit(f"--qa-sample-limit={limit} exceeds the fixed sample size {len(instances)}")
+    print(f"[qa-sample] runtime probe cap: {limit}/{len(instances)} fixed QA rows")
     return instances[:limit]
 
 
@@ -584,15 +594,30 @@ def main() -> None:
     parser.add_argument("--cache-dir", default=None, help="override shared KG cache directory")
     parser.add_argument("--limit", type=int, default=None, help="cap #instances (smoke tests)")
     parser.add_argument("--relation-mode", choices=["strict", "support"], default="strict")
-    parser.add_argument("--qa-pilot", action="store_true", help="create a fixed 20-source QA pilot")
-    parser.add_argument("--qa-pilot-manifest", default=None, help="reuse an existing QA pilot manifest")
-    parser.add_argument("--qa-pilot-manifest-out", default=None, help="where a new pilot manifest is written")
     parser.add_argument(
-        "--qa-pilot-limit", type=int, default=None,
-        help="extract only a deterministic prefix of a fixed QA pilot (runtime probes only)",
+        "--qa-sample", "--qa-pilot", dest="qa_sample", action="store_true",
+        help="create a deterministic, balanced QA sample (legacy alias: --qa-pilot)",
     )
-    parser.add_argument("--qa-pilot-train-sources", type=int, default=16)
-    parser.add_argument("--qa-pilot-test-sources", type=int, default=4)
+    parser.add_argument(
+        "--qa-manifest", "--qa-pilot-manifest", dest="qa_manifest", default=None,
+        help="reuse an existing deterministic QA manifest",
+    )
+    parser.add_argument(
+        "--qa-manifest-out", "--qa-pilot-manifest-out", dest="qa_manifest_out", default=None,
+        help="where a newly selected QA manifest is written",
+    )
+    parser.add_argument(
+        "--qa-sample-limit", "--qa-pilot-limit", dest="qa_sample_limit", type=int, default=None,
+        help="extract only a deterministic prefix of a fixed QA sample (runtime probes only)",
+    )
+    parser.add_argument(
+        "--qa-sample-size", type=int, default=20,
+        help="total source-level QA records to select (default: 20)",
+    )
+    parser.add_argument(
+        "--qa-test-fraction", default="0.2",
+        help="held-out test fraction; must yield positive even train/test counts (default: 0.2)",
+    )
     parser.add_argument("--sample-seed", type=int, default=42)
     parser.add_argument("--fake-extractor", action="store_true", help="offline FakeKGGen/DictEmbedder/FakeVerifier")
     parser.add_argument(

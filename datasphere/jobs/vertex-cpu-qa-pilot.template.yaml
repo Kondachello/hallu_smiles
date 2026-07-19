@@ -1,9 +1,9 @@
 # Render with scripts/render_datasphere_vertex_qa_pilot_job.py; do not submit this template directly.
-name: hallu-vertex-cpu-qa-pilot-__RUN_ID__
-desc: Fixed 20-QA strict-vs-support HalluGraph evaluation through Cloud Run and Vertex AI.
+name: hallu-vertex-cpu-qa-__RUN_ID__
+desc: Parameterized strict-vs-support HalluGraph QA evaluation through Cloud Run and Vertex AI.
 cmd: >-
   bash -lc 'set -Eeuo pipefail;
-  export RUN_ROOT="$PWD/vertex-cpu-qa-pilot-artifacts/__RUN_ID__";
+  export RUN_ROOT="$PWD/vertex-cpu-qa-artifacts/__RUN_ID__";
   mkdir -p "$RUN_ROOT";
   git init source;
   git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
@@ -16,6 +16,10 @@ cmd: >-
   export EXPECTED_GATEWAY_MANIFEST_SHA256="__GATEWAY_MANIFEST_SHA256__";
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
   export HALLU_GATEWAY_URL="__GATEWAY_URL__";
+  export QA_SAMPLE_SIZE="__QA_SAMPLE_SIZE__";
+  export QA_TEST_FRACTION="__QA_TEST_FRACTION__";
+  export QA_CV_FOLDS="__QA_CV_FOLDS__";
+  export LLM_CONCURRENCY="__LLM_CONCURRENCY__";
   export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
   printf "[artifact] output=%s\\n" "$ARCHIVE_PATH";
   archive_ready=0;
@@ -31,16 +35,16 @@ cmd: >-
     status=$?;
     trap - EXIT;
     if ! archive_artifacts; then
-      echo "failed to create a readable 20-QA artifact" >&2;
+      echo "failed to create a readable QA experiment artifact" >&2;
       if test "$status" -eq 0; then status=1; fi;
     fi;
-    if test -f "$RUN_ROOT/pilot.stdout.log"; then echo "[diagnostics] pilot stdout tail"; tail -n 320 "$RUN_ROOT/pilot.stdout.log" || true; fi;
-    if test -f "$RUN_ROOT/pilot.stderr.log"; then echo "[diagnostics] pilot stderr tail"; tail -n 320 "$RUN_ROOT/pilot.stderr.log" || true; fi;
+    if test -f "$RUN_ROOT/qa.stdout.log"; then echo "[diagnostics] QA stdout tail"; tail -n 320 "$RUN_ROOT/qa.stdout.log" || true; fi;
+    if test -f "$RUN_ROOT/qa.stderr.log"; then echo "[diagnostics] QA stderr tail"; tail -n 320 "$RUN_ROOT/qa.stderr.log" || true; fi;
     exit "$status";
   };
   trap archive_on_exit EXIT;
   set +e;
-  timeout --signal=TERM --kill-after=60s 21600 bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh >"$RUN_ROOT/pilot.stdout.log" 2>"$RUN_ROOT/pilot.stderr.log";
+  timeout --signal=TERM --kill-after=60s __JOB_TIMEOUT_SECONDS__ bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh >"$RUN_ROOT/qa.stdout.log" 2>"$RUN_ROOT/qa.stderr.log";
   status=$?;
   set -e;
   if ! archive_artifacts; then status=1; fi;
@@ -48,7 +52,7 @@ cmd: >-
 env:
 __DOCKER_ENV_BLOCK__
 outputs:
-  - vertex-cpu-qa-pilot-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+  - vertex-cpu-qa-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
 flags:
   - attach-project-disk
 cloud-instance-types:

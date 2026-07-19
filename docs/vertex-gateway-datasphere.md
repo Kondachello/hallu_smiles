@@ -5,6 +5,10 @@ KGGen, local CPU S-BERT, cache replay and reports. Gemini inference is called
 from Cloud Run through Vertex AI; neither DataSphere nor the repository gets a
 Google service-account key.
 
+For the repeatable team launch procedure, including the shared DataSphere
+secret boundary and the current 100-QA command, use
+[`vertex-datasphere-team-runbook.md`](vertex-datasphere-team-runbook.md).
+
 ## 1. One-time Google Cloud setup
 
 Choose a billed project and use the same `europe-west4` region for Cloud Run
@@ -115,6 +119,8 @@ unchanged cache hashes. The archive contains `gateway-manifest.json`,
 `usage-counts.json` (including zero live calls for both cache-only replays),
 and `run_metadata.json`.
 
-This is not a tuning/evaluation run. The existing strict-vs-support comparison
-is reserved for the later 20-QA manifest, whose 16 train and 4 test records are
-needed to preserve the no-test-leakage protocol.
+This is not a tuning/evaluation run. The full strict-vs-support runner is
+parameterized; the current experiment uses 100 QA with an 80/20 held-out split
+and train-only 5-fold CV. The probe deliberately keeps a 20-record manifest
+only so its deterministic three-record prefix remains a small compatibility
+gate.

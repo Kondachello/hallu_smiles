@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
-# Validate the successful CPU 3-QA gate, then submit one fixed 20-QA CPU run.
+# Validate the successful CPU 3-QA gate, then submit one parameterized QA run.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-ares}"
 
-usage() { echo "Usage: $0 --project-id ID --run-id ID --gateway-url HTTPS_URL --gate-artifact PATH [--commit SHA] [--branch NAME] [--docker-image REF]"; }
+usage() {
+  cat <<'EOF'
+Usage: scripts/submit_datasphere_vertex_qa_pilot.sh --project-id ID --run-id ID --gateway-url HTTPS_URL --gate-artifact PATH [options]
+
+Options:
+  --qa-sample-size N      Total QA sources (default: 100)
+  --qa-test-fraction F    Held-out test fraction, e.g. 0.2 (default: 0.2)
+  --cv-folds N            Train-only stratified CV folds (default: 5)
+  --concurrency N         Gateway requests in flight (default: 1)
+  --timeout-seconds N     Job wall-time ceiling (default: 43200)
+  --commit SHA            Pushed source commit (default: HEAD)
+  --branch NAME           Remote branch containing the commit (default: current)
+  --docker-image REF      Optional immutable image; must match the committed build
+  --profile NAME          DataSphere CLI profile (default: default)
+EOF
+}
 PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; IMAGE=""; PROFILE="default"
+QA_SAMPLE_SIZE=100; QA_TEST_FRACTION="0.2"; CV_FOLDS=5; CONCURRENCY=1; TIMEOUT_SECONDS=43200
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-id) PROJECT_ID="$2"; shift 2 ;;
@@ -17,6 +33,11 @@ while [[ $# -gt 0 ]]; do
     --commit) COMMIT="$2"; shift 2 ;;
     --docker-image) IMAGE="$2"; shift 2 ;;
     --profile) PROFILE="$2"; shift 2 ;;
+    --qa-sample-size) QA_SAMPLE_SIZE="$2"; shift 2 ;;
+    --qa-test-fraction) QA_TEST_FRACTION="$2"; shift 2 ;;
+    --cv-folds) CV_FOLDS="$2"; shift 2 ;;
+    --concurrency) CONCURRENCY="$2"; shift 2 ;;
+    --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -39,7 +60,9 @@ GATE_MANIFEST_SHA256="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1
 RENDERED="datasphere/jobs/rendered/vertex-cpu-qa-pilot-${RUN_ID}.yaml"
 python3 scripts/render_datasphere_vertex_qa_pilot_job.py --commit "$COMMIT" --run-id "$RUN_ID" \
   --gateway-url "$GATEWAY_URL" --gateway-manifest-sha256 "$GATE_MANIFEST_SHA256" \
-  --docker-image "$IMAGE" --output "$RENDERED"
+  --docker-image "$IMAGE" --qa-sample-size "$QA_SAMPLE_SIZE" \
+  --qa-test-fraction "$QA_TEST_FRACTION" --cv-folds "$CV_FOLDS" \
+  --concurrency "$CONCURRENCY" --timeout-seconds "$TIMEOUT_SECONDS" --output "$RENDERED"
 python3 scripts/validate_datasphere_job.py --job "$RENDERED" --repo-root .
 datasphere --profile "$PROFILE" project get --id "$PROJECT_ID" >/dev/null
 datasphere --profile "$PROFILE" project job execute --async -p "$PROJECT_ID" -c "$RENDERED" -o "${RENDERED%.yaml}.execution.json"

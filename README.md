@@ -52,7 +52,8 @@ OpenAI-compatible Cloud Run URL and its own `HALLU_GATEWAY_API_KEY` Project
 secret; it never calls Gemini Developer API and never stores Google credentials.
 The Job fetches a credential-protected gateway manifest before generating its
 job-local config, so endpoint and gateway revision participate in cache keys.
-See [the CPU 3-QA gateway runbook](docs/vertex-gateway-datasphere.md).
+See [the CPU 3-QA gateway runbook](docs/vertex-gateway-datasphere.md) and the
+[team Vertex/DataSphere runbook](docs/vertex-datasphere-team-runbook.md).
 
 **OpenRouter (alternative local profile)**
 ```bash
@@ -102,21 +103,23 @@ python run.py --stage all --fake-extractor --data-dir tests/fixture_data --outpu
 **entire pipeline** (extract → cache → score → tune → evaluate → audit) runs with zero network and
 zero torch. It exercises plumbing only — the numbers are meaningless.
 
-### Fixed 20-source QA relation pilot
+### Deterministic QA relation sample
 
-The pilot selects one response per QA `source_id`: 16 train rows (8/8 labels) and 4 test rows
-(2/2 labels). It writes a manifest; reuse that exact file for the support run so strict and
-text-verified metrics see identical `(C,Q,A)` triples.
+The sample selects one response per QA `source_id`, balances labels within
+train/test and writes a manifest. Reuse that exact file for the support run so
+strict and text-verified metrics see identical `(C,Q,A)` triples. The current
+full protocol is 100 records: 80 train / 20 held-out test.
 
 ```bash
 # Baseline: existing graph-edge RP semantics, no verifier LLM calls.
-python run.py --stage all --relation-mode strict --qa-pilot \
-  --qa-pilot-manifest-out results/qa_pilot_manifest.json \
+python run.py --stage all --relation-mode strict --qa-sample \
+  --qa-sample-size 100 --qa-test-fraction 0.2 \
+  --qa-manifest-out results/qa_manifest_100.json \
   --output-dir results/qa_pilot_strict
 
 # Support variant: verifier checks each grounded answer edge against C/Q text.
 python run.py --stage all --relation-mode support \
-  --qa-pilot-manifest results/qa_pilot_manifest.json \
+  --qa-manifest results/qa_manifest_100.json \
   --output-dir results/qa_pilot_support
 ```
 
@@ -124,84 +127,6 @@ python run.py --stage all --relation-mode support \
 `RP_grounded`, `RP_entailed_cond`, and `RP_support`; it caches text-verifier verdicts under
 `.cache/verdicts/`. The verifier uses the same `llm.model` as KGGen and returns only
 `entailed`, `contradicted`, or `unknown` for a canonical triple plus up to four source sentences.
-
-### Legacy DataSphere local-vLLM batch job
-
-The following GPU/Llama route is retained only to reproduce earlier artifacts.
-Use the CPU gateway runbook above for new Gemini/Vertex experiments.
-
-The laptop only renders and submits Jobs. Llama 3.1 8B inference runs on `127.0.0.1` inside a
-DataSphere `g1.1` Job; no model or GPU runtime is installed locally. The model and RAGTruth are
-staged once in read-only Project storage, while an immutable public OCI image supplies the
-runtime. Jobs neither download weights nor install Python packages.
-
-GitHub Actions builds the runtime remotely from a rendered Dockerfile pinned to every pushed
-`new-metrics` commit and publishes it to GHCR. The submitter resolves the commit tag to its
-content digest and puts only the immutable `image@sha256:...` reference in Job YAML.
-It contains two isolated environments: `/opt/hallu/server` for vLLM/XGrammar and
-`/opt/hallu/client` for KGGen/DSPy/scoring. It also embeds the exact offline S-BERT snapshot at
-`/opt/hallu/models/all-MiniLM-L6-v2`. The 8B model itself is never copied into the image.
-
-```bash
-# In DataSphere Jupyter. Start at the Jupyter Project directory, then use the
-# repository's shared/ folder. DS_PROJECT_HOME is a Job-only mount variable.
-# Llama is gated: HF_TOKEN is read only here; the GPU Job never receives it.
-cd /home/jupyter/project/hallu_smiles
-export DS_SHARED_ROOT="$PWD/shared"
-python scripts/stage_datasphere_shared_assets.py --shared-root "$DS_SHARED_ROOT" \
-  --model-id meta-llama/Meta-Llama-3.1-8B-Instruct
-
-# Locally, push the exact source commit and wait for the remote runtime build.
-# No Docker daemon, model weights or image layers are stored on the laptop.
-COMMIT=$(git rev-parse HEAD)
-git push origin new-metrics
-gh run watch --repo Kondachello/hallu_smiles \
-  "$(gh run list --repo Kondachello/hallu_smiles --branch new-metrics \
-      --workflow datasphere-runtime-image.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-
-# Submit the CPU preflight with that exact commit and image. The helper refuses an unpushed
-# commit, validates the rendered YAML, and never creates a project or secret.
-bash scripts/submit_datasphere_job.sh --kind preflight --project-id <PROJECT_ID> \
-  --commit "$COMMIT" \
-  --run-id preflight-20260717 --branch new-metrics
-
-# Download the successful preflight output first. The submitter validates its
-# commit/image/model/runtime identity before it can create a GPU Job.
-PREFLIGHT_ARCHIVE=<PATH_TO_DOWNLOADED_preflight-*.tar.gz>
-bash scripts/submit_datasphere_job.sh --kind cluster-probe-g1 --project-id <PROJECT_ID> \
-  --commit "$COMMIT" \
-  --gate-artifact "$PREFLIGHT_ARCHIVE" \
-  --run-id cluster-probe-20260717 --branch new-metrics
-
-# Download the successful 3-QA output. The submitter checks all probe reports,
-# the empty failure log and exact identity before it can create the full Job.
-CLUSTER_ARCHIVE=<PATH_TO_DOWNLOADED_cluster-probe-*.tar.gz>
-bash scripts/submit_datasphere_job.sh --kind qa-pilot-g1 --project-id <PROJECT_ID> \
-  --commit "$COMMIT" \
-  --gate-artifact "$CLUSTER_ARCHIVE" \
-  --run-id new-metrics-20260717 --branch new-metrics
-```
-
-The server receives the exact closed JSON Schema through native OpenAI
-`response_format: {type: json_schema, ...}` and uses XGrammar constrained decoding with fallback
-disabled. Before any three-QA extraction, the runner checks the real KGGen relation schema once, the official KGGen
-typed-output plus LLM-clustering path, the support verifier schema, and the first selected
-RAGTruth reference graph. Official KGGen clustering receives its documented `context` argument:
-the exact text currently being clustered plus a fixed strict-equivalence policy, separately for
-`G_c`, `G_q`, and `G_a`. The policy permits aliases, surface variants and truth-conditionally
-equivalent relation labels, but explicitly rejects mere co-occurrence, topical relatedness or a
-shared endpoint as evidence of equivalence. Every live
-cluster pass records raw/clustered graphs and complete mappings in `cache/cluster-audit.jsonl`.
-The full Job then runs strict and support on one manifest, stops vLLM,
-and repeats both runs with `--cache-only`; missing cache entries, any live call, changed cache
-hashes, or non-identical `metrics.csv` fails the Job.
-
-The submitter also refuses to create a second non-terminal HalluGraph GPU Job in the Project.
-
-The GPU configuration is one `g1.1` V100 in FP16 with `max-model-len=8192` and a hard three-hour
-limit (777,600 units plus at most 60 seconds graceful shutdown). See
-[the team DataSphere runbook](docs/datasphere-team-runbook.md) for remote image creation,
-gate criteria, the shared-storage contract, and monitoring.
 
 ## 5. Outputs (`results/`)
 
@@ -221,8 +146,8 @@ gate criteria, the shared-storage contract, and monitoring.
 
 - `temperature: 0.0` everywhere; fixed `eval.seed`.
 - **Disk caches** are namespaced by model revision, runtime fingerprint, structured-output
-  contract, extraction parameters, and input content. In DataSphere, the full pilot proves the
-  archive by stopping vLLM and rerunning strict/support with `--cache-only`: the replay must make
+  contract, extraction parameters, and input content. In DataSphere, the full QA job proves the
+  archive by rerunning strict/support with `--cache-only`: the replay must make
   **zero live calls**, leave cache hashes unchanged, and reproduce byte-identical `metrics.csv`.
 - Cache writes are atomic (`os.replace`) with **per-writer unique temp names**, so concurrent
   extraction of identical texts (RAGTruth has duplicate responses) is crash-safe and race-free.

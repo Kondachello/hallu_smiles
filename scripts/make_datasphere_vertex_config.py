@@ -92,6 +92,10 @@ def main() -> None:
     parser.add_argument("--max-retries", type=int, default=7)
     parser.add_argument("--retry-backoff-base-s", type=float, default=5.0)
     parser.add_argument("--retry-backoff-max-s", type=float, default=60.0)
+    parser.add_argument(
+        "--cv-folds", type=int, default=5,
+        help="stratified folds used only for train-only alpha/tau selection",
+    )
     args = parser.parse_args()
     if args.max_tokens <= 0:
         raise ValueError("--max-tokens must be positive")
@@ -105,6 +109,8 @@ def main() -> None:
         raise ValueError("--retry-backoff-max-s must be positive")
     if args.retry_backoff_max_s < args.retry_backoff_base_s:
         raise ValueError("--retry-backoff-max-s must be at least --retry-backoff-base-s")
+    if args.cv_folds < 2:
+        raise ValueError("--cv-folds must be at least 2")
 
     with open(args.base_config, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -156,6 +162,7 @@ def main() -> None:
     config["cache_dir"] = str(cache_root / "kg")
     config.setdefault("relation_verifier", {})["cache_dir"] = str(cache_root / "verdicts")
     config["output_dir"] = str(work_dir / "results")
+    config["eval"]["alpha_cv_folds"] = args.cv_folds
     config.setdefault("vertex_gateway", {}).update(
         {
             "manifest_sha256": manifest_hash,

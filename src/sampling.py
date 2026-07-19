@@ -1,4 +1,4 @@
-"""Deterministic, source-level QA pilot selection and manifest handling.
+"""Deterministic, source-level QA sample selection and manifest handling.
 
 RAGTruth stores several model responses for each QA source.  A pilot needs one
 response per source so a source cannot appear in both training and test data.
@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter, defaultdict
+from fractions import Fraction
 from pathlib import Path
 from typing import Iterable
 
@@ -18,7 +19,38 @@ from .data import Instance
 MANIFEST_VERSION = 1
 
 
-def select_qa_pilot(
+def qa_sample_quotas(total_sources: int, test_fraction: str | float = "0.2") -> tuple[int, int]:
+    """Resolve a balanced source-level train/test split from a compact spec.
+
+    The sample contains one response per source and is balanced within each
+    split, so both resulting counts must be positive even integers.  Parsing
+    through :class:`fractions.Fraction` avoids silently rounding a requested
+    holdout fraction.
+    """
+    if total_sources <= 0:
+        raise ValueError("QA sample size must be positive")
+    try:
+        fraction = Fraction(str(test_fraction))
+    except (ValueError, ZeroDivisionError) as exc:
+        raise ValueError("QA test fraction must be a finite rational number") from exc
+    if not 0 < fraction < 1:
+        raise ValueError("QA test fraction must be strictly between 0 and 1")
+    test = Fraction(total_sources) * fraction
+    if test.denominator != 1:
+        raise ValueError(
+            f"QA sample size {total_sources} and test fraction {fraction} do not yield an integer test size"
+        )
+    test_sources = int(test)
+    train_sources = total_sources - test_sources
+    if train_sources <= 0 or test_sources <= 0 or train_sources % 2 or test_sources % 2:
+        raise ValueError(
+            "QA train and test source counts must both be positive and even "
+            "to preserve balanced labels"
+        )
+    return train_sources, test_sources
+
+
+def select_qa_sample(
     instances: Iterable[Instance],
     *,
     seed: int = 42,
@@ -60,6 +92,12 @@ def select_qa_pilot(
     if len(selected) != expected:  # defensive; _pick_bucket raises first
         raise RuntimeError(f"selected {len(selected)} QA responses, expected {expected}")
     return selected
+
+
+# Backward-compatible import for archived job scripts.  New code should use
+# ``select_qa_sample``: it describes both the 3-QA gate's 20-record manifest
+# and parameterized evaluation samples without implying a fixed pilot size.
+select_qa_pilot = select_qa_sample
 
 
 def _pick_bucket(

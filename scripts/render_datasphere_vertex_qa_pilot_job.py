@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Render the fixed 20-QA CPU Vertex strict-vs-support DataSphere Job."""
+"""Render a parameterized CPU Vertex strict-vs-support DataSphere QA Job."""
 from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 from datasphere_runtime_image import require_runtime_image
@@ -11,10 +12,14 @@ from render_datasphere_vertex_probe_job import _gateway_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 TEMPLATE = ROOT / "datasphere/jobs/vertex-cpu-qa-pilot.template.yaml"
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+from src.sampling import qa_sample_quotas
 
 
 def main() -> None:
@@ -24,6 +29,11 @@ def main() -> None:
     parser.add_argument("--gateway-url", required=True)
     parser.add_argument("--gateway-manifest-sha256", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--qa-sample-size", type=int, default=20)
+    parser.add_argument("--qa-test-fraction", default="0.2")
+    parser.add_argument("--cv-folds", type=int, default=5)
+    parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--timeout-seconds", type=int, default=43200)
     image = parser.add_mutually_exclusive_group(required=True)
     image.add_argument("--docker-image-id")
     image.add_argument("--docker-image")
@@ -35,6 +45,16 @@ def main() -> None:
     if not SHA256_RE.fullmatch(args.gateway_manifest_sha256):
         raise SystemExit("--gateway-manifest-sha256 must be a lowercase SHA-256 hex digest")
     try:
+        train_sources, _ = qa_sample_quotas(args.qa_sample_size, args.qa_test_fraction)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if args.cv_folds < 2 or args.cv_folds > train_sources:
+        raise SystemExit("--cv-folds must be between 2 and the selected train source count")
+    if args.concurrency < 1:
+        raise SystemExit("--concurrency must be positive")
+    if args.timeout_seconds < 60:
+        raise SystemExit("--timeout-seconds must be at least 60")
+    try:
         gateway_url = _gateway_url(args.gateway_url)
         runtime_image = args.docker_image_id or args.docker_image
         require_runtime_image(runtime_image, registry=args.docker_image is not None)
@@ -45,6 +65,11 @@ def main() -> None:
     rendered = (rendered.replace("__GIT_COMMIT__", args.commit).replace("__RUN_ID__", args.run_id)
         .replace("__GATEWAY_URL__", gateway_url).replace("__DOCKER_IMAGE_ID__", runtime_image)
         .replace("__GATEWAY_MANIFEST_SHA256__", args.gateway_manifest_sha256)
+        .replace("__QA_SAMPLE_SIZE__", str(args.qa_sample_size))
+        .replace("__QA_TEST_FRACTION__", str(args.qa_test_fraction))
+        .replace("__QA_CV_FOLDS__", str(args.cv_folds))
+        .replace("__LLM_CONCURRENCY__", str(args.concurrency))
+        .replace("__JOB_TIMEOUT_SECONDS__", str(args.timeout_seconds))
         .replace("__DOCKER_ENV_BLOCK__", docker_block))
     if "__" in rendered:
         raise RuntimeError("unresolved Job template placeholder")

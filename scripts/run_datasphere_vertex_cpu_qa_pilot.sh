@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fixed 20-QA strict-vs-support experiment: CPU -> Cloud Run -> Vertex AI.
+# Parameterized strict-vs-support QA experiment: CPU -> Cloud Run -> Vertex AI.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,11 +13,15 @@ DATA_DIR="${DATA_DIR:?Set DATA_DIR to RAGTruth project storage}"
 RUN_ROOT="${RUN_ROOT:?Set RUN_ROOT to the writable Job directory}"
 HALLU_GATEWAY_URL="${HALLU_GATEWAY_URL:?Set the Cloud Run origin in the rendered Job}"
 : "${HALLU_GATEWAY_API_KEY:?Create a DataSphere Project secret named HALLU_GATEWAY_API_KEY}"
+QA_SAMPLE_SIZE="${QA_SAMPLE_SIZE:-20}"
+QA_TEST_FRACTION="${QA_TEST_FRACTION:-0.2}"
+QA_CV_FOLDS="${QA_CV_FOLDS:-5}"
+LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
 
 RUNTIME_CONFIG="$RUN_ROOT/runtime_config.yaml"
 GATEWAY_MANIFEST_RAW="$RUN_ROOT/gateway-manifest.raw.json"
 GATEWAY_MANIFEST="$RUN_ROOT/gateway-manifest.json"
-PILOT_MANIFEST="$RUN_ROOT/qa_pilot_manifest.json"
+QA_MANIFEST="$RUN_ROOT/qa_manifest.json"
 STRICT_OUT="$RUN_ROOT/strict"
 SUPPORT_OUT="$RUN_ROOT/support"
 REPLAY_STRICT="$RUN_ROOT/cache-replay/strict"
@@ -49,6 +53,29 @@ test -x "$CLIENT_PYTHON" || { echo "client Python is missing: $CLIENT_PYTHON" >&
 test -f "$RUNTIME_MANIFEST" || { echo "runtime manifest is missing: $RUNTIME_MANIFEST" >&2; exit 2; }
 test -f "$EMBEDDING_MODEL_PATH/config.json" || { echo "offline S-BERT snapshot is missing." >&2; exit 2; }
 mkdir -p "$RUN_ROOT"
+QA_QUOTAS="$(
+"$CLIENT_PYTHON" - "$QA_SAMPLE_SIZE" "$QA_TEST_FRACTION" <<'PY'
+import sys
+from src.sampling import qa_sample_quotas
+
+train, test = qa_sample_quotas(int(sys.argv[1]), sys.argv[2])
+print(train, test)
+PY
+)"
+read -r QA_TRAIN_SOURCES QA_TEST_SOURCES <<< "$QA_QUOTAS"
+[[ "$QA_CV_FOLDS" =~ ^[0-9]+$ ]] && (( QA_CV_FOLDS >= 2 )) || {
+  echo "QA_CV_FOLDS must be an integer of at least 2" >&2
+  exit 2
+}
+(( QA_CV_FOLDS <= QA_TRAIN_SOURCES )) || {
+  echo "QA_CV_FOLDS cannot exceed the selected train source count" >&2
+  exit 2
+}
+[[ "$LLM_CONCURRENCY" =~ ^[0-9]+$ ]] && (( LLM_CONCURRENCY >= 1 )) || {
+  echo "LLM_CONCURRENCY must be a positive integer" >&2
+  exit 2
+}
+echo "[qa-sample] total=$QA_SAMPLE_SIZE train=$QA_TRAIN_SOURCES test=$QA_TEST_SOURCES cv_folds=$QA_CV_FOLDS"
 cp "$RUNTIME_MANIFEST" "$RUN_ROOT/runtime-manifest.json"
 cp /opt/hallu/manifests/client.freeze.txt "$RUN_ROOT/client.freeze.txt"
 
@@ -79,16 +106,22 @@ test "$GATEWAY_MANIFEST_SHA256" = "$EXPECTED_GATEWAY_MANIFEST_SHA256" || {
   echo "gateway manifest changed since the successful 3-QA gate" >&2
   exit 2
 }
-CHECKPOINT_ROOT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-20qa/${EXPECTED_SOURCE_COMMIT}-${GATEWAY_MANIFEST_SHA256}"
+CHECKPOINT_ROOT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa/qa-${QA_SAMPLE_SIZE}-test-${QA_TEST_SOURCES}-cv-${QA_CV_FOLDS}/${EXPECTED_SOURCE_COMMIT}-${GATEWAY_MANIFEST_SHA256}"
 mkdir -p "$CHECKPOINT_ROOT/kg" "$CHECKPOINT_ROOT/verdicts"
-"$CLIENT_PYTHON" - "$CHECKPOINT_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" <<'PY'
+"$CLIENT_PYTHON" - "$CHECKPOINT_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" <<'PY'
 import json
 import sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
     'source_commit': sys.argv[2],
     'gateway_manifest_sha256': sys.argv[3],
-    'protocol': 'hallu-vertex-20qa-checkpoint-v1',
+    'qa_sample': {
+        'total': int(sys.argv[4]),
+        'train': int(sys.argv[5]),
+        'test': int(sys.argv[6]),
+        'alpha_cv_folds': int(sys.argv[7]),
+    },
+    'protocol': 'hallu-vertex-qa-checkpoint-v2',
 }, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
 
@@ -96,7 +129,8 @@ PY
   --base-config "$ROOT/config.yaml" --gateway-manifest "$GATEWAY_MANIFEST" \
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$RUNTIME_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$CHECKPOINT_ROOT" \
-  --max-tokens 16384 --concurrency 1 --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
+  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
+  --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/runtime-config-identity.json"
 
 # Recheck the transport inside the exact immutable full-run image. These are
@@ -125,25 +159,26 @@ PY
   }
 }
 
-# This is the deterministic manifest used by both hypotheses: exactly 16
-# train and 4 test QA sources. Only the strict extraction is live for graphs.
+# This deterministic manifest is used by both hypotheses. Only strict
+# extraction is live for graphs; support reuses the same KG cache.
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage extract \
-  --relation-mode strict --qa-pilot --qa-pilot-manifest-out "$PILOT_MANIFEST" \
+  --relation-mode strict --qa-sample --qa-sample-size "$QA_SAMPLE_SIZE" \
+  --qa-test-fraction "$QA_TEST_FRACTION" --qa-manifest-out "$QA_MANIFEST" \
   --output-dir "$STRICT_OUT"
-require_complete_extraction "$STRICT_OUT" 20
+require_complete_extraction "$STRICT_OUT" "$QA_SAMPLE_SIZE"
 mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-extraction-live-usage.jsonl"
 
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
-  --relation-mode strict --qa-pilot-manifest "$PILOT_MANIFEST" \
+  --relation-mode strict --qa-manifest "$QA_MANIFEST" \
   --output-dir "$STRICT_OUT" --kg-cache-only
-require_complete_extraction "$STRICT_OUT" 20
+require_complete_extraction "$STRICT_OUT" "$QA_SAMPLE_SIZE"
 mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-metrics-cache-usage.jsonl"
 
 find "$CHECKPOINT_ROOT/kg" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/kg-cache-before-support.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
-  --relation-mode support --qa-pilot-manifest "$PILOT_MANIFEST" \
+  --relation-mode support --qa-manifest "$QA_MANIFEST" \
   --output-dir "$SUPPORT_OUT" --kg-cache-only
-require_complete_extraction "$SUPPORT_OUT" 20
+require_complete_extraction "$SUPPORT_OUT" "$QA_SAMPLE_SIZE"
 mv "$SUPPORT_OUT/usage.jsonl" "$RUN_ROOT/support-metrics-usage.jsonl"
 find "$CHECKPOINT_ROOT/kg" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/kg-cache-after-support.sha256"
 cmp "$RUN_ROOT/kg-cache-before-support.sha256" "$RUN_ROOT/kg-cache-after-support.sha256"
@@ -152,13 +187,13 @@ cmp "$RUN_ROOT/kg-cache-before-support.sha256" "$RUN_ROOT/kg-cache-after-support
 
 find "$CHECKPOINT_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-before-replay.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
-  --relation-mode strict --qa-pilot-manifest "$PILOT_MANIFEST" \
+  --relation-mode strict --qa-manifest "$QA_MANIFEST" \
   --output-dir "$REPLAY_STRICT" --cache-only
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
-  --relation-mode support --qa-pilot-manifest "$PILOT_MANIFEST" \
+  --relation-mode support --qa-manifest "$QA_MANIFEST" \
   --output-dir "$REPLAY_SUPPORT" --cache-only
-require_complete_extraction "$REPLAY_STRICT" 20
-require_complete_extraction "$REPLAY_SUPPORT" 20
+require_complete_extraction "$REPLAY_STRICT" "$QA_SAMPLE_SIZE"
+require_complete_extraction "$REPLAY_SUPPORT" "$QA_SAMPLE_SIZE"
 cmp "$STRICT_OUT/metrics.csv" "$REPLAY_STRICT/metrics.csv"
 cmp "$SUPPORT_OUT/metrics.csv" "$REPLAY_SUPPORT/metrics.csv"
 find "$CHECKPOINT_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-after-replay.sha256"
@@ -195,7 +230,7 @@ if payload['strict_replay']['api_calls'] or payload['support_replay']['api_calls
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
 
-"$CLIENT_PYTHON" - "$METADATA" "$EXPECTED_SOURCE_COMMIT" "$DATASPHERE_DOCKER_IMAGE_ID" "$GATEWAY_MANIFEST" <<'PY'
+"$CLIENT_PYTHON" - "$METADATA" "$EXPECTED_SOURCE_COMMIT" "$DATASPHERE_DOCKER_IMAGE_ID" "$GATEWAY_MANIFEST" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
@@ -205,14 +240,18 @@ from gateway.core import canonical_manifest_sha256
 manifest = json.loads(Path(sys.argv[4]).read_text(encoding='utf-8'))
 Path(sys.argv[1]).write_text(json.dumps({
     'state': 'completed',
-    'mode': 'cpu-vertex-20qa-strict-support',
+    'mode': 'cpu-vertex-qa-strict-support',
     'checked_at_utc': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
     'source_commit': sys.argv[2],
     'datasphere_docker_image_id': sys.argv[3],
     'gateway_manifest_sha256': canonical_manifest_sha256(manifest),
     'gateway_manifest': manifest,
-    'qa_pilot_records': 20,
-    'split': {'train': 16, 'test': 4},
+    'qa_sample': {
+        'total': int(sys.argv[5]),
+        'train': int(sys.argv[6]),
+        'test': int(sys.argv[7]),
+        'alpha_cv_folds': int(sys.argv[8]),
+    },
     'runs': ['kggen-schema-and-cluster', 'verifier-live-cache-only', 'strict', 'support', 'cache-only-strict', 'cache-only-support'],
 }, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
