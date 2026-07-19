@@ -1,8 +1,9 @@
 # Render with scripts/render_datasphere_vertex_probe_job.py; do not submit this template directly.
 name: hallu-vertex-cpu-probe-__RUN_ID__
 desc: Bounded three-QA KGGen compatibility probe through Cloud Run and Vertex AI.
-# Docker Jobs execute in /job. The output is declared as the same absolute path
-# because DataSphere's output collector resolves relative paths elsewhere.
+# DataSphere substitutes ${ARTIFACT_ARCHIVE} with the collector-visible output
+# path before starting the Docker command.  The shell must write that exact
+# path, rather than a container-local /job path.
 cmd: >-
   bash -lc 'set -Eeuo pipefail;
   export RUN_ROOT="$PWD/vertex-cpu-probe-artifacts/__RUN_ID__";
@@ -17,14 +18,15 @@ cmd: >-
   export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE_ID__";
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
   export HALLU_GATEWAY_URL="__GATEWAY_URL__";
-  export ARTIFACT_ARCHIVE="/job/vertex-cpu-probe-__RUN_ID__.tar.gz";
+  export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  printf "[artifact] output=%s\\n" "$ARCHIVE_PATH";
   archive_ready=0;
   archive_artifacts() {
     if test "$archive_ready" = 1; then return 0; fi;
-    tar -C "$(dirname "$RUN_ROOT")" -czf "$ARTIFACT_ARCHIVE" "$(basename "$RUN_ROOT")";
-    tar -tzf "$ARTIFACT_ARCHIVE" >/dev/null;
-    test -s "$ARTIFACT_ARCHIVE";
-    chmod a+r "$ARTIFACT_ARCHIVE";
+    tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")";
+    tar -tzf "$ARCHIVE_PATH" >/dev/null;
+    test -s "$ARCHIVE_PATH";
+    chmod a+r "$ARCHIVE_PATH";
     archive_ready=1;
   };
   archive_on_exit() {
@@ -48,7 +50,7 @@ cmd: >-
 env:
 __DOCKER_ENV_BLOCK__
 outputs:
-  - /job/vertex-cpu-probe-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+  - vertex-cpu-probe-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
 flags:
   - attach-project-disk
 cloud-instance-types:
