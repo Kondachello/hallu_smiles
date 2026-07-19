@@ -1,6 +1,8 @@
 # Render with scripts/render_datasphere_vertex_probe_job.py; do not submit this template directly.
 name: hallu-vertex-cpu-probe-__RUN_ID__
 desc: Bounded three-QA KGGen compatibility probe through Cloud Run and Vertex AI.
+# Docker Jobs execute in /job. The output is declared as the same absolute path
+# because DataSphere's output collector resolves relative paths elsewhere.
 cmd: >-
   bash -lc 'set -Eeuo pipefail;
   export RUN_ROOT="$PWD/vertex-cpu-probe-artifacts/__RUN_ID__";
@@ -15,7 +17,7 @@ cmd: >-
   export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE_ID__";
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
   export HALLU_GATEWAY_URL="__GATEWAY_URL__";
-  if ! printenv ARTIFACT_ARCHIVE >/dev/null; then export ARTIFACT_ARCHIVE="$PWD/vertex-cpu-probe-__RUN_ID__.tar.gz"; fi;
+  export ARTIFACT_ARCHIVE="/job/vertex-cpu-probe-__RUN_ID__.tar.gz";
   archive_ready=0;
   archive_artifacts() {
     if test "$archive_ready" = 1; then return 0; fi;
@@ -41,15 +43,12 @@ cmd: >-
   timeout --signal=TERM --kill-after=60s 3600 bash source/scripts/run_datasphere_vertex_cpu_probe.sh >"$RUN_ROOT/probe.stdout.log" 2>"$RUN_ROOT/probe.stderr.log";
   status=$?;
   set -e;
-  # DataSphere begins processing declared outputs once the command exits.  Do
-  # not rely only on the EXIT trap: that lets the output collector race a
-  # still-growing tarball and report an otherwise successful probe as ERROR.
   if ! archive_artifacts; then status=1; fi;
   exit "$status"'
 env:
 __DOCKER_ENV_BLOCK__
 outputs:
-  - vertex-cpu-probe-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+  - /job/vertex-cpu-probe-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
 flags:
   - attach-project-disk
 cloud-instance-types:

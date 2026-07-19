@@ -80,6 +80,9 @@ def test_cpu_vertex_job_is_pinned_cpu_only_and_keeps_the_secret_out_of_yaml(tmp_
     job = yaml.safe_load(text)
     assert job["cloud-instance-types"] == ["c1.4"]
     assert job["env"] == {"docker": {"image": IMAGE}}
+    assert job["outputs"] == [{
+        "/job/vertex-cpu-probe-vertex-3qa-20260718.tar.gz": "ARTIFACT_ARCHIVE"
+    }]
     assert "HALLU_GATEWAY_URL" in text
     assert "HALLU_GATEWAY_API_KEY" not in text
     assert "vllm" not in text.lower()
@@ -105,10 +108,10 @@ def test_cpu_vertex_job_is_pinned_cpu_only_and_keeps_the_secret_out_of_yaml(tmp_
     assert '"failure_class"' in verifier_probe
     deploy = (SCRIPTS / "deploy_vertex_gateway.sh").read_text(encoding="utf-8")
     assert "artifacts repositories describe" in deploy
-    # Artifact creation must finish before the shell exits.  DataSphere starts
-    # output processing at process exit; an EXIT-only tarball races the
-    # collector and surfaces as an ERROR despite a complete probe.
+    # The Docker runtime's /job path must be declared explicitly. DataSphere
+    # resolves a relative output against a different collector directory.
     command = str(job["cmd"])
+    assert 'export ARTIFACT_ARCHIVE="/job/vertex-cpu-probe-vertex-3qa-20260718.tar.gz"' in command
     assert "archive_artifacts()" in command
     assert "tar -tzf \"$ARTIFACT_ARCHIVE\" >/dev/null" in command
     assert command.index("if ! archive_artifacts; then status=1; fi;") < command.rindex(
