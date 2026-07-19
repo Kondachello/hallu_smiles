@@ -12,7 +12,7 @@ llm:
   request_timeout_s: 90              # bound local/remote LLM calls; retries remain controlled below
   max_retries: 5
   retry_backoff_base_s: 2
-  concurrency: 4                      # baseline; CPU gateway probe derives 2 in its local config
+  concurrency: 4                      # baseline; CPU gateway probe derives 1 in its local config
   structured_output_transport: "none" # gateway job sets native response_format
   structured_output_backend: "vertex"
   structured_output_request_backend: null # Vertex has no vLLM guided-decoding field

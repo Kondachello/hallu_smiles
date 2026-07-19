@@ -64,7 +64,7 @@ rm -f "$GATEWAY_MANIFEST_RAW"
   --base-config "$ROOT/config.yaml" --gateway-manifest "$GATEWAY_MANIFEST" \
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$RUNTIME_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" \
-  --max-tokens 1024 --concurrency 2 > "$RUN_ROOT/runtime-config-identity.json"
+  --max-tokens 4096 --concurrency 1 > "$RUN_ROOT/runtime-config-identity.json"
 
 "$CLIENT_PYTHON" "$ROOT/scripts/check_vertex_kggen_probe.py" \
   --config "$RUNTIME_CONFIG" --report "$RUN_ROOT/kggen-vertex-probe.json"

@@ -72,8 +72,13 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--work-dir", required=True)
-    parser.add_argument("--max-tokens", type=int, default=1024)
-    parser.add_argument("--concurrency", type=int, default=2)
+    # Vertex's 2.5 Flash can spend part of a structured extraction on internal
+    # reasoning.  1024 truncated real RAGTruth relation lists in the first
+    # probe, while the provider bills actual generated tokens rather than this
+    # ceiling.  Use a safe ceiling and one in-flight source for the bounded
+    # on-demand capacity probe.
+    parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument("--concurrency", type=int, default=1)
     args = parser.parse_args()
     if args.max_tokens <= 0:
         raise ValueError("--max-tokens must be positive")
