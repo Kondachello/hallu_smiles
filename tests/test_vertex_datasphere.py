@@ -123,6 +123,33 @@ def test_cpu_vertex_job_is_pinned_cpu_only_and_keeps_the_secret_out_of_yaml(tmp_
     )
 
 
+def test_cpu_vertex_20qa_job_binds_the_successful_gateway_manifest(tmp_path):
+    rendered = tmp_path / "vertex-20qa.yaml"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_qa_pilot_job.py"),
+        "--commit", "f" * 40, "--run-id", "vertex-20qa-20260719",
+        "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--docker-image", IMAGE,
+        "--output", str(rendered),
+    ], check=True)
+    job = yaml.safe_load(rendered.read_text(encoding="utf-8"))
+    assert job["cloud-instance-types"] == ["c1.4"]
+    assert job["outputs"] == [{"vertex-cpu-qa-pilot-vertex-20qa-20260719.tar.gz": "ARTIFACT_ARCHIVE"}]
+    command = str(job["cmd"])
+    assert 'EXPECTED_GATEWAY_MANIFEST_SHA256="' + "a" * 64 + '"' in command
+    assert "timeout --signal=TERM --kill-after=60s 14400" in command
+    subprocess.run([sys.executable, str(SCRIPTS / "validate_datasphere_job.py"), "--job", str(rendered), "--repo-root", str(ROOT)], check=True)
+    runner = (SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh").read_text(encoding="utf-8")
+    assert "--qa-pilot-manifest-out \"$PILOT_MANIFEST\"" in runner
+    assert "require_complete_extraction \"$STRICT_OUT\" 20" in runner
+    assert "--relation-mode strict" in runner
+    assert "--relation-mode support" in runner
+    assert "--kg-cache-only" in runner
+    assert "--cache-only" in runner
+    assert "cmp \"$STRICT_OUT/metrics.csv\" \"$REPLAY_STRICT/metrics.csv\"" in runner
+    assert "vllm" not in runner.lower()
+
+
 def test_cpu_dockerfile_is_pinned_and_has_no_llama_or_vllm(tmp_path):
     rendered = tmp_path / "Dockerfile"
     subprocess.run([
