@@ -48,6 +48,7 @@ def test_vertex_runtime_config_derives_identity_from_authenticated_manifest(tmp_
     assert cfg["llm"]["concurrency"] == 1
     assert cfg["llm"]["max_retries"] == 7
     assert cfg["llm"]["retry_backoff_base_s"] == 5.0
+    assert cfg["llm"]["retry_backoff_max_s"] == 60.0
     assert cfg["extraction"]["serial_chunking"] is False
     assert cfg["cache_dir"] == str(tmp_path / "work" / "cache" / "kg")
     assert cfg["vertex_gateway"]["gateway_manifest"] == _manifest()
@@ -137,7 +138,7 @@ def test_cpu_vertex_20qa_job_binds_the_successful_gateway_manifest(tmp_path):
     assert job["outputs"] == [{"vertex-cpu-qa-pilot-vertex-20qa-20260719.tar.gz": "ARTIFACT_ARCHIVE"}]
     command = str(job["cmd"])
     assert 'EXPECTED_GATEWAY_MANIFEST_SHA256="' + "a" * 64 + '"' in command
-    assert "timeout --signal=TERM --kill-after=60s 14400" in command
+    assert "timeout --signal=TERM --kill-after=60s 21600" in command
     subprocess.run([sys.executable, str(SCRIPTS / "validate_datasphere_job.py"), "--job", str(rendered), "--repo-root", str(ROOT)], check=True)
     runner = (SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh").read_text(encoding="utf-8")
     assert "--qa-pilot-manifest-out \"$PILOT_MANIFEST\"" in runner
@@ -146,6 +147,9 @@ def test_cpu_vertex_20qa_job_binds_the_successful_gateway_manifest(tmp_path):
     assert "--relation-mode support" in runner
     assert "--kg-cache-only" in runner
     assert "--cache-only" in runner
+    assert "--max-tokens 16384 --concurrency 1 --max-retries 1000" in runner
+    assert "--cache-root \"$CHECKPOINT_ROOT\"" in runner
+    assert 'hallu-vertex-20qa-checkpoint-v1' in runner
     assert "cmp \"$STRICT_OUT/metrics.csv\" \"$REPLAY_STRICT/metrics.csv\"" in runner
     assert "vllm" not in runner.lower()
 

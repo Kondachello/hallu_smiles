@@ -173,6 +173,9 @@ class RelationVerifier:
             raise ValueError("llm.max_tokens must be positive when configured")
         self.max_retries = int(cfg.llm.max_retries)
         self.backoff_base = float(cfg.llm.retry_backoff_base_s)
+        self.backoff_max = float(getattr(cfg.llm, "retry_backoff_max_s", 60))
+        if self.backoff_max < self.backoff_base:
+            raise ValueError("llm.retry_backoff_max_s must be at least retry_backoff_base_s")
         self.request_timeout_s = float(getattr(cfg.llm, "request_timeout_s", 90))
         if self.request_timeout_s <= 0:
             raise ValueError("llm.request_timeout_s must be positive")
@@ -216,7 +219,7 @@ class RelationVerifier:
             verdict = None
             for attempt in Retrying(
                 stop=stop_after_attempt(self.max_retries),
-                wait=wait_exponential(multiplier=self.backoff_base),
+                wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
                 retry=retry_if_exception(is_retryable_llm_exception),
                 reraise=True,
             ):

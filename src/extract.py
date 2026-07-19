@@ -252,6 +252,13 @@ class KGExtractor:
             raise ValueError("DATASPHERE_KGGEN_DUMP_AFTER_SECONDS must be positive when set")
         self.max_retries = cfg.llm.max_retries
         self.backoff_base = cfg.llm.retry_backoff_base_s
+        self.backoff_max = float(
+            cfg.llm.get("retry_backoff_max_s", 60)
+            if hasattr(cfg.llm, "get")
+            else getattr(cfg.llm, "retry_backoff_max_s", 60)
+        )
+        if self.backoff_max < float(self.backoff_base):
+            raise ValueError("llm.retry_backoff_max_s must be at least retry_backoff_base_s")
         self.request_timeout_s = float(
             cfg.llm.get("request_timeout_s", 90)
             if hasattr(cfg.llm, "get")
@@ -801,7 +808,11 @@ class KGExtractor:
         graph: Graph | None = None
         for attempt in Retrying(
             stop=stop_after_attempt(self.max_retries),
-            wait=wait_exponential(multiplier=self.backoff_base),
+            # Vertex's public on-demand pool can return 429 for several
+            # minutes.  Cap the exponential wait so a large retry budget
+            # keeps polling capacity rather than sleeping past the enclosing
+            # DataSphere Job deadline.
+            wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
             retry=retry_if_exception(is_retryable_llm_exception),
             reraise=True,
         ):

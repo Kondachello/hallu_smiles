@@ -40,7 +40,7 @@ cmd: >-
   };
   trap archive_on_exit EXIT;
   set +e;
-  timeout --signal=TERM --kill-after=60s 14400 bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh >"$RUN_ROOT/pilot.stdout.log" 2>"$RUN_ROOT/pilot.stderr.log";
+  timeout --signal=TERM --kill-after=60s 21600 bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh >"$RUN_ROOT/pilot.stdout.log" 2>"$RUN_ROOT/pilot.stderr.log";
   status=$?;
   set -e;
   if ! archive_artifacts; then status=1; fi;

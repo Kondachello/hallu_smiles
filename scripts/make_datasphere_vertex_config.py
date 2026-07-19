@@ -72,6 +72,11 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--work-dir", required=True)
+    parser.add_argument(
+        "--cache-root",
+        default=None,
+        help="Optional durable root containing kg/ and verdicts/ caches; defaults to --work-dir/cache.",
+    )
     # Vertex's 2.5 Flash can spend part of a structured extraction on internal
     # reasoning.  1024 truncated real RAGTruth relation lists in the first
     # probe, while the provider bills actual generated tokens rather than this
@@ -86,6 +91,7 @@ def main() -> None:
     # seconds (5 + 10 + 20 + 40 + 80 + 160) before the final attempt.
     parser.add_argument("--max-retries", type=int, default=7)
     parser.add_argument("--retry-backoff-base-s", type=float, default=5.0)
+    parser.add_argument("--retry-backoff-max-s", type=float, default=60.0)
     args = parser.parse_args()
     if args.max_tokens <= 0:
         raise ValueError("--max-tokens must be positive")
@@ -95,6 +101,10 @@ def main() -> None:
         raise ValueError("--max-retries must be positive")
     if args.retry_backoff_base_s <= 0:
         raise ValueError("--retry-backoff-base-s must be positive")
+    if args.retry_backoff_max_s <= 0:
+        raise ValueError("--retry-backoff-max-s must be positive")
+    if args.retry_backoff_max_s < args.retry_backoff_base_s:
+        raise ValueError("--retry-backoff-max-s must be at least --retry-backoff-base-s")
 
     with open(args.base_config, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -119,6 +129,7 @@ def main() -> None:
         json.dumps(combined, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     work_dir = Path(args.work_dir)
+    cache_root = Path(args.cache_root) if args.cache_root else work_dir / "cache"
     llm = config["llm"]
     llm["api_base"] = f"{gateway_url}/v1"
     llm["api_key_env"] = "HALLU_GATEWAY_API_KEY"
@@ -131,6 +142,7 @@ def main() -> None:
     llm["concurrency"] = args.concurrency
     llm["max_retries"] = args.max_retries
     llm["retry_backoff_base_s"] = args.retry_backoff_base_s
+    llm["retry_backoff_max_s"] = args.retry_backoff_max_s
     llm["structured_output_transport"] = "response_format"
     llm["structured_output_backend"] = "vertex"
     llm["structured_output_request_backend"] = None
@@ -141,8 +153,8 @@ def main() -> None:
     config["matching"]["embedding_device"] = "cpu"
     config["matching"]["local_files_only"] = True
     config["data"]["dir"] = args.data_dir
-    config["cache_dir"] = str(work_dir / "cache" / "kg")
-    config.setdefault("relation_verifier", {})["cache_dir"] = str(work_dir / "cache" / "verdicts")
+    config["cache_dir"] = str(cache_root / "kg")
+    config.setdefault("relation_verifier", {})["cache_dir"] = str(cache_root / "verdicts")
     config["output_dir"] = str(work_dir / "results")
     config.setdefault("vertex_gateway", {}).update(
         {

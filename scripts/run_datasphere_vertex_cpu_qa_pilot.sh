@@ -24,11 +24,24 @@ REPLAY_STRICT="$RUN_ROOT/cache-replay/strict"
 REPLAY_SUPPORT="$RUN_ROOT/cache-replay/support"
 METADATA="$RUN_ROOT/run_metadata.json"
 USAGE_COUNTS="$RUN_ROOT/usage-counts.json"
+CHECKPOINT_ROOT=""
 export PYTHONHASHSEED=42 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME:-/opt/hallu/models}"
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
-cleanup() { unset HALLU_GATEWAY_API_KEY; }
+cleanup() {
+  status=$?
+  trap - EXIT
+  # The project disk survives a Job error. Snapshot the same namespace into
+  # the archive too, so a failed attempt is inspectable and a rerun of this
+  # exact commit/gateway pair resumes only the cache misses.
+  if [[ -n "$CHECKPOINT_ROOT" && -d "$CHECKPOINT_ROOT" ]]; then
+    mkdir -p "$RUN_ROOT/cache" || true
+    cp -a "$CHECKPOINT_ROOT/." "$RUN_ROOT/cache/" || true
+  fi
+  unset HALLU_GATEWAY_API_KEY
+  exit "$status"
+}
 trap cleanup EXIT
 
 [[ "$HALLU_GATEWAY_URL" =~ ^https://[^/]+$ ]] || { echo "HALLU_GATEWAY_URL must be an HTTPS origin." >&2; exit 2; }
@@ -66,12 +79,24 @@ test "$GATEWAY_MANIFEST_SHA256" = "$EXPECTED_GATEWAY_MANIFEST_SHA256" || {
   echo "gateway manifest changed since the successful 3-QA gate" >&2
   exit 2
 }
+CHECKPOINT_ROOT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-20qa/${EXPECTED_SOURCE_COMMIT}-${GATEWAY_MANIFEST_SHA256}"
+mkdir -p "$CHECKPOINT_ROOT/kg" "$CHECKPOINT_ROOT/verdicts"
+"$CLIENT_PYTHON" - "$CHECKPOINT_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" <<'PY'
+import json
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    'source_commit': sys.argv[2],
+    'gateway_manifest_sha256': sys.argv[3],
+    'protocol': 'hallu-vertex-20qa-checkpoint-v1',
+}, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+PY
 
 "$CLIENT_PYTHON" "$ROOT/scripts/make_datasphere_vertex_config.py" \
   --base-config "$ROOT/config.yaml" --gateway-manifest "$GATEWAY_MANIFEST" \
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
-  --output "$RUNTIME_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" \
-  --max-tokens 4096 --concurrency 1 --max-retries 7 --retry-backoff-base-s 5 \
+  --output "$RUNTIME_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$CHECKPOINT_ROOT" \
+  --max-tokens 16384 --concurrency 1 --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   > "$RUN_ROOT/runtime-config-identity.json"
 
 # Recheck the transport inside the exact immutable full-run image. These are
@@ -114,18 +139,18 @@ mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-extraction-live-usage.jsonl"
 require_complete_extraction "$STRICT_OUT" 20
 mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-metrics-cache-usage.jsonl"
 
-find "$RUN_ROOT/cache/kg" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/kg-cache-before-support.sha256"
+find "$CHECKPOINT_ROOT/kg" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/kg-cache-before-support.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
   --relation-mode support --qa-pilot-manifest "$PILOT_MANIFEST" \
   --output-dir "$SUPPORT_OUT" --kg-cache-only
 require_complete_extraction "$SUPPORT_OUT" 20
 mv "$SUPPORT_OUT/usage.jsonl" "$RUN_ROOT/support-metrics-usage.jsonl"
-find "$RUN_ROOT/cache/kg" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/kg-cache-after-support.sha256"
+find "$CHECKPOINT_ROOT/kg" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/kg-cache-after-support.sha256"
 cmp "$RUN_ROOT/kg-cache-before-support.sha256" "$RUN_ROOT/kg-cache-after-support.sha256"
 "$CLIENT_PYTHON" "$ROOT/scripts/compare_qa_pilot_results.py" \
   --strict-dir "$STRICT_OUT" --support-dir "$SUPPORT_OUT" --output "$RUN_ROOT/comparison.json"
 
-find "$RUN_ROOT/cache" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-before-replay.sha256"
+find "$CHECKPOINT_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-before-replay.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
   --relation-mode strict --qa-pilot-manifest "$PILOT_MANIFEST" \
   --output-dir "$REPLAY_STRICT" --cache-only
@@ -136,7 +161,7 @@ require_complete_extraction "$REPLAY_STRICT" 20
 require_complete_extraction "$REPLAY_SUPPORT" 20
 cmp "$STRICT_OUT/metrics.csv" "$REPLAY_STRICT/metrics.csv"
 cmp "$SUPPORT_OUT/metrics.csv" "$REPLAY_SUPPORT/metrics.csv"
-find "$RUN_ROOT/cache" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-after-replay.sha256"
+find "$CHECKPOINT_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-after-replay.sha256"
 cmp "$RUN_ROOT/cache-before-replay.sha256" "$RUN_ROOT/cache-after-replay.sha256"
 
 "$CLIENT_PYTHON" - "$USAGE_COUNTS" "$RUN_ROOT" <<'PY'
