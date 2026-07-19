@@ -44,9 +44,9 @@ cp /opt/hallu/manifests/client.freeze.txt "$RUN_ROOT/client.freeze.txt"
 
 # Do not use curl -v or shell tracing: this request proves the Project secret
 # reaches the gateway while keeping the bearer value out of logs and artifacts.
-curl --fail --silent --show-error \
-  -H "Authorization: Bearer $HALLU_GATEWAY_API_KEY" \
-  "$HALLU_GATEWAY_URL/healthz" > "$HEALTH_REPORT"
+# Cloud Run's Google Front End reserves/intercepts the public ``/healthz`` path
+# before requests reach the container.  The authenticated manifest is the
+# gateway's authoritative readiness/identity probe and is validated below.
 curl --fail --silent --show-error \
   -H "Authorization: Bearer $HALLU_GATEWAY_API_KEY" \
   "$HALLU_GATEWAY_URL/v1/hallu/manifest" > "$GATEWAY_MANIFEST_RAW"
@@ -57,6 +57,7 @@ import sys
 print(yaml.safe_load(open(sys.argv[1], encoding='utf-8'))['llm']['model'])
 PY
 )" --output "$GATEWAY_MANIFEST"
+cp "$GATEWAY_MANIFEST" "$HEALTH_REPORT"
 rm -f "$GATEWAY_MANIFEST_RAW"
 
 "$CLIENT_PYTHON" "$ROOT/scripts/make_datasphere_vertex_config.py" \

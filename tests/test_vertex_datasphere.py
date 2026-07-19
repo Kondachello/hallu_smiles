@@ -90,6 +90,10 @@ def test_cpu_vertex_job_is_pinned_cpu_only_and_keeps_the_secret_out_of_yaml(tmp_
     assert "--cache-only" in runner
     assert "check_vertex_verifier_probe.py" in runner
     assert "usage-counts.json" in runner
+    # Cloud Run's public frontend intercepts the reserved /healthz path;
+    # the authenticated manifest is the runner's readiness probe instead.
+    assert '"$HALLU_GATEWAY_URL/healthz"' not in runner
+    assert '"$HALLU_GATEWAY_URL/v1/hallu/manifest"' in runner
     deploy = (SCRIPTS / "deploy_vertex_gateway.sh").read_text(encoding="utf-8")
     assert "artifacts repositories describe" in deploy
 

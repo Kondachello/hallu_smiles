@@ -68,10 +68,14 @@ curl output:
 ```bash
 export GATEWAY_URL=https://<service>-<hash>.europe-west4.run.app
 curl --fail --silent --show-error -H "Authorization: Bearer $HALLU_GATEWAY_API_KEY" \
-  "$GATEWAY_URL/healthz"
-curl --fail --silent --show-error -H "Authorization: Bearer $HALLU_GATEWAY_API_KEY" \
   "$GATEWAY_URL/v1/hallu/manifest"
 ```
+
+The gateway also implements authenticated `GET /healthz` for its application
+contract, but do not use that path through a public Cloud Run `run.app` URL:
+the Google Front End intercepts it before the request reaches the container.
+The authenticated manifest is therefore the readiness and identity probe used
+by the DataSphere Job.
 
 Cloud Run is publicly routable only because DataSphere cannot present a Google
 OIDC invocation token. Every app route checks the bearer secret before reading
