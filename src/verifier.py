@@ -163,6 +163,14 @@ class RelationVerifier:
         self.api_base = getattr(cfg.llm, "api_base", None)
         self.structured_output = structured_output_settings(cfg.llm)
         self.temperature = float(cfg.llm.temperature)
+        # Keep verifier and extractor on the same configured output budget.  A
+        # previous hard-coded 32-token limit bypassed the CPU Vertex profile's
+        # ``llm.max_tokens=1024`` and can leave Gemini 2.5 Flash no room for a
+        # final structured response after its internal reasoning.
+        configured_max_tokens = getattr(cfg.llm, "max_tokens", None)
+        self.max_tokens = 128 if configured_max_tokens is None else int(configured_max_tokens)
+        if self.max_tokens <= 0:
+            raise ValueError("llm.max_tokens must be positive when configured")
         self.max_retries = int(cfg.llm.max_retries)
         self.backoff_base = float(cfg.llm.retry_backoff_base_s)
         self.request_timeout_s = float(getattr(cfg.llm, "request_timeout_s", 90))
@@ -253,7 +261,7 @@ class RelationVerifier:
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": 32,
+            "max_tokens": self.max_tokens,
             "timeout": self.request_timeout_s,
             # Tenacity above is the verifier's only retry policy.  LiteLLM's
             # OpenAI client otherwise applies its own default retries, making
@@ -297,11 +305,12 @@ class RelationVerifier:
         self, triple: tuple[str, str, str], evidence: list[EvidenceSpan], matching_params: dict[str, Any]
     ) -> str:
         payload = {
-            "v": 3,
-            "verifier_protocol": "relation-entailment-closed-schema-v2",
+            "v": 4,
+            "verifier_protocol": "relation-entailment-closed-schema-v3",
             "llm": llm_runtime_fingerprint(self.cfg),
             "api_base": self.api_base,
             "prompt_version": self.prompt_version,
+            "max_tokens": self.max_tokens,
             "max_evidence_sentences": self.max_sentences,
             "embedding_model": config_value(self.cfg.matching, "embedding_model"),
             "embedding_model_revision": config_value(

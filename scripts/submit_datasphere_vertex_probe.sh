@@ -4,8 +4,9 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 # Some home networks advertise IPv6 but cannot route it to the DataSphere API.
-# The native gRPC resolver reliably falls back to the reachable IPv4 endpoint.
-export GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-native}"
+# ``ares`` has been the reliable resolver on this Mac; callers may still
+# override it explicitly for another network.
+export GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-ares}"
 
 usage() { echo "Usage: $0 --project-id ID --run-id ID --gateway-url HTTPS_URL [--commit SHA] [--branch NAME] [--docker-image REF]"; }
 PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; IMAGE=""; PROFILE="default"

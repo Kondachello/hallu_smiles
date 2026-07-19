@@ -30,6 +30,7 @@ def _cfg(tmp_path):
             model="openai/test", api_base=None, temperature=0.0,
             model_revision="test-model-revision",
             runtime_fingerprint="test-runtime-fingerprint",
+            max_tokens=1024,
             max_retries=1, retry_backoff_base_s=0.0,
             request_timeout_s=17,
             structured_output_transport="response_format",
@@ -101,6 +102,19 @@ def test_verifier_sends_closed_native_schema_and_requires_clean_finish(monkeypat
     }
     assert captured["timeout"] == 17
     assert captured["num_retries"] == 0
+    assert captured["max_tokens"] == 1024
+
+
+def test_verifier_cache_key_changes_with_output_budget(tmp_path):
+    first_cfg = _cfg(tmp_path)
+    second_cfg = _cfg(tmp_path)
+    second_cfg.llm.max_tokens = 256
+    triple = ("Paris", "is capital of", "France")
+    evidence = select_evidence("Paris is the capital of France.", None, triple)
+
+    assert RelationVerifier(first_cfg)._cache_key(triple, evidence, {}) != RelationVerifier(
+        second_cfg
+    )._cache_key(triple, evidence, {})
 
 
 def test_verifier_rejects_non_stop_finish_reason_without_parsing(monkeypatch, tmp_path):

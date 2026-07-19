@@ -95,9 +95,12 @@ def test_cpu_vertex_job_is_pinned_cpu_only_and_keeps_the_secret_out_of_yaml(tmp_
     assert '"$HALLU_GATEWAY_URL/healthz"' not in runner
     assert '"$HALLU_GATEWAY_URL/v1/hallu/manifest"' in runner
     submitter = (SCRIPTS / "submit_datasphere_vertex_probe.sh").read_text(encoding="utf-8")
-    assert 'GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-native}"' in submitter
+    assert 'GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-ares}"' in submitter
     assert "--docker-image does not match the immutable runtime" in submitter
     assert "RESOLVED_IMAGE=" in submitter
+    verifier_probe = (SCRIPTS / "check_vertex_verifier_probe.py").read_text(encoding="utf-8")
+    assert 'live.verdict != "entailed"' not in verifier_probe
+    assert '"failure_class"' in verifier_probe
     deploy = (SCRIPTS / "deploy_vertex_gateway.sh").read_text(encoding="utf-8")
     assert "artifacts repositories describe" in deploy
 
