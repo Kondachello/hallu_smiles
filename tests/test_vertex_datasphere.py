@@ -105,6 +105,15 @@ def test_cpu_vertex_job_is_pinned_cpu_only_and_keeps_the_secret_out_of_yaml(tmp_
     assert '"failure_class"' in verifier_probe
     deploy = (SCRIPTS / "deploy_vertex_gateway.sh").read_text(encoding="utf-8")
     assert "artifacts repositories describe" in deploy
+    # Artifact creation must finish before the shell exits.  DataSphere starts
+    # output processing at process exit; an EXIT-only tarball races the
+    # collector and surfaces as an ERROR despite a complete probe.
+    command = str(job["cmd"])
+    assert "archive_artifacts()" in command
+    assert "tar -tzf \"$ARTIFACT_ARCHIVE\" >/dev/null" in command
+    assert command.index("if ! archive_artifacts; then status=1; fi;") < command.rindex(
+        'exit "$status"'
+    )
 
 
 def test_cpu_dockerfile_is_pinned_and_has_no_llama_or_vllm(tmp_path):
