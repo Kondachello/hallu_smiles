@@ -94,9 +94,12 @@ bash scripts/submit_datasphere_vertex_probe.sh \
   --gateway-url "$GATEWAY_URL"
 ```
 
-The submitter resolves the CPU image by commit digest. To use a previously
-resolved immutable image explicitly, pass `--docker-image
-ghcr.io/...@sha256:...`.
+The submitter resolves the CPU image by commit digest. If `--docker-image
+ghcr.io/...@sha256:...` is supplied, it must equal that resolved image; the
+submitter rejects a stale digest before it can create a Job.
+
+It also defaults `GRPC_DNS_RESOLVER=native`, so a laptop network with unusable
+IPv6 reaches the DataSphere API over IPv4. No manual network setting is needed.
 
 The Job validates its CPU runtime and authenticated gateway manifest, runs the
 synthetic KGGen clustering probe, runs the verifier once live and once from its
