@@ -49,6 +49,9 @@ class ScoreResult:
     unsupported_relations: list[list[str]] = field(default_factory=list)
     # one explanatory record for every answer edge
     relation_audits: list[dict[str, Any]] = field(default_factory=list)
+    # ``support-critical`` is deliberately optional.  Omitting it from
+    # serialization preserves the historical strict/support artifact bytes.
+    critical: dict[str, Any] | None = None
     # flags
     unscorable: bool = False
     ref_empty: bool = False
@@ -102,8 +105,60 @@ class ScoreResult:
     def support_rp_only_h(self) -> float | None:
         return None if self.RP_support is None else 1.0 - self.RP_support
 
+    def critical_relation_rp(self, unknown_risk: float) -> float | None:
+        """Relation fidelity after hard unsupported/contradicted penalties."""
+        if self.Ea == 0:
+            return None
+        if self.critical is None:
+            return None
+        from .critical import claim_risk
+
+        risks: list[float] = []
+        for audit in self.relation_audits:
+            verdict = audit.get("verdict")
+            # Graph endpoints that fail strict grounding are candidates too:
+            # they retain a hard relation risk rather than disappearing from
+            # the response-level detector.
+            risks.append(claim_risk(verdict, unknown_risk))
+        return 1.0 - (sum(risks) / len(risks)) if risks else None
+
+    def critical_claim_topk(self, k: int, unknown_risk: float) -> float | None:
+        """Mean risk among the k worst independently verified atomic claims."""
+        if self.critical is None:
+            return None
+        from .critical import claim_risk
+
+        audits = list(self.critical.get("claim_audits", []))
+        if not audits:
+            return None
+        if k <= 0:
+            raise ValueError("critical top-k must be positive")
+        risks = sorted(
+            (claim_risk(audit.get("verdict"), unknown_risk) for audit in audits), reverse=True
+        )
+        return sum(risks[: min(k, len(risks))]) / min(k, len(risks))
+
+    def critical_h(
+        self, alpha: float, beta: float, top_k: int, unknown_risk: float,
+        impute: float | None = None,
+    ) -> float | None:
+        """Hybrid graph mean + worst-claim risk for ``support-critical``.
+
+        Empty answer graphs can still be diagnostically scored if the atomic
+        claim layer has claims.  They remain marked unscorable so paired
+        headline metrics can retain the strict/support denominator.
+        """
+        claim_h = self.critical_claim_topk(top_k, unknown_risk)
+        if self.EG is None:
+            return claim_h if claim_h is not None else impute
+        rp = self.critical_relation_rp(unknown_risk)
+        graph_h = 1.0 - (self.EG if rp is None else alpha * self.EG + (1.0 - alpha) * rp)
+        if claim_h is None:
+            return graph_h
+        return (1.0 - beta) * graph_h + beta * claim_h
+
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "Vc": self.Vc, "Ec": self.Ec, "Vq": self.Vq, "Eq": self.Eq,
             "Va": self.Va, "Ea": self.Ea,
             "EG": self.EG,
@@ -121,6 +176,9 @@ class ScoreResult:
             "relation_audits": self.relation_audits,
             "unscorable": self.unscorable, "ref_empty": self.ref_empty,
         }
+        if self.critical is not None:
+            payload["critical"] = self.critical
+        return payload
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ScoreResult":
@@ -145,6 +203,7 @@ class ScoreResult:
             supported_relations=[list(r) for r in d.get("supported_relations", [])],
             unsupported_relations=[list(r) for r in d.get("unsupported_relations", [])],
             relation_audits=list(d.get("relation_audits", [])),
+            critical=d.get("critical"),
             unscorable=bool(d.get("unscorable", False)), ref_empty=bool(d.get("ref_empty", False)),
         )
 
@@ -159,6 +218,8 @@ def score_response(
     query: str | None = None,
     verifier=None,
     verifier_matching_params: dict[str, Any] | None = None,
+    answer_text: str | None = None,
+    critical_pipeline=None,
 ) -> ScoreResult:
     """Score one answer graph; verifier is optional so strict scoring stays LLM-free."""
     Va, Ea = len(g_a.entities), len(g_a.relations)
@@ -189,6 +250,13 @@ def score_response(
 
     if Ea == 0:
         # Every relation metric is undefined when the response has no relation edges.
+        if critical_pipeline is not None:
+            if answer_text is None:
+                raise ValueError("support-critical scoring requires answer_text")
+            res.critical = {
+                "protocol": "support-critical-v1",
+                "claim_audits": critical_pipeline.assess(answer_text, context, query),
+            }
         return res
 
     strict_supported = 0
@@ -230,6 +298,10 @@ def score_response(
             "verdict": None,
             "verifier_cache_hit": None,
         }
+        if critical_pipeline is not None:
+            audit["candidate_sources"] = [
+                "strict_unmatched_edge" if not alignment.matched else "strict_matched_edge"
+            ]
 
         if not subj_match.matched and not obj_match.matched:
             audit["status"] = "ungrounded_both"
@@ -256,6 +328,8 @@ def score_response(
                     audit["status"] = "aligned" if alignment.matched else "entailed_from_text"
                 elif decision.verdict == "contradicted":
                     audit["status"] = "contradicted"
+                elif decision.verdict == "unsupported":
+                    audit["status"] = "unsupported"
                 else:
                     audit["status"] = "grounded_unknown"
         res.relation_audits.append(audit)
@@ -274,6 +348,13 @@ def score_response(
         if grounded_edges:
             res.RP_entailed_cond = entailed_edges / grounded_edges
             res.RP_entailed_cond_defined = True
+    if critical_pipeline is not None:
+        if answer_text is None:
+            raise ValueError("support-critical scoring requires answer_text")
+        res.critical = {
+            "protocol": "support-critical-v1",
+            "claim_audits": critical_pipeline.assess(answer_text, context, query),
+        }
     return res
 
 

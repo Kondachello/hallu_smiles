@@ -104,7 +104,10 @@ def ablation_table(df: pd.DataFrame) -> pd.DataFrame:
 def relation_score_comparison(df: pd.DataFrame) -> pd.DataFrame:
     """Compare strict and support hallucination scores when both are available."""
     rows = []
-    for name, col in [("H_strict", "H_strict"), ("H_support", "H_support")]:
+    for name, col in [
+        ("H_strict", "H_strict"), ("H_support", "H_support"),
+        ("H_support_critical", "H_support_critical"),
+    ]:
         if col not in df:
             continue
         values = pd.to_numeric(df[col], errors="coerce")
@@ -322,6 +325,10 @@ def run_evaluation(
         "overall_F1_impute": f1_i,
         "degenerate": degen,
     }
+    if tuning_info:
+        for key in ("beta", "top_k", "unknown_risk"):
+            if key in tuning_info:
+                summary[key] = tuning_info[key]
     pd.DataFrame([_flatten_summary(summary)]).to_csv(out_dir / "summary_metrics.csv", index=False)
 
     _write_report(
@@ -380,6 +387,11 @@ def _write_report(out_dir, cfg, summary, auc_task, auc_model, prf_task, ablation
         f"local-files-only=`{bool(config_value(cfg.matching, 'local_files_only', True))}`"
     )
     A(f"- **alpha (tuned on train):** {summary['alpha']}")
+    if "beta" in summary:
+        A(
+            "- **support-critical β / top-k / unknown risk (tuned on train):** "
+            f"{summary['beta']} / {summary['top_k']} / {summary['unknown_risk']}"
+        )
     A(f"- **theta / decision threshold (tuned on train F1):** {summary['theta']:.4f}")
     A(f"- **tau_e / tau_r:** {summary['tau_e']} / {summary['tau_r']}")
     A(f"- **empty-response-graph policy:** {cfg.metrics.empty_response_graph_policy}\n")

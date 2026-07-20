@@ -267,6 +267,8 @@ class KGExtractor:
         if self.request_timeout_s <= 0:
             raise ValueError("llm.request_timeout_s must be positive")
         self.cache_dir = Path(cfg.cache_dir)
+        raw_read_dirs = config_value(cfg, "cache_read_dirs", []) or []
+        self.cache_read_dirs = [Path(str(path)) for path in raw_read_dirs]
         self.cache_only = bool(cache_only)
         if not self.cache_only:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -342,8 +344,13 @@ class KGExtractor:
         return self.cache_dir / f"{key}.json"
 
     def _load_cache(self, key: str) -> Graph | None:
-        p = self._cache_path(key)
-        if p.exists():
+        # The primary directory is writable for this run.  Read-through roots
+        # are historical, content-addressed graph namespaces: they are never
+        # modified and an envelope/key check still rejects incompatible graphs.
+        for root in [self.cache_dir, *self.cache_read_dirs]:
+            p = root / f"{key}.json"
+            if not p.exists():
+                continue
             try:
                 envelope = json.loads(p.read_text(encoding="utf-8"))
                 if not isinstance(envelope, dict) or set(envelope) != {
@@ -368,7 +375,7 @@ class KGExtractor:
                     return None
                 return graph
             except Exception:
-                return None
+                continue
         return None
 
     def _save_cache(self, key: str, graph: Graph) -> None:

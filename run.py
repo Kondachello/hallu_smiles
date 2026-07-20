@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HalluGraph-KGGen entrypoint with strict and text-verified relation modes.
+"""HalluGraph-KGGen entrypoint with strict, support, and support-critical modes.
 
 ``--stage all`` has an intentionally leak-free order: extract graphs, tune only
 on train rows, then score test rows once with frozen parameters.
@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 from src.audit import build_audit_record, write_audit
 from src.cache import CacheOnlyMissError, config_value
+from src.critical import CriticalClaimPipeline, CriticalClaimVerifier, FakeCriticalClaimPipeline
 from src.config import load_config
 from src.data import Instance, load_instances, unique_sources
 from src.evaluate import run_evaluation
@@ -32,7 +33,14 @@ from src.sampling import (
     select_qa_sample,
     write_manifest,
 )
-from src.tune import alpha_cv, h_array, prf_at_threshold, select_f1_threshold
+from src.tune import (
+    alpha_cv,
+    critical_cv,
+    critical_h_array,
+    h_array,
+    prf_at_threshold,
+    select_f1_threshold,
+)
 from src.verifier import FakeRelationVerifier, RelationVerifier
 
 
@@ -69,6 +77,7 @@ def get_verifier(
     relation_mode: str,
     *,
     cache_only: bool = False,
+    embedder: Embedder | None = None,
 ):
     if relation_mode == "strict":
         return None
@@ -78,7 +87,19 @@ def get_verifier(
         return FakeRelationVerifier(default="entailed")
     if not cache_only:
         usage.try_hook_litellm()
+    if relation_mode == "support-critical":
+        return CriticalClaimVerifier(cfg, usage=usage, cache_only=cache_only, embedder=embedder)
     return RelationVerifier(cfg, usage=usage, cache_only=cache_only)
+
+
+def get_critical_pipeline(
+    cfg, fake: bool, usage: UsageLogger, relation_mode: str, *, cache_only: bool, embedder: Embedder
+):
+    if relation_mode != "support-critical":
+        return None
+    if fake:
+        return FakeCriticalClaimPipeline()
+    return CriticalClaimPipeline(cfg, usage=usage, cache_only=cache_only, embedder=embedder)
 
 
 # --------------------------------------------------------------------------------------
@@ -303,10 +324,13 @@ def score_all(
     tau_r: float | None = None,
     relation_mode: str = "strict",
     verifier=None,
+    critical_pipeline=None,
 ) -> dict[str, ScoreResult]:
-    """Score all available rows; support mode verifies each grounded answer edge."""
-    if relation_mode == "support" and verifier is None:
-        raise ValueError("support scoring requires a relation verifier")
+    """Score all available rows; verified modes audit every answer relation."""
+    if relation_mode in {"support", "support-critical"} and verifier is None:
+        raise ValueError(f"{relation_mode} scoring requires a relation verifier")
+    if relation_mode == "support-critical" and critical_pipeline is None:
+        raise ValueError("support-critical scoring requires a critical claim pipeline")
     results: dict[str, ScoreResult] = {}
     refgraph_cache: dict[str, RefGraph] = {}
     description = f"score {relation_mode} (tau_e={tau_e},tau_r={tau_r})"
@@ -321,7 +345,7 @@ def score_all(
         results[inst.response_id] = score_response(
             resp_graphs[inst.response_id], refgraph, gc, gq,
             context=inst.context, query=inst.query,
-            verifier=verifier if relation_mode == "support" else None,
+            verifier=verifier if relation_mode in {"support", "support-critical"} else None,
             verifier_matching_params={
                 "tau_e": float(cfg.matching.entity_sim_threshold if tau_e is None else tau_e),
                 "tau_r": float(cfg.matching.relation_sim_threshold if tau_r is None else tau_r),
@@ -329,6 +353,8 @@ def score_all(
                 "min_substring_chars": int(cfg.matching.min_substring_chars),
                 "stopwords": list(cfg.matching.stopwords),
             },
+            answer_text=inst.response if relation_mode == "support-critical" else None,
+            critical_pipeline=critical_pipeline if relation_mode == "support-critical" else None,
         )
     return results
 
@@ -358,6 +384,7 @@ def build_rows(
     alpha_strict: float,
     alpha_support: float,
     relation_mode: str,
+    critical_params: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for record in scored:
@@ -368,10 +395,27 @@ def build_rows(
             if relation_mode == "support"
             else None
         )
-        primary_h = h_support if relation_mode == "support" else h_strict
-        primary_rp_h = result.support_rp_only_h() if relation_mode == "support" else result.rp_only_h()
+        critical_h = None
+        critical_rp_h = None
+        if relation_mode == "support-critical":
+            if critical_params is None:
+                raise ValueError("support-critical rows require tuned critical parameters")
+            unknown_risk = float(critical_params["unknown_risk"])
+            critical_h = result.critical_h(
+                alpha_support, float(critical_params["beta"]), int(critical_params["top_k"]), unknown_risk,
+            )
+            critical_rp = result.critical_relation_rp(unknown_risk)
+            critical_rp_h = None if critical_rp is None else 1.0 - critical_rp
+        primary_h = (
+            critical_h if relation_mode == "support-critical"
+            else h_support if relation_mode == "support" else h_strict
+        )
+        primary_rp_h = (
+            critical_rp_h if relation_mode == "support-critical"
+            else result.support_rp_only_h() if relation_mode == "support" else result.rp_only_h()
+        )
         statuses = [entry.get("status") for entry in result.relation_audits if entry.get("status")]
-        rows.append({
+        row = {
             "response_id": record["response_id"], "source_id": record["source_id"],
             "task": record["task"], "gen_model": record["gen_model"], "split": record["split"],
             "y": int(record["y"]), "context_len": int(record["context_len"]),
@@ -397,7 +441,20 @@ def build_rows(
             "H_eg": result.eg_only_h(), "H_rp": primary_rp_h,
             "H_rp_strict": result.rp_only_h(), "H_rp_support": result.support_rp_only_h(),
             "relation_statuses": json.dumps(statuses),
-        })
+        }
+        if relation_mode == "support-critical":
+            row.update({
+                "RP_support_critical": result.critical_relation_rp(float(critical_params["unknown_risk"])),
+                "H_support_critical": critical_h,
+                "CFI_support_critical": None if critical_h is None else 1.0 - critical_h,
+                "critical_beta": float(critical_params["beta"]),
+                "critical_top_k": int(critical_params["top_k"]),
+                "critical_unknown_risk": float(critical_params["unknown_risk"]),
+                "critical_claim_statuses": json.dumps([
+                    audit.get("verdict") for audit in (result.critical or {}).get("claim_audits", [])
+                ]),
+            })
+        rows.append(row)
     return rows
 
 
@@ -413,6 +470,7 @@ def tune_joint(
     verifier,
     relation_mode: str,
     out_dir: Path,
+    critical_pipeline=None,
 ) -> dict[str, Any]:
     train = [
         inst for inst in instances
@@ -428,29 +486,65 @@ def tune_joint(
     rows: list[dict[str, Any]] = []
     score_cache: dict[tuple[float, float], dict[str, ScoreResult]] = {}
 
-    tau_r_candidates = [default_tr] if relation_mode == "support" else list(map(float, cfg.eval.tau_r_sweep))
+    tau_r_candidates = (
+        [default_tr] if relation_mode in {"support", "support-critical"}
+        else list(map(float, cfg.eval.tau_r_sweep))
+    )
     for tau_e in map(float, cfg.eval.tau_e_sweep):
         for tau_r in tau_r_candidates:
             results = score_all(
                 cfg, train, ref_graphs, resp_graphs, embedder,
                 tau_e=tau_e, tau_r=tau_r, relation_mode=relation_mode, verifier=verifier,
+                critical_pipeline=critical_pipeline,
             )
             score_cache[(tau_e, tau_r)] = results
             scores = [results[i.response_id] for i in train if i.response_id in results]
             labels = [i.y for i in train if i.response_id in results]
-            if cfg.metrics.alpha is not None:
+            if relation_mode == "support-critical":
+                critical_cfg = cfg.support_critical.tuning
+                critical_rows = critical_cv(
+                    scores, labels,
+                    alpha_grid=[float(cfg.metrics.alpha)] if cfg.metrics.alpha is not None else alpha_grid,
+                    beta_grid=[float(value) for value in critical_cfg.beta_grid],
+                    top_k_grid=[int(value) for value in critical_cfg.top_k_grid],
+                    unknown_risk_grid=[float(value) for value in critical_cfg.unknown_risk_grid],
+                    folds=folds, seed=seed,
+                )
+                for row in critical_rows:
+                    rows.append({"tau_e": tau_e, "tau_r": tau_r, "n_train": len(scores), **row})
+            elif cfg.metrics.alpha is not None:
                 fixed = float(cfg.metrics.alpha)
                 _, trace = alpha_cv(scores, labels, [fixed], folds, seed, mode=relation_mode)
+                for alpha, cv_auc in trace.items():
+                    rows.append({
+                        "tau_e": tau_e, "tau_r": tau_r, "alpha": float(alpha),
+                        "n_train": len(scores), "cv_mean_auc": cv_auc,
+                    })
             else:
                 _, trace = alpha_cv(scores, labels, alpha_grid, folds, seed, mode=relation_mode)
-            for alpha, cv_auc in trace.items():
-                rows.append({
-                    "tau_e": tau_e, "tau_r": tau_r, "alpha": float(alpha),
-                    "n_train": len(scores), "cv_mean_auc": cv_auc,
-                })
+                for alpha, cv_auc in trace.items():
+                    rows.append({
+                        "tau_e": tau_e, "tau_r": tau_r, "alpha": float(alpha),
+                        "n_train": len(scores), "cv_mean_auc": cv_auc,
+                    })
 
     valid = [row for row in rows if not math.isnan(float(row["cv_mean_auc"]))]
-    if valid:
+    if valid and relation_mode == "support-critical":
+        # Stable train-only tie-break: prefer a smaller worst-claim set and a
+        # stronger claim component only after CV AUC is exactly tied.
+        best = max(
+            valid,
+            key=lambda row: (
+                float(row["cv_mean_auc"]),
+                -int(row["top_k"]),
+                float(row["beta"]),
+                -float(row["unknown_risk"]),
+                -abs(float(row["tau_e"]) - default_te),
+                -abs(float(row["tau_r"]) - default_tr),
+                -abs(float(row["alpha"]) - 0.7),
+            ),
+        )
+    elif valid:
         best = max(
             valid,
             key=lambda row: (
@@ -459,6 +553,16 @@ def tune_joint(
                 - abs(float(row["alpha"]) - 0.7),
             ),
         )
+    elif relation_mode == "support-critical":
+        critical_cfg = cfg.support_critical.tuning
+        best = {
+            "tau_e": default_te, "tau_r": default_tr,
+            "alpha": min(alpha_grid, key=lambda value: abs(value - 0.7)),
+            "beta": max(float(value) for value in critical_cfg.beta_grid),
+            "top_k": min(int(value) for value in critical_cfg.top_k_grid),
+            "unknown_risk": min(float(value) for value in critical_cfg.unknown_risk_grid),
+            "cv_mean_auc": float("nan"),
+        }
     else:
         best = min(
             rows,
@@ -472,12 +576,22 @@ def tune_joint(
     train_scores = [selected[i.response_id] for i in train if i.response_id in selected]
     train_y = np.array([i.y for i in train if i.response_id in selected])
     alpha = float(best["alpha"])
-    H, mask = h_array(train_scores, alpha, mode=relation_mode)
+    if relation_mode == "support-critical":
+        H, mask = critical_h_array(
+            train_scores, alpha, float(best["beta"]), int(best["top_k"]),
+            float(best["unknown_risk"]),
+        )
+    else:
+        H, mask = h_array(train_scores, alpha, mode=relation_mode)
     theta, train_f1 = select_f1_threshold(H[mask], train_y[mask])
     selected_trace = {
         str(row["alpha"]): row["cv_mean_auc"]
         for row in rows
         if row["tau_e"] == best["tau_e"] and row["tau_r"] == best["tau_r"]
+        and (relation_mode != "support-critical" or (
+            row["beta"] == best["beta"] and row["top_k"] == best["top_k"]
+            and row["unknown_risk"] == best["unknown_risk"]
+        ))
     }
     info = {
         "relation_mode": relation_mode,
@@ -490,6 +604,12 @@ def tune_joint(
         "alpha_cv": selected_trace,
         "joint_cv": rows,
     }
+    if relation_mode == "support-critical":
+        info.update({
+            "beta": float(best["beta"]),
+            "top_k": int(best["top_k"]),
+            "unknown_risk": float(best["unknown_risk"]),
+        })
     (out_dir / "tuning.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     return info
 
@@ -510,7 +630,9 @@ def write_all_audits(
             continue
         record = build_audit_record(
             inst, result, float(info["alpha"]), alpha_support=float(info["alpha"]),
-            relation_mode=relation_mode, impute_h=impute_h,
+            relation_mode=relation_mode,
+            critical_params=info if relation_mode == "support-critical" else None,
+            impute_h=impute_h,
         )
         write_audit(record, audit_dir)
 
@@ -525,6 +647,16 @@ def _apply_cli_overrides(cfg, args) -> None:
         verdict_dir = str(Path(args.cache_dir).parent / "verdicts")
         cfg.relation_verifier._data["cache_dir"] = verdict_dir  # noqa: SLF001
         cfg.relation_verifier.cache_dir = verdict_dir
+        critical_root = Path(args.cache_dir).parent
+        for name, dirname in (
+            ("claim_extractor", "critical_claims"),
+            ("coverage_reviewer", "critical_coverage"),
+            ("claim_verifier", "critical_verdicts"),
+        ):
+            section = getattr(cfg.support_critical, name)
+            value = str(critical_root / dirname)
+            section._data["cache_dir"] = value  # noqa: SLF001
+            section.cache_dir = value
 
 
 def _select_instances(args, cfg, out_dir: Path) -> list[Instance]:
@@ -593,7 +725,9 @@ def main() -> None:
     parser.add_argument("--output-dir", default=None, help="override output_dir")
     parser.add_argument("--cache-dir", default=None, help="override shared KG cache directory")
     parser.add_argument("--limit", type=int, default=None, help="cap #instances (smoke tests)")
-    parser.add_argument("--relation-mode", choices=["strict", "support"], default="strict")
+    parser.add_argument(
+        "--relation-mode", choices=["strict", "support", "support-critical"], default="strict"
+    )
     parser.add_argument(
         "--qa-sample", "--qa-pilot", dest="qa_sample", action="store_true",
         help="create a deterministic, balanced QA sample (legacy alias: --qa-pilot)",
@@ -658,7 +792,12 @@ def main() -> None:
         cfg, args.fake_extractor, cache_only=args.cache_only or args.kg_cache_only
     )
     verifier = get_verifier(
-        cfg, args.fake_extractor, usage, args.relation_mode, cache_only=args.cache_only
+        cfg, args.fake_extractor, usage, args.relation_mode, cache_only=args.cache_only,
+        embedder=embedder,
+    )
+    critical_pipeline = get_critical_pipeline(
+        cfg, args.fake_extractor, usage, args.relation_mode,
+        cache_only=args.cache_only, embedder=embedder,
     )
     scored_path = out_dir / "scored.jsonl"
     tuning_path = out_dir / "tuning.json"
@@ -683,7 +822,7 @@ def main() -> None:
     if args.stage == "score":
         results = score_all(
             cfg, instances, ref_graphs, resp_graphs, embedder,
-            relation_mode=args.relation_mode, verifier=verifier,
+            relation_mode=args.relation_mode, verifier=verifier, critical_pipeline=critical_pipeline,
         )
         persist_scored(scored_path, instances, results, args.relation_mode)
         _assert_cache_only_no_live_calls(args.cache_only, usage)
@@ -692,7 +831,8 @@ def main() -> None:
 
     if args.stage in {"tune", "all"}:
         info = tune_joint(
-            cfg, instances, ref_graphs, resp_graphs, embedder, verifier, args.relation_mode, out_dir
+            cfg, instances, ref_graphs, resp_graphs, embedder, verifier, args.relation_mode, out_dir,
+            critical_pipeline=critical_pipeline,
         )
         print(f"[tune] alpha={info['alpha']} tau_e={info['tau_e']} tau_r={info['tau_r']} theta={info['theta']:.4f}")
     else:
@@ -712,7 +852,7 @@ def main() -> None:
         results = score_all(
             cfg, instances, ref_graphs, resp_graphs, embedder,
             tau_e=float(info["tau_e"]), tau_r=float(info["tau_r"]),
-            relation_mode=args.relation_mode, verifier=verifier,
+            relation_mode=args.relation_mode, verifier=verifier, critical_pipeline=critical_pipeline,
         )
         persist_scored(scored_path, instances, results, args.relation_mode)
     if not scored_path.exists():
@@ -720,10 +860,10 @@ def main() -> None:
     scored = load_scored(scored_path)
 
     alpha = float(info["alpha"])
-    rows = build_rows(scored, alpha, alpha, args.relation_mode)
+    rows = build_rows(scored, alpha, alpha, args.relation_mode, critical_params=info)
     summary = run_evaluation(
         rows, alpha, float(info["theta"]), cfg, out_dir,
-        tuning_info={"alpha_cv": info.get("alpha_cv", {}), "joint_cv": info.get("joint_cv", [])},
+        tuning_info=info,
         usage_summary=usage.summary(), n_failed=len(failures), relation_mode=args.relation_mode,
         tau_e=float(info["tau_e"]), tau_r=float(info["tau_r"]),
     )

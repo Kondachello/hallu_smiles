@@ -22,22 +22,28 @@ Gemini идут только по HTTPS через уже развёрнутый
 ## Протокол эксперимента
 
 Для одного запуска выбирается детерминированный source-level QA manifest: по
-одному response на source, поровну меток `y=0/1` в train и test. Strict и
-support используют ровно этот же manifest и один KG cache.
+одному response на source, поровну меток `y=0/1` в train и test. Strict,
+support и support-critical используют ровно этот же manifest и те же графы.
 
 Стандартный запуск сейчас — **100 QA**:
 
 | Часть | Записей | Назначение |
 |---|---:|---|
 | Train | 80 | Только здесь выполняется stratified 5-fold CV для выбора `α`, `τ_e`, `τ_r` и `θ`. |
-| Held-out test | 20 | Финальные strict/support метрики; test не участвует в настройке. |
-| Всего | 100 | Парное сравнение на тех же графах и том же split. |
+| Held-out test | 20 | Финальные парные метрики; test не участвует в настройке. |
+| Всего | 100 | Сравнение трёх детекторов на тех же графах и том же split. |
 
-После live strict extraction support использует KG cache, а финальные strict
-и support replays обязаны сделать ноль API calls и создать byte-identical
-`metrics.csv`. При временных `429` транспорт делает ограниченный
-экспоненциальный retry; checkpoints на Project disk позволяют повторить тот же
-commit/gateway/sample без повторения уже заполненных cache entries.
+`support-critical` — отдельная экспериментальная метрика: она не меняет
+historical strict/support формулы. Она добавляет atomic claims, строгие verdicts
+`entailed/unknown/unsupported/contradicted` и full-context review. Любой
+`unsupported` или `contradicted` claim получает максимальный риск; параметры
+агрегации выбираются только на train.
+
+Новый runner читает прежний 100-QA KG/verdict checkpoint только в режиме
+read-through. Поэтому strict/support воспроизводятся cache-only, KGGen не
+получает новых запросов, а live Vertex calls допускаются только для новых
+critical claim/review/verdict artifacts. Финальный replay всех трёх режимов
+обязан сделать ноль API calls и создать byte-identical `metrics.csv`.
 
 ## Разовый локальный минимум
 
@@ -114,7 +120,9 @@ bash scripts/submit_datasphere_vertex_qa_pilot.sh \
 ```
 
 Имя файла submitter историческое (`*_qa_pilot.sh`), но это уже
-параметризованный experiment runner: он не зашит на 20 QA. Для другой величины
+параметризованный strict/support/support-critical runner: он не зашит на 20 QA.
+Для первого critical запуска **не меняйте** размер, split, gateway или seed:
+он намеренно использует прежний 100-QA checkpoint. Для другой величины
 меняются `--qa-sample-size` и при необходимости `--qa-test-fraction`; оба
 получившихся размера train/test должны быть положительными и чётными, чтобы
 сохранить баланс меток. Например, `20` + `0.2` даёт `16/4`, а `100` + `0.2`
@@ -146,11 +154,13 @@ datasphere --profile default project job download-files \
 
 - `qa_manifest.json`, `runtime_config.yaml` без секрета, gateway/runtime
   manifests и `run_metadata.json`;
-- `strict/` и `support/` с `metrics.csv`, `tuning.json`, audit JSON и пустым
+- `strict/`, `support/` и `support-critical/` с `metrics.csv`, `tuning.json`,
+  audit JSON и пустым
   `failed_extractions.jsonl`;
-- `comparison.json`, `usage-counts.json`, cache hashes;
-- `cache-replay/strict` и `cache-replay/support` с идентичными CSV и нулевыми
-  live API calls.
+- `comparison.json`, `support-critical-diagnostic.json`, `usage-counts.json`,
+  hashes исторического и нового cache namespaces;
+- `cache-replay/strict`, `cache-replay/support` и
+  `cache-replay/support-critical` с идентичными CSV и нулевыми live API calls.
 
 При `ERROR` сначала скачайте archive и прочитайте `qa.stderr.log` и
 `qa.stdout.log`; не запускайте новый job вслепую. Повторный запуск с тем же
@@ -161,7 +171,8 @@ commit, gateway manifest и параметрами sample использует d
 
 - Разрешено: менять размер QA sample, test fraction, CV folds, timeout и
   concurrency через аргументы submitter; читать status/downloaded artifacts;
-  анализировать strict/support только как парное сравнение одного manifest.
+  анализировать strict/support/support-critical только как парное сравнение
+  одного manifest.
 - Запрещено: менять Cloud Run URL на произвольный endpoint, передавать ключ в
   YAML, использовать `GOOGLE_APPLICATION_CREDENTIALS`, отключать cache-only
   proof или подбирать параметры по held-out test.

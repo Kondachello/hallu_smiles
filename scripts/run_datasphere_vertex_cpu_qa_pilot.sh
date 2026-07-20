@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Parameterized strict-vs-support QA experiment: CPU -> Cloud Run -> Vertex AI.
+# Parameterized strict/support/support-critical QA experiment: CPU -> Cloud Run -> Vertex AI.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,17 +18,22 @@ QA_TEST_FRACTION="${QA_TEST_FRACTION:-0.2}"
 QA_CV_FOLDS="${QA_CV_FOLDS:-5}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
 
-RUNTIME_CONFIG="$RUN_ROOT/runtime_config.yaml"
+BASELINE_CONFIG="$RUN_ROOT/baseline_runtime_config.yaml"
+CRITICAL_CONFIG="$RUN_ROOT/critical_runtime_config.yaml"
 GATEWAY_MANIFEST_RAW="$RUN_ROOT/gateway-manifest.raw.json"
 GATEWAY_MANIFEST="$RUN_ROOT/gateway-manifest.json"
 QA_MANIFEST="$RUN_ROOT/qa_manifest.json"
 STRICT_OUT="$RUN_ROOT/strict"
 SUPPORT_OUT="$RUN_ROOT/support"
+CRITICAL_OUT="$RUN_ROOT/support-critical"
 REPLAY_STRICT="$RUN_ROOT/cache-replay/strict"
 REPLAY_SUPPORT="$RUN_ROOT/cache-replay/support"
+REPLAY_CRITICAL="$RUN_ROOT/cache-replay/support-critical"
 METADATA="$RUN_ROOT/run_metadata.json"
 USAGE_COUNTS="$RUN_ROOT/usage-counts.json"
 CHECKPOINT_ROOT=""
+BASELINE_CACHE_ROOT=""
+CRITICAL_CACHE_ROOT=""
 export PYTHONHASHSEED=42 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME:-/opt/hallu/models}"
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
@@ -106,9 +111,27 @@ test "$GATEWAY_MANIFEST_SHA256" = "$EXPECTED_GATEWAY_MANIFEST_SHA256" || {
   echo "gateway manifest changed since the successful 3-QA gate" >&2
   exit 2
 }
-CHECKPOINT_ROOT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa/qa-${QA_SAMPLE_SIZE}-test-${QA_TEST_SOURCES}-cv-${QA_CV_FOLDS}/${EXPECTED_SOURCE_COMMIT}-${GATEWAY_MANIFEST_SHA256}"
-mkdir -p "$CHECKPOINT_ROOT/kg" "$CHECKPOINT_ROOT/verdicts"
-"$CLIENT_PYTHON" - "$CHECKPOINT_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" <<'PY'
+CHECKPOINT_BASE="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa/qa-${QA_SAMPLE_SIZE}-test-${QA_TEST_SOURCES}-cv-${QA_CV_FOLDS}"
+# Historical 100-QA caches predate this source commit.  They are read-only
+# input artifacts: cache keys still validate model, gateway, protocol and text.
+test -d "$CHECKPOINT_BASE" || {
+  echo "Historical QA checkpoint base is absent: $CHECKPOINT_BASE" >&2
+  exit 2
+}
+BASELINE_CACHE_ROOT="$(find "$CHECKPOINT_BASE" -mindepth 1 -maxdepth 1 -type d -name "*-${GATEWAY_MANIFEST_SHA256}" -print 2>/dev/null | sort | tail -n 1)"
+test -n "$BASELINE_CACHE_ROOT" || {
+  echo "No historical 100-QA checkpoint matches this gateway manifest." >&2
+  exit 2
+}
+test -d "$BASELINE_CACHE_ROOT/kg" && test -d "$BASELINE_CACHE_ROOT/verdicts" || {
+  echo "Historical checkpoint is missing kg/ or verdicts/." >&2
+  exit 2
+}
+CRITICAL_CACHE_ROOT="$CHECKPOINT_BASE/support-critical/${EXPECTED_SOURCE_COMMIT}-${GATEWAY_MANIFEST_SHA256}"
+CHECKPOINT_ROOT="$CRITICAL_CACHE_ROOT"
+mkdir -p "$CRITICAL_CACHE_ROOT/kg" "$CRITICAL_CACHE_ROOT/critical_claims" \
+  "$CRITICAL_CACHE_ROOT/critical_coverage" "$CRITICAL_CACHE_ROOT/critical_verdicts"
+"$CLIENT_PYTHON" - "$CRITICAL_CACHE_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" "$BASELINE_CACHE_ROOT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -121,24 +144,26 @@ Path(sys.argv[1]).write_text(json.dumps({
         'test': int(sys.argv[6]),
         'alpha_cv_folds': int(sys.argv[7]),
     },
-    'protocol': 'hallu-vertex-qa-checkpoint-v2',
+    'historical_baseline_cache_root': sys.argv[8],
+    'protocol': 'hallu-vertex-qa-support-critical-checkpoint-v1',
 }, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
 
 "$CLIENT_PYTHON" "$ROOT/scripts/make_datasphere_vertex_config.py" \
   --base-config "$ROOT/config.yaml" --gateway-manifest "$GATEWAY_MANIFEST" \
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
-  --output "$RUNTIME_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$CHECKPOINT_ROOT" \
+  --output "$BASELINE_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$BASELINE_CACHE_ROOT" \
   --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
-  > "$RUN_ROOT/runtime-config-identity.json"
-
-# Recheck the transport inside the exact immutable full-run image. These are
-# structural checks only: they never assert a prescribed factual graph.
-"$CLIENT_PYTHON" "$ROOT/scripts/check_vertex_kggen_probe.py" \
-  --config "$RUNTIME_CONFIG" --report "$RUN_ROOT/kggen-vertex-probe.json"
-"$CLIENT_PYTHON" "$ROOT/scripts/check_vertex_verifier_probe.py" \
-  --config "$RUNTIME_CONFIG" --report "$RUN_ROOT/verifier-vertex-probe.json"
+  > "$RUN_ROOT/baseline-runtime-config-identity.json"
+"$CLIENT_PYTHON" "$ROOT/scripts/make_datasphere_vertex_config.py" \
+  --base-config "$ROOT/config.yaml" --gateway-manifest "$GATEWAY_MANIFEST" \
+  --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
+  --output "$CRITICAL_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$CRITICAL_CACHE_ROOT" \
+  --kg-cache-read-dir "$BASELINE_CACHE_ROOT/kg" \
+  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
+  --cv-folds "$QA_CV_FOLDS" \
+  > "$RUN_ROOT/critical-runtime-config-identity.json"
 
 require_complete_extraction() {
   "$CLIENT_PYTHON" - "$1/extraction_summary.json" "$2" <<'PY'
@@ -159,45 +184,62 @@ PY
   }
 }
 
-# This deterministic manifest is used by both hypotheses. Only strict
-# extraction is live for graphs; support reuses the same KG cache.
-"$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage extract \
+# The current manifest must resolve exclusively through the historical graph
+# cache.  A cache miss fails immediately rather than silently re-extracting.
+"$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage extract \
   --relation-mode strict --qa-sample --qa-sample-size "$QA_SAMPLE_SIZE" \
   --qa-test-fraction "$QA_TEST_FRACTION" --qa-manifest-out "$QA_MANIFEST" \
-  --output-dir "$STRICT_OUT"
+  --output-dir "$STRICT_OUT" --cache-only
 require_complete_extraction "$STRICT_OUT" "$QA_SAMPLE_SIZE"
-mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-extraction-live-usage.jsonl"
+mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-extraction-cache-usage.jsonl"
 
-"$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
+"$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode strict --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$STRICT_OUT" --kg-cache-only
+  --output-dir "$STRICT_OUT" --cache-only
 require_complete_extraction "$STRICT_OUT" "$QA_SAMPLE_SIZE"
-mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-metrics-cache-usage.jsonl"
+mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-baseline-cache-usage.jsonl"
 
-find "$CHECKPOINT_ROOT/kg" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/kg-cache-before-support.sha256"
-"$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
+find "$BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-before.sha256"
+"$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode support --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$SUPPORT_OUT" --kg-cache-only
+  --output-dir "$SUPPORT_OUT" --cache-only
 require_complete_extraction "$SUPPORT_OUT" "$QA_SAMPLE_SIZE"
-mv "$SUPPORT_OUT/usage.jsonl" "$RUN_ROOT/support-metrics-usage.jsonl"
-find "$CHECKPOINT_ROOT/kg" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/kg-cache-after-support.sha256"
-cmp "$RUN_ROOT/kg-cache-before-support.sha256" "$RUN_ROOT/kg-cache-after-support.sha256"
-"$CLIENT_PYTHON" "$ROOT/scripts/compare_qa_pilot_results.py" \
-  --strict-dir "$STRICT_OUT" --support-dir "$SUPPORT_OUT" --output "$RUN_ROOT/comparison.json"
+mv "$SUPPORT_OUT/usage.jsonl" "$RUN_ROOT/support-baseline-cache-usage.jsonl"
+find "$BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-after-baseline.sha256"
+cmp "$RUN_ROOT/historical-cache-before.sha256" "$RUN_ROOT/historical-cache-after-baseline.sha256"
 
-find "$CHECKPOINT_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-before-replay.sha256"
-"$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
+# Only this stage is allowed to make new Vertex calls: claims, adversarial
+# coverage, and four-way evidence verdicts.  KGGen remains cache-only.
+"$CLIENT_PYTHON" "$ROOT/run.py" --config "$CRITICAL_CONFIG" --stage all \
+  --relation-mode support-critical --qa-manifest "$QA_MANIFEST" \
+  --output-dir "$CRITICAL_OUT" --kg-cache-only
+require_complete_extraction "$CRITICAL_OUT" "$QA_SAMPLE_SIZE"
+mv "$CRITICAL_OUT/usage.jsonl" "$RUN_ROOT/support-critical-live-usage.jsonl"
+"$CLIENT_PYTHON" "$ROOT/scripts/compare_qa_pilot_results.py" \
+  --strict-dir "$STRICT_OUT" --support-dir "$SUPPORT_OUT" \
+  --critical-dir "$CRITICAL_OUT" --output "$RUN_ROOT/comparison.json"
+"$CLIENT_PYTHON" "$ROOT/scripts/summarize_support_critical_diagnostics.py" \
+  --strict-dir "$STRICT_OUT" --support-dir "$SUPPORT_OUT" \
+  --critical-dir "$CRITICAL_OUT" --output "$RUN_ROOT/support-critical-diagnostic.json"
+
+find "$CRITICAL_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/critical-cache-before-replay.sha256"
+"$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode strict --qa-manifest "$QA_MANIFEST" \
   --output-dir "$REPLAY_STRICT" --cache-only
-"$CLIENT_PYTHON" "$ROOT/run.py" --config "$RUNTIME_CONFIG" --stage all \
+"$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode support --qa-manifest "$QA_MANIFEST" \
   --output-dir "$REPLAY_SUPPORT" --cache-only
+"$CLIENT_PYTHON" "$ROOT/run.py" --config "$CRITICAL_CONFIG" --stage all \
+  --relation-mode support-critical --qa-manifest "$QA_MANIFEST" \
+  --output-dir "$REPLAY_CRITICAL" --cache-only
 require_complete_extraction "$REPLAY_STRICT" "$QA_SAMPLE_SIZE"
 require_complete_extraction "$REPLAY_SUPPORT" "$QA_SAMPLE_SIZE"
+require_complete_extraction "$REPLAY_CRITICAL" "$QA_SAMPLE_SIZE"
 cmp "$STRICT_OUT/metrics.csv" "$REPLAY_STRICT/metrics.csv"
 cmp "$SUPPORT_OUT/metrics.csv" "$REPLAY_SUPPORT/metrics.csv"
-find "$CHECKPOINT_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-after-replay.sha256"
-cmp "$RUN_ROOT/cache-before-replay.sha256" "$RUN_ROOT/cache-after-replay.sha256"
+cmp "$CRITICAL_OUT/metrics.csv" "$REPLAY_CRITICAL/metrics.csv"
+find "$CRITICAL_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/critical-cache-after-replay.sha256"
+cmp "$RUN_ROOT/critical-cache-before-replay.sha256" "$RUN_ROOT/critical-cache-after-replay.sha256"
 
 "$CLIENT_PYTHON" - "$USAGE_COUNTS" "$RUN_ROOT" <<'PY'
 import json
@@ -219,13 +261,18 @@ def usage(name):
     }
 payload = {
     'status': 'ready',
-    'strict_extraction_live': usage('strict-extraction-live-usage.jsonl'),
-    'strict_metrics_kg_cache_only': usage('strict-metrics-cache-usage.jsonl'),
-    'support_metrics': usage('support-metrics-usage.jsonl'),
+    'strict_extraction_cache_only': usage('strict-extraction-cache-usage.jsonl'),
+    'strict_baseline_cache_only': usage('strict-baseline-cache-usage.jsonl'),
+    'support_baseline_cache_only': usage('support-baseline-cache-usage.jsonl'),
+    'support_critical_live': usage('support-critical-live-usage.jsonl'),
     'strict_replay': usage('cache-replay/strict/usage.jsonl'),
     'support_replay': usage('cache-replay/support/usage.jsonl'),
+    'support_critical_replay': usage('cache-replay/support-critical/usage.jsonl'),
 }
-if payload['strict_replay']['api_calls'] or payload['support_replay']['api_calls']:
+if any(payload[name]['api_calls'] for name in (
+    'strict_extraction_cache_only', 'strict_baseline_cache_only', 'support_baseline_cache_only',
+    'strict_replay', 'support_replay', 'support_critical_replay',
+)):
     raise SystemExit('cache-only metric replay made live inference calls')
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
@@ -240,7 +287,7 @@ from gateway.core import canonical_manifest_sha256
 manifest = json.loads(Path(sys.argv[4]).read_text(encoding='utf-8'))
 Path(sys.argv[1]).write_text(json.dumps({
     'state': 'completed',
-    'mode': 'cpu-vertex-qa-strict-support',
+    'mode': 'cpu-vertex-qa-strict-support-critical',
     'checked_at_utc': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
     'source_commit': sys.argv[2],
     'datasphere_docker_image_id': sys.argv[3],
@@ -252,6 +299,6 @@ Path(sys.argv[1]).write_text(json.dumps({
         'test': int(sys.argv[7]),
         'alpha_cv_folds': int(sys.argv[8]),
     },
-    'runs': ['kggen-schema-and-cluster', 'verifier-live-cache-only', 'strict', 'support', 'cache-only-strict', 'cache-only-support'],
+    'runs': ['strict-baseline-cache-only', 'support-baseline-cache-only', 'support-critical-live', 'cache-only-strict', 'cache-only-support', 'cache-only-support-critical'],
 }, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY

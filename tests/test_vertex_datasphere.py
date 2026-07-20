@@ -52,7 +52,29 @@ def test_vertex_runtime_config_derives_identity_from_authenticated_manifest(tmp_
     assert cfg["eval"]["alpha_cv_folds"] == 5
     assert cfg["extraction"]["serial_chunking"] is False
     assert cfg["cache_dir"] == str(tmp_path / "work" / "cache" / "kg")
+    assert cfg["support_critical"]["claim_extractor"]["cache_dir"] == str(
+        tmp_path / "work" / "cache" / "critical_claims"
+    )
     assert cfg["vertex_gateway"]["gateway_manifest"] == _manifest()
+
+
+def test_vertex_runtime_config_keeps_historical_kg_reads_separate_from_writes(tmp_path):
+    manifest = tmp_path / "gateway.json"
+    runtime = tmp_path / "runtime.json"
+    output = tmp_path / "runtime.yaml"
+    manifest.write_text(json.dumps(_manifest()), encoding="utf-8")
+    runtime.write_text(json.dumps({"runtime_fingerprint": "cpu-image-fingerprint"}), encoding="utf-8")
+    historical = tmp_path / "historical" / "kg"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "make_datasphere_vertex_config.py"),
+        "--base-config", str(ROOT / "config.yaml"), "--gateway-manifest", str(manifest),
+        "--gateway-url", "https://gateway.example.run.app", "--datasphere-runtime-manifest", str(runtime),
+        "--output", str(output), "--data-dir", "/read-only/ragtruth", "--work-dir", str(tmp_path / "work"),
+        "--cache-root", str(tmp_path / "new-cache"), "--kg-cache-read-dir", str(historical),
+    ], check=True)
+    cfg = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert cfg["cache_dir"] == str(tmp_path / "new-cache" / "kg")
+    assert cfg["cache_read_dirs"] == [str(historical)]
 
 
 def test_vertex_config_rejects_model_or_region_drift(tmp_path):
@@ -152,13 +174,18 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "require_complete_extraction \"$STRICT_OUT\" \"$QA_SAMPLE_SIZE\"" in runner
     assert "--relation-mode strict" in runner
     assert "--relation-mode support" in runner
+    assert "--relation-mode support-critical" in runner
     assert "--kg-cache-only" in runner
     assert "--cache-only" in runner
     assert "--max-tokens 16384 --concurrency \"$LLM_CONCURRENCY\" --max-retries 1000" in runner
     assert "--cv-folds \"$QA_CV_FOLDS\"" in runner
-    assert "--cache-root \"$CHECKPOINT_ROOT\"" in runner
-    assert 'hallu-vertex-qa-checkpoint-v2' in runner
+    assert "--cache-root \"$BASELINE_CACHE_ROOT\"" in runner
+    assert "--cache-root \"$CRITICAL_CACHE_ROOT\"" in runner
+    assert "--kg-cache-read-dir \"$BASELINE_CACHE_ROOT/kg\"" in runner
+    assert 'hallu-vertex-qa-support-critical-checkpoint-v1' in runner
+    assert "support-critical-live-usage.jsonl" in runner
     assert "cmp \"$STRICT_OUT/metrics.csv\" \"$REPLAY_STRICT/metrics.csv\"" in runner
+    assert "cmp \"$CRITICAL_OUT/metrics.csv\" \"$REPLAY_CRITICAL/metrics.csv\"" in runner
     assert "vllm" not in runner.lower()
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh")], check=True)
 

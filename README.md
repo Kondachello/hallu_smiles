@@ -121,12 +121,22 @@ python run.py --stage all --relation-mode strict --qa-sample \
 python run.py --stage all --relation-mode support \
   --qa-manifest results/qa_manifest_100.json \
   --output-dir results/qa_pilot_support
+
+# Experimental third mode: hard-risk atomic claims plus an adversarial
+# full-context candidate pass. Its tuning remains train-only.
+python run.py --stage all --relation-mode support-critical \
+  --qa-manifest results/qa_manifest_100.json \
+  --output-dir results/qa_pilot_support_critical
 ```
 
 `RP_strict` remains the historical edge-alignment score. The support run additionally reports
 `RP_grounded`, `RP_entailed_cond`, and `RP_support`; it caches text-verifier verdicts under
 `.cache/verdicts/`. The verifier uses the same `llm.model` as KGGen and returns only
 `entailed`, `contradicted`, or `unknown` for a canonical triple plus up to four source sentences.
+`support-critical` is a separate protocol and cache namespace: it preserves historical results,
+uses `entailed/unknown/unsupported/contradicted`, and combines graph risk with the worst `k`
+atomic claims. See [the team runbook](docs/vertex-datasphere-team-runbook.md) for the cache-backed
+100-QA Job procedure.
 
 ## 5. Outputs (`results/`)
 
@@ -147,7 +157,7 @@ python run.py --stage all --relation-mode support \
 - `temperature: 0.0` everywhere; fixed `eval.seed`.
 - **Disk caches** are namespaced by model revision, runtime fingerprint, structured-output
   contract, extraction parameters, and input content. In DataSphere, the full QA job proves the
-  archive by rerunning strict/support with `--cache-only`: the replay must make
+  archive by rerunning strict/support/support-critical with `--cache-only`: the replay must make
   **zero live calls**, leave cache hashes unchanged, and reproduce byte-identical `metrics.csv`.
 - Cache writes are atomic (`os.replace`) with **per-writer unique temp names**, so concurrent
   extraction of identical texts (RAGTruth has duplicate responses) is crash-safe and race-free.

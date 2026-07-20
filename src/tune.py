@@ -42,6 +42,80 @@ def h_array(
     return H, mask
 
 
+def critical_h_array(
+    scores: Sequence[ScoreResult],
+    alpha: float,
+    beta: float,
+    top_k: int,
+    unknown_risk: float,
+    *,
+    include_unscorable: bool = False,
+    impute: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return support-critical H and its usable-score mask.
+
+    The default preserves paired strict/support evaluation by excluding graph
+    unscorable rows even when the claim layer can provide a diagnostic score.
+    """
+    H = np.full(len(scores), np.nan, dtype=float)
+    mask = np.zeros(len(scores), dtype=bool)
+    for i, score in enumerate(scores):
+        if score.unscorable and not include_unscorable:
+            continue
+        h = score.critical_h(alpha, beta, top_k, unknown_risk, impute=impute)
+        if h is not None:
+            H[i] = h
+            mask[i] = True
+    return H, mask
+
+
+def critical_cv(
+    scores: Sequence[ScoreResult],
+    y: Sequence[int],
+    *,
+    alpha_grid: Sequence[float],
+    beta_grid: Sequence[float],
+    top_k_grid: Sequence[int],
+    unknown_risk_grid: Sequence[float],
+    folds: int = 5,
+    seed: int = 42,
+) -> list[dict[str, float | int]]:
+    """Evaluate the complete critical parameter grid on train data only."""
+    y_all = np.asarray(list(y), dtype=int)
+    scorable_idx = np.array([i for i, score in enumerate(scores) if not score.unscorable], dtype=int)
+    if len(scorable_idx) == 0:
+        return []
+    y_s = y_all[scorable_idx]
+    subset = [scores[i] for i in scorable_idx]
+    n_splits = min(folds, _max_stratified_splits(y_s))
+    folds_idx = (
+        list(StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed).split(np.zeros(len(subset)), y_s))
+        if n_splits >= 2 else []
+    )
+    rows: list[dict[str, float | int]] = []
+    for alpha in alpha_grid:
+        for beta in beta_grid:
+            for top_k in top_k_grid:
+                for unknown_risk in unknown_risk_grid:
+                    H, mask = critical_h_array(subset, alpha, beta, top_k, unknown_risk)
+                    if folds_idx:
+                        values = []
+                        for _, val_idx in folds_idx:
+                            vi = val_idx[mask[val_idx]]
+                            if len(vi):
+                                value = safe_auc(H[vi], y_s[vi])
+                                if not np.isnan(value):
+                                    values.append(value)
+                        auc = float(np.mean(values)) if values else float("nan")
+                    else:
+                        auc = safe_auc(H[mask], y_s[mask])
+                    rows.append({
+                        "alpha": float(alpha), "beta": float(beta), "top_k": int(top_k),
+                        "unknown_risk": float(unknown_risk), "cv_mean_auc": auc,
+                    })
+    return rows
+
+
 def safe_auc(h: np.ndarray, y: np.ndarray) -> float:
     """ROC-AUC of H vs y (higher H => positive). NaN if only one class present."""
     if len(np.unique(y)) < 2:

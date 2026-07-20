@@ -1,6 +1,6 @@
 # Render with scripts/render_datasphere_vertex_qa_pilot_job.py; do not submit this template directly.
 name: hallu-vertex-cpu-qa-__RUN_ID__
-desc: Parameterized strict-vs-support HalluGraph QA evaluation through Cloud Run and Vertex AI.
+desc: Parameterized strict/support/support-critical HalluGraph QA evaluation through Cloud Run and Vertex AI.
 cmd: >-
   bash -lc 'set -Eeuo pipefail;
   export RUN_ROOT="$PWD/vertex-cpu-qa-artifacts/__RUN_ID__";

@@ -19,6 +19,7 @@ def build_audit_record(
     alpha: float,
     alpha_support: float | None = None,
     relation_mode: str = "strict",
+    critical_params: dict[str, Any] | None = None,
     timings: dict[str, float] | None = None,
     impute_h: float | None = None,
 ) -> dict[str, Any]:
@@ -33,7 +34,21 @@ def build_audit_record(
         if relation_mode == "support"
         else None
     )
-    return {
+    critical_h = None
+    critical_rp = None
+    if relation_mode == "support-critical":
+        if critical_params is None:
+            raise ValueError("support-critical audit requires tuned parameters")
+        unknown_risk = float(critical_params["unknown_risk"])
+        critical_rp = res.critical_relation_rp(unknown_risk)
+        critical_h = res.critical_h(
+            alpha_support,
+            float(critical_params["beta"]),
+            int(critical_params["top_k"]),
+            unknown_risk,
+            impute=impute_h,
+        )
+    payload = {
         "response_id": inst.response_id,
         "source_id": inst.source_id,
         "task": inst.task,
@@ -68,6 +83,15 @@ def build_audit_record(
         "gt_span_types": inst.gt_span_types,
         "timings_s": timings or {},
     }
+    if relation_mode == "support-critical":
+        payload.update({
+            "RP_support_critical": _round(critical_rp),
+            "CFI_support_critical": _round(None if critical_h is None else 1.0 - critical_h),
+            "H_support_critical": _round(critical_h),
+            "critical_parameters": critical_params,
+            "critical_claim_audits": (res.critical or {}).get("claim_audits", []),
+        })
+    return payload
 
 
 def write_audit(record: dict[str, Any], out_dir: str | Path) -> Path:

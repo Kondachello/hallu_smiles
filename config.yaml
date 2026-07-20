@@ -83,6 +83,28 @@ relation_verifier:
   prompt_version: "relation-entailment-v1"
   max_evidence_sentences: 4
 
+# A separate protocol: it does not mutate historical strict/support caches or
+# their formulas.  Clear claims without direct evidence are ``unsupported``;
+# only ambiguous/non-factual text may remain ``unknown``.
+support_critical:
+  claim_extractor:
+    cache_dir: ".cache/critical_claims"
+    prompt_version: "atomic-claims-v1"
+    max_tokens: 2048
+  coverage_reviewer:
+    cache_dir: ".cache/critical_coverage"
+    prompt_version: "full-context-coverage-v1"
+    max_tokens: 2048
+  claim_verifier:
+    cache_dir: ".cache/critical_verdicts"
+    prompt_version: "closed-world-claim-verdict-v1"
+    max_tokens: 512
+    max_evidence_sentences: 8
+  tuning:
+    beta_grid: [0.25, 0.5, 0.75]
+    top_k_grid: [1, 2, 3]
+    unknown_risk_grid: [0.0, 0.25]
+
 data:
   dir: "data"                         # holds source_info.jsonl and response.jsonl
   exclude_implicit_true: false        # RAGTruth strict convention: implicit_true spans COUNT as hallucinations

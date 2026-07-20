@@ -105,6 +105,22 @@ def test_cache_only_extractor_reads_warm_cache_and_fails_before_backend(tmp_path
         replay.extract("this graph was never cached")
 
 
+def test_cache_only_extractor_reads_historical_read_through_root(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.extraction.explicit_clustering = False
+    historical = tmp_path / "historical-kg"
+    writer_cfg = copy.deepcopy(cfg)
+    writer_cfg.cache_dir = str(historical)
+    writer = KGExtractor(writer_cfg, backend=FakeKGGen())
+    expected = writer.extract("Alice sees Bob")
+
+    replay_cfg = copy.deepcopy(cfg)
+    replay_cfg.cache_read_dirs = [str(historical)]
+    replay = KGExtractor(replay_cfg, backend=FakeKGGen(), cache_only=True)
+    assert replay.extract("Alice sees Bob") == expected
+    assert not list((tmp_path / "kg").glob("*.json"))
+
+
 def test_fake_and_live_extractors_cannot_share_cache_entries(tmp_path):
     cfg = _cfg(tmp_path)
     fake_key = KGExtractor(cfg, backend=FakeKGGen())._cache_key("same text")

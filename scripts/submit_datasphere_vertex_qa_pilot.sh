@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate the successful CPU 3-QA gate, then submit one parameterized QA run.
+# Validate the successful CPU 3-QA gate, then submit a cache-backed critical QA run.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a parameterized CPU Vertex strict-vs-support DataSphere QA Job."""
+"""Render a parameterized CPU Vertex strict/support/support-critical QA Job."""
 from __future__ import annotations
 
 import argparse
