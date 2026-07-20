@@ -93,12 +93,19 @@ support_critical:
     max_tokens: 2048
     max_tokens_ceiling: 8192
     max_protocol_retries: 4
+    # A list of every atomic fact can exceed even a large JSON output budget
+    # for one unusually long answer.  Segments keep offsets exact and cache
+    # independently; a completion ceiling recursively bisects to this floor.
+    chunk_chars: 900
+    min_chunk_chars: 160
   coverage_reviewer:
     cache_dir: ".cache/critical_coverage"
     prompt_version: "full-context-coverage-v1"
     max_tokens: 2048
     max_tokens_ceiling: 8192
     max_protocol_retries: 4
+    chunk_chars: 900
+    min_chunk_chars: 160
   claim_verifier:
     cache_dir: ".cache/critical_verdicts"
     prompt_version: "closed-world-claim-verdict-v1"

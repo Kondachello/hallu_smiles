@@ -8,6 +8,8 @@ from src.critical import (
     AtomicClaimExtractor,
     CriticalCompletionTruncatedError,
     CriticalClaimVerifier,
+    CriticalOutputLimitError,
+    FullContextReviewer,
     StructuredOutputParseError,
     FakeCriticalClaimPipeline,
     _validate_claims,
@@ -290,3 +292,82 @@ def test_malformed_claim_payload_gets_bounded_schema_retry_after_offset_recovery
     assert extracted[0].start == 0 and extracted[0].end == 21
     assert extracted[0].text == "Paris has two museums"
     assert extractor.calls == 2
+
+
+def test_long_atomic_claims_are_chunked_with_absolute_offsets_and_cache_only_replay(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.support_critical.claim_extractor.chunk_chars = 20
+    cfg.support_critical.claim_extractor.min_chunk_chars = 5
+    response = "Alpha has one. Beta has two. Gamma has three."
+
+    class SegmentClaims(AtomicClaimExtractor):
+        calls = 0
+
+        def _retry_json(self, messages, schema, name):  # noqa: ARG002
+            self.calls += 1
+            segment = messages[-1]["content"].split("Answer segment:\n", 1)[1]
+            return {"claims": [{"text": segment, "start": 0, "end": len(segment)}]}
+
+    writer = SegmentClaims(cfg)
+    claims = writer.extract(response)
+    assert writer.calls > 1
+    assert [(claim.start, claim.end) for claim in claims] == [
+        (0, claims[0].end),
+        (claims[0].end, claims[1].end),
+        (claims[1].end, len(response)),
+    ]
+    assert "".join(response[claim.start:claim.end] for claim in claims) == response
+
+    replay = AtomicClaimExtractor(cfg, cache_only=True)
+    assert replay.extract(response) == claims
+
+
+def test_output_ceiling_bisects_claim_segment_and_leaves_replay_marker(tmp_path):
+    cfg = _cfg(tmp_path)
+    # The initial request is deliberately one segment; simulated provider
+    # truncation must recursively split it rather than fail the Job.
+    cfg.support_critical.claim_extractor.chunk_chars = 10_000
+    cfg.support_critical.claim_extractor.min_chunk_chars = 5
+    response = "Alpha one. Beta two. Gamma three. Delta four."
+
+    class TruncateDenseSegment(AtomicClaimExtractor):
+        calls = 0
+
+        def _retry_json(self, messages, schema, name):  # noqa: ARG002
+            self.calls += 1
+            marker = "Answer segment:\n" if "Answer segment:\n" in messages[-1]["content"] else "Answer:\n"
+            segment = messages[-1]["content"].split(marker, 1)[1]
+            if len(segment) > 10:
+                raise CriticalOutputLimitError("simulated provider output ceiling")
+            return {"claims": [{"text": segment, "start": 0, "end": len(segment)}]}
+
+    writer = TruncateDenseSegment(cfg)
+    claims = writer.extract(response)
+    assert writer.calls > 2
+    assert "".join(response[claim.start:claim.end] for claim in claims) == response
+    # The full-answer replay marker prevents the exact same dynamic fallback
+    # from being rediscovered during a zero-HTTP cache-only run.
+    assert AtomicClaimExtractor(cfg, cache_only=True).extract(response) == claims
+
+
+def test_long_coverage_review_is_chunked_and_replays_without_calls(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.support_critical.coverage_reviewer.chunk_chars = 18
+    cfg.support_critical.coverage_reviewer.min_chunk_chars = 5
+    response = "Alpha is red. Beta is blue. Gamma is green."
+
+    class SegmentReview(FullContextReviewer):
+        calls = 0
+
+        def _retry_json(self, messages, schema, name):  # noqa: ARG002
+            self.calls += 1
+            segment = messages[-1]["content"].split("Answer segment:\n", 1)[1].split(
+                "\n\nAlready extracted", 1
+            )[0]
+            return {"claims": [{"text": segment, "start": 0, "end": len(segment)}]}
+
+    writer = SegmentReview(cfg)
+    claims = writer.review(response, "Alpha is red.", None, [])
+    assert writer.calls > 1
+    assert "".join(response[claim.start:claim.end] for claim in claims) == response
+    assert FullContextReviewer(cfg, cache_only=True).review(response, "Alpha is red.", None, []) == claims

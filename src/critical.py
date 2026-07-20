@@ -87,6 +87,16 @@ class CriticalRetryableTruncation(CriticalCompletionTruncatedError):
     """A token-ceiling retry remains available for this otherwise strict response."""
 
 
+class CriticalOutputLimitError(StructuredOutputParseError):
+    """A list response needs deterministic input segmentation, not another retry.
+
+    Retrying the same request after Gemini has exhausted the configured output
+    ceiling cannot make its JSON array shorter.  List-producing components
+    catch this signal and bisect the answer while preserving absolute offsets.
+    Scalar verdict components intentionally do not catch it.
+    """
+
+
 @dataclass(frozen=True)
 class AtomicClaim:
     text: str
@@ -140,6 +150,74 @@ def merge_claims(*collections: Iterable[AtomicClaim]) -> list[AtomicClaim]:
     return sorted(merged.values(), key=lambda c: (c.start, c.end, normalize(c.text)))
 
 
+@dataclass(frozen=True)
+class _AnswerChunk:
+    """An exact contiguous slice of an answer, addressed in answer offsets."""
+
+    text: str
+    start: int
+    end: int
+
+
+def _answer_chunks(text: str, max_chars: int) -> list[_AnswerChunk]:
+    """Split an answer deterministically, retaining every character exactly once.
+
+    We prefer a sentence boundary in the latter half of a window, then a
+    whitespace boundary, and use a hard boundary only as a final fallback.
+    This avoids a single pathological long answer producing an unbounded JSON
+    claim list.  Chunks neither overlap nor drop whitespace, which makes their
+    local offsets safely convertible to the original answer offsets.
+    """
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+    if len(text) <= max_chars:
+        return [_AnswerChunk(text=text, start=0, end=len(text))]
+
+    chunks: list[_AnswerChunk] = []
+    start = 0
+    length = len(text)
+    while start < length:
+        target = min(length, start + max_chars)
+        if target == length:
+            end = target
+        else:
+            floor = start + max(1, (target - start) // 2)
+            window = text[start:target]
+            # Include separator whitespace in the prior segment.  It gives
+            # the model natural sentence-shaped input without changing text.
+            sentence_ends = [
+                start + match.end()
+                for match in re.finditer(r"(?:[.!?;:][\"'\)\]\}]*)(?:\s+)|\n+", window)
+                if start + match.end() >= floor
+            ]
+            whitespace_ends = [
+                start + match.end()
+                for match in re.finditer(r"\s+", window)
+                if start + match.end() >= floor
+            ]
+            end = (sentence_ends or whitespace_ends or [target])[-1]
+        if end <= start:  # Defensive: a malformed boundary must not loop.
+            end = min(length, start + max_chars)
+        chunks.append(_AnswerChunk(text=text[start:end], start=start, end=end))
+        start = end
+    return chunks
+
+
+def _bisect_chunk(chunk: _AnswerChunk, min_chars: int) -> list[_AnswerChunk] | None:
+    """Return smaller answer-offset chunks, or ``None`` at the safety floor."""
+    if min_chars <= 0:
+        raise ValueError("min_chars must be positive")
+    if len(chunk.text) <= min_chars:
+        return None
+    local = _answer_chunks(chunk.text, max(min_chars, (len(chunk.text) + 1) // 2))
+    if len(local) < 2:
+        return None
+    return [
+        _AnswerChunk(text=piece.text, start=chunk.start + piece.start, end=chunk.start + piece.end)
+        for piece in local
+    ]
+
+
 def _literal_spans(response: str, text: str) -> list[tuple[int, int]]:
     """Return every literal occurrence without guessing semantic content."""
     if not text:
@@ -170,7 +248,7 @@ def _repair_claim_span(response: str, text: str) -> tuple[str, int, int] | None:
         # Persist the original answer slice only when this match is unique.
         tokens = stripped.split()
         if tokens:
-            pattern = r"\\s+".join(re.escape(token) for token in tokens)
+            pattern = r"\s+".join(re.escape(token) for token in tokens)
             candidates.update((match.start(), match.end()) for match in re.finditer(pattern, response))
     if len(candidates) != 1:
         return None
@@ -368,7 +446,7 @@ class _CachedComponent:
                     result = self._call_json(messages, schema, name, max_tokens=token_budget)
                 except CriticalCompletionTruncatedError as exc:
                     if token_budget >= self.max_tokens_ceiling:
-                        raise StructuredOutputParseError(
+                        raise CriticalOutputLimitError(
                             f"{self.component} remained truncated at max_tokens={token_budget}"
                         ) from exc
                     next_budget = min(token_budget * 2, self.max_tokens_ceiling)
@@ -422,14 +500,22 @@ class AtomicClaimExtractor(_CachedComponent):
 
     def __init__(self, cfg, usage=None, *, cache_only: bool = False):
         super().__init__(cfg, "claim_extractor", usage, cache_only=cache_only)
+        self.chunk_chars = int(config_value(self.section, "chunk_chars", 0))
+        self.min_chunk_chars = int(config_value(self.section, "min_chunk_chars", 160))
+        if self.chunk_chars < 0 or self.min_chunk_chars <= 0:
+            raise ValueError("claim_extractor chunk limits must be positive")
 
-    def extract(self, response: str) -> list[AtomicClaim]:
-        if not response.strip():
-            return []
-        key = self._cache_key({"response": response})
+    def _segment_key_payload(self, segment: str) -> dict[str, Any]:
+        # The segment protocol is deliberately part of the key instead of a
+        # protocol bump: full-answer entries from earlier interrupted Jobs
+        # remain readable, while new chunks are independently resumable.
+        return {"segment_protocol": "answer-chunks-v1", "answer_segment": segment}
+
+    def _extract_segment(self, segment: str) -> list[AtomicClaim]:
+        key = self._cache_key(self._segment_key_payload(segment))
         cached = self._load(key)
         if cached is not None:
-            claims = _validate_claims(cached, response, "atomic")
+            claims = _validate_claims(cached, segment, "atomic")
             self._record(key, 0.0, cached=True)
             return claims
         if self.cache_only:
@@ -438,27 +524,109 @@ class AtomicClaimExtractor(_CachedComponent):
             {
                 "role": "system",
                 "content": (
-                    "Extract every minimal independently checkable factual claim in the answer. "
+                    "Extract every minimal independently checkable factual claim in the answer segment. "
                     "Keep quantities, dates, negation, comparison, condition, modality, and scope in the claim. "
                     "Do not include greetings, opinions, or purely stylistic text. Each text value must be an exact "
-                    "substring of the answer and start/end are zero-based Python string offsets, end exclusive."
+                    "substring of the answer segment and start/end are zero-based Python string offsets, end exclusive."
                 ),
             },
-            {"role": "user", "content": f"Answer:\n{response}"},
+            {"role": "user", "content": f"Answer segment:\n{segment}"},
         ]
         start = time.perf_counter()
-        try:
-            claims = self._retry_validated_json(
-                messages,
-                CLAIM_SCHEMA,
-                "atomic_claims",
-                lambda payload: _validate_claims(payload, response, "atomic"),
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise CriticalProtocolError("atomic claim extraction failed") from exc
+        claims = self._retry_validated_json(
+            messages,
+            CLAIM_SCHEMA,
+            "atomic_claims",
+            lambda payload: _validate_claims(payload, segment, "atomic"),
+        )
         self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
         self._record(key, time.perf_counter() - start, cached=False)
         return claims
+
+    def _extract_chunk(self, chunk: _AnswerChunk) -> list[AtomicClaim]:
+        try:
+            local = self._extract_segment(chunk.text)
+        except CriticalOutputLimitError:
+            children = _bisect_chunk(chunk, self.min_chunk_chars)
+            if children is None:
+                raise
+            claims: list[AtomicClaim] = []
+            for child in children:
+                claims.extend(self._extract_chunk(child))
+            return claims
+        return [
+            replace(claim, start=claim.start + chunk.start, end=claim.end + chunk.start)
+            for claim in local
+        ]
+
+    def extract(self, response: str) -> list[AtomicClaim]:
+        if not response.strip():
+            return []
+        # Preserve an exact completed full-answer artifact from previous Jobs.
+        # This is especially valuable for the partial cache produced before
+        # segmentation existed.
+        key = self._cache_key({"response": response})
+        cached = self._load(key)
+        if cached is not None:
+            claims = _validate_claims(cached, response, "atomic")
+            self._record(key, 0.0, cached=True)
+            return claims
+        # Short responses retain the historical one-request cache identity;
+        # only long answers take the new resumable segmented path.
+        if not self.chunk_chars or len(response) <= self.chunk_chars:
+            if self.cache_only:
+                raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json")
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract every minimal independently checkable factual claim in the answer. "
+                        "Keep quantities, dates, negation, comparison, condition, modality, and scope in the claim. "
+                        "Do not include greetings, opinions, or purely stylistic text. Each text value must be an exact "
+                        "substring of the answer and start/end are zero-based Python string offsets, end exclusive."
+                    ),
+                },
+                {"role": "user", "content": f"Answer:\n{response}"},
+            ]
+            start = time.perf_counter()
+            try:
+                claims = self._retry_validated_json(
+                    messages,
+                    CLAIM_SCHEMA,
+                    "atomic_claims",
+                    lambda payload: _validate_claims(payload, response, "atomic"),
+                )
+            except CriticalOutputLimitError:
+                # A provider can hit an output ceiling even for a nominally
+                # short but claim-dense answer. Fall through to the same
+                # deterministic bisection machinery rather than fail late.
+                if len(response) <= self.min_chunk_chars:
+                    raise CriticalProtocolError("atomic claim extraction exceeded the minimum chunk safety floor")
+                claims = self._extract_chunk(_AnswerChunk(response, 0, len(response)))
+                merged = merge_claims(claims)
+                # A compact answer-level index makes cache-only replay work
+                # even when a provider unexpectedly forced bisection below
+                # the configured chunk threshold. Leaf caches remain useful
+                # for resuming an interrupted live attempt.
+                self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in merged]})
+                return merged
+            except Exception as exc:  # noqa: BLE001
+                raise CriticalProtocolError("atomic claim extraction failed") from exc
+            self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
+            self._record(key, time.perf_counter() - start, cached=False)
+            return claims
+        try:
+            claims = []
+            for chunk in _answer_chunks(response, self.chunk_chars):
+                claims.extend(self._extract_chunk(chunk))
+        except Exception as exc:  # noqa: BLE001
+            raise CriticalProtocolError("atomic claim extraction failed") from exc
+        merged = merge_claims(claims)
+        # Index the deterministic leaf artifacts under the historical
+        # full-answer key as well. This is an atomic replay marker, not the
+        # source of truth during an interrupted live extraction.
+        self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in merged]})
+        return merged
 
 
 class FullContextReviewer(_CachedComponent):
@@ -467,6 +635,90 @@ class FullContextReviewer(_CachedComponent):
 
     def __init__(self, cfg, usage=None, *, cache_only: bool = False):
         super().__init__(cfg, "coverage_reviewer", usage, cache_only=cache_only)
+        self.chunk_chars = int(config_value(self.section, "chunk_chars", 0))
+        self.min_chunk_chars = int(config_value(self.section, "min_chunk_chars", 160))
+        if self.chunk_chars < 0 or self.min_chunk_chars <= 0:
+            raise ValueError("coverage_reviewer chunk limits must be positive")
+
+    @staticmethod
+    def _claims_for_chunk(claims: Sequence[AtomicClaim], chunk: _AnswerChunk) -> list[AtomicClaim]:
+        """Select known candidates touching this segment in a stable order."""
+        return [
+            claim for claim in claims
+            if claim.start < chunk.end and claim.end > chunk.start
+        ]
+
+    def _segment_key_payload(
+        self, segment: str, context: str, query: str | None, known_claims: Sequence[AtomicClaim]
+    ) -> dict[str, Any]:
+        return {
+            "segment_protocol": "answer-chunks-v1",
+            "answer_segment": segment,
+            "context": context,
+            "query": query or "",
+            # The prompt reads claim text only. Excluding absolute offsets lets
+            # an identical segment resume even when it occurs in a new answer.
+            "known_claims": [claim.text for claim in known_claims],
+        }
+
+    def _review_segment(
+        self, segment: str, context: str, query: str | None, known_claims: Sequence[AtomicClaim]
+    ) -> list[AtomicClaim]:
+        key = self._cache_key(self._segment_key_payload(segment, context, query, known_claims))
+        cached = self._load(key)
+        if cached is not None:
+            claims = _validate_claims(cached, segment, "global_review")
+            self._record(key, 0.0, cached=True)
+            return claims
+        if self.cache_only:
+            raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json")
+        known = "\n".join(f"- {claim.text}" for claim in known_claims) or "(none)"
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Read the entire source and answer segment under a closed-world rule. Find factual answer "
+                    "fragments that may be unsupported or contradicted by the source, especially a single subtle "
+                    "extra fact. Return only exact answer-segment substrings with Python offsets relative to the "
+                    "answer segment. Do not return claims that are directly supported. This is a candidate-generation "
+                    "review, not a final verdict."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Context:\n{context}\n\nQuery:\n{query or ''}\n\nAnswer segment:\n{segment}\n\n"
+                f"Already extracted claims touching this segment:\n{known}",
+            },
+        ]
+        start = time.perf_counter()
+        claims = self._retry_validated_json(
+            messages,
+            CLAIM_SCHEMA,
+            "coverage_candidates",
+            lambda payload: _validate_claims(payload, segment, "global_review"),
+        )
+        self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
+        self._record(key, time.perf_counter() - start, cached=False)
+        return claims
+
+    def _review_chunk(
+        self, chunk: _AnswerChunk, context: str, query: str | None, known_claims: Sequence[AtomicClaim]
+    ) -> list[AtomicClaim]:
+        local_known = self._claims_for_chunk(known_claims, chunk)
+        try:
+            local = self._review_segment(chunk.text, context, query, local_known)
+        except CriticalOutputLimitError:
+            children = _bisect_chunk(chunk, self.min_chunk_chars)
+            if children is None:
+                raise
+            claims: list[AtomicClaim] = []
+            for child in children:
+                claims.extend(self._review_chunk(child, context, query, known_claims))
+            return claims
+        return [
+            replace(claim, start=claim.start + chunk.start, end=claim.end + chunk.start)
+            for claim in local
+        ]
 
     def review(
         self, response: str, context: str, query: str | None, known_claims: Sequence[AtomicClaim]
@@ -484,38 +736,57 @@ class FullContextReviewer(_CachedComponent):
             claims = _validate_claims(cached, response, "global_review")
             self._record(key, 0.0, cached=True)
             return claims
-        if self.cache_only:
-            raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json")
-        known = "\n".join(f"- {claim.text}" for claim in known_claims) or "(none)"
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Read the entire source and answer under a closed-world rule. Find factual answer fragments that "
-                    "may be unsupported or contradicted by the source, especially a single subtle extra fact. "
-                    "Return only exact answer substrings with Python offsets. Do not return claims that are directly "
-                    "supported. This is a candidate-generation review, not a final verdict."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Context:\n{context}\n\nQuery:\n{query or ''}\n\nAnswer:\n{response}\n\n"
-                f"Already extracted claims:\n{known}",
-            },
-        ]
-        start = time.perf_counter()
+        if not self.chunk_chars or len(response) <= self.chunk_chars:
+            if self.cache_only:
+                raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json")
+            known = "\n".join(f"- {claim.text}" for claim in known_claims) or "(none)"
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Read the entire source and answer under a closed-world rule. Find factual answer fragments that "
+                        "may be unsupported or contradicted by the source, especially a single subtle extra fact. "
+                        "Return only exact answer substrings with Python offsets. Do not return claims that are directly "
+                        "supported. This is a candidate-generation review, not a final verdict."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Context:\n{context}\n\nQuery:\n{query or ''}\n\nAnswer:\n{response}\n\n"
+                    f"Already extracted claims:\n{known}",
+                },
+            ]
+            start = time.perf_counter()
+            try:
+                claims = self._retry_validated_json(
+                    messages,
+                    CLAIM_SCHEMA,
+                    "coverage_candidates",
+                    lambda payload: _validate_claims(payload, response, "global_review"),
+                )
+            except CriticalOutputLimitError:
+                if len(response) <= self.min_chunk_chars:
+                    raise CriticalProtocolError("full-context coverage review exceeded the minimum chunk safety floor")
+                claims = self._review_chunk(
+                    _AnswerChunk(response, 0, len(response)), context, query, known_claims
+                )
+                merged = merge_claims(claims)
+                self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in merged]})
+                return merged
+            except Exception as exc:  # noqa: BLE001
+                raise CriticalProtocolError("full-context coverage review failed") from exc
+            self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
+            self._record(key, time.perf_counter() - start, cached=False)
+            return claims
         try:
-            claims = self._retry_validated_json(
-                messages,
-                CLAIM_SCHEMA,
-                "coverage_candidates",
-                lambda payload: _validate_claims(payload, response, "global_review"),
-            )
+            claims = []
+            for chunk in _answer_chunks(response, self.chunk_chars):
+                claims.extend(self._review_chunk(chunk, context, query, known_claims))
         except Exception as exc:  # noqa: BLE001
             raise CriticalProtocolError("full-context coverage review failed") from exc
-        self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
-        self._record(key, time.perf_counter() - start, cached=False)
-        return claims
+        merged = merge_claims(claims)
+        self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in merged]})
+        return merged
 
 
 def select_claim_evidence(

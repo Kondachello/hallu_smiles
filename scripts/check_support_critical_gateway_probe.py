@@ -34,6 +34,10 @@ CONTEXT = "Mammals are animals."
 QUERY = "What are mammals?"
 ANSWER = "Mammals are animals."
 CLAIM = "Mammals are animals."
+# Exercise the segmented cache path before a 100-QA Job starts. This text is
+# repetitive deliberately: the probe is about exact offset/cache transport,
+# not an expected scientific verdict or a model's ability to infer facts.
+SEGMENTED_ANSWER = "Mammals are animals. " * 60
 
 
 def main() -> None:
@@ -46,13 +50,21 @@ def main() -> None:
     live_usage = UsageLogger(None)
     replay_usage = UsageLogger(None)
     failure: Exception | None = None
-    atomic_count = coverage_count = 0
+    atomic_count = coverage_count = segmented_atomic_count = segmented_coverage_count = 0
     live_verdict = replay_verdict = None
     try:
         atomic = AtomicClaimExtractor(cfg, usage=live_usage).extract(ANSWER)
         reviewed = FullContextReviewer(cfg, usage=live_usage).review(ANSWER, CONTEXT, QUERY, atomic)
         decision = CriticalClaimVerifier(cfg, usage=live_usage).verify_claim(CLAIM, CONTEXT, QUERY)
         atomic_count, coverage_count, live_verdict = len(atomic), len(reviewed), decision.verdict
+
+        if len(SEGMENTED_ANSWER) <= int(cfg.support_critical.claim_extractor.chunk_chars):
+            raise RuntimeError("support-critical segmented gateway probe is not longer than its configured chunk")
+        segmented_atomic = AtomicClaimExtractor(cfg, usage=live_usage).extract(SEGMENTED_ANSWER)
+        segmented_reviewed = FullContextReviewer(cfg, usage=live_usage).review(
+            SEGMENTED_ANSWER, CONTEXT, QUERY, segmented_atomic
+        )
+        segmented_atomic_count, segmented_coverage_count = len(segmented_atomic), len(segmented_reviewed)
 
         replay_atomic = AtomicClaimExtractor(cfg, usage=replay_usage, cache_only=True).extract(ANSWER)
         replay_reviewed = FullContextReviewer(cfg, usage=replay_usage, cache_only=True).review(
@@ -62,8 +74,16 @@ def main() -> None:
             CLAIM, CONTEXT, QUERY
         )
         replay_verdict = replay.verdict
+        replay_segmented_atomic = AtomicClaimExtractor(cfg, usage=replay_usage, cache_only=True).extract(
+            SEGMENTED_ANSWER
+        )
+        replay_segmented_reviewed = FullContextReviewer(
+            cfg, usage=replay_usage, cache_only=True
+        ).review(SEGMENTED_ANSWER, CONTEXT, QUERY, replay_segmented_atomic)
         if replay_atomic != atomic or replay_reviewed != reviewed:
             raise RuntimeError("support-critical claim cache replay differed from the live artifact")
+        if replay_segmented_atomic != segmented_atomic or replay_segmented_reviewed != segmented_reviewed:
+            raise RuntimeError("support-critical segmented cache replay differed from the live artifact")
         if live_verdict not in CRITICAL_VERDICTS or replay_verdict != live_verdict or not replay.cache_hit:
             raise RuntimeError("support-critical verdict live/cache-only contract failed")
         if replay_usage.calls != 0:
@@ -76,6 +96,9 @@ def main() -> None:
         "elapsed_seconds": round(time.perf_counter() - started, 3),
         "atomic_claim_count": atomic_count,
         "coverage_candidate_count": coverage_count,
+        "segmented_answer_chars": len(SEGMENTED_ANSWER),
+        "segmented_atomic_claim_count": segmented_atomic_count,
+        "segmented_coverage_candidate_count": segmented_coverage_count,
         "live_verdict": live_verdict,
         "cache_only_verdict": replay_verdict,
         "live_usage": live_usage.summary(),
