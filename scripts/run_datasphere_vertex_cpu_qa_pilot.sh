@@ -198,7 +198,7 @@ PY
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$BASELINE_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$BASELINE_CACHE_ROOT" \
   --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
-  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
+  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 0 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/baseline-runtime-config-identity.json"
 "$CLIENT_PYTHON" "$ROOT/scripts/make_datasphere_vertex_config.py" \
@@ -208,7 +208,7 @@ PY
   --kg-cache-read-dir "$BASELINE_CACHE_ROOT/kg" \
   --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
   "${CRITICAL_CACHE_READ_ARGS[@]}" \
-  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
+  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 0 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/critical-runtime-config-identity.json"
 

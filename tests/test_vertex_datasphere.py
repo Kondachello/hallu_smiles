@@ -109,6 +109,22 @@ def test_vertex_runtime_config_can_replay_a_recorded_historical_llm_identity(tmp
     assert identity["computed_runtime_fingerprint"] != legacy
 
 
+def test_vertex_runtime_config_allows_unbounded_transient_retry_until_job_timeout(tmp_path):
+    manifest = tmp_path / "gateway.json"
+    runtime = tmp_path / "runtime.json"
+    output = tmp_path / "runtime.yaml"
+    manifest.write_text(json.dumps(_manifest()), encoding="utf-8")
+    runtime.write_text(json.dumps({"runtime_fingerprint": "cpu-image-fingerprint"}), encoding="utf-8")
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "make_datasphere_vertex_config.py"),
+        "--base-config", str(ROOT / "config.yaml"), "--gateway-manifest", str(manifest),
+        "--gateway-url", "https://gateway.example.run.app", "--datasphere-runtime-manifest", str(runtime),
+        "--output", str(output), "--data-dir", "/data", "--work-dir", str(tmp_path / "work"),
+        "--max-retries", "0",
+    ], check=True)
+    assert yaml.safe_load(output.read_text(encoding="utf-8"))["llm"]["max_retries"] == 0
+
+
 def test_historical_cache_lineage_requires_exact_checkpoint_gateway_and_client_runtime(tmp_path):
     registry = ROOT / "datasphere" / "historical_kg_cache_lineages.json"
     lineage = json.loads(registry.read_text(encoding="utf-8"))["lineages"][0]
@@ -237,7 +253,7 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "--relation-mode support-critical" in runner
     assert "--kg-cache-only" in runner
     assert "--cache-only" in runner
-    assert "--max-tokens 16384 --concurrency \"$LLM_CONCURRENCY\" --max-retries 1000" in runner
+    assert "--max-tokens 16384 --concurrency \"$LLM_CONCURRENCY\" --max-retries 0" in runner
     assert "--cv-folds \"$QA_CV_FOLDS\"" in runner
     assert "--cache-root \"$BASELINE_CACHE_ROOT\"" in runner
     assert "--cache-root \"$CRITICAL_CACHE_ROOT\"" in runner

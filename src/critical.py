@@ -16,10 +16,10 @@ import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence, TypeVar
 
 import numpy as np
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never, wait_exponential
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .config import resolve_api_key
@@ -72,6 +72,7 @@ _STOPWORDS = {
     "do", "does", "for", "from", "has", "have", "had", "in", "is", "it", "of",
     "on", "or", "the", "to", "was", "were", "with",
 }
+_T = TypeVar("_T")
 
 
 class CriticalProtocolError(RuntimeError):
@@ -139,6 +140,44 @@ def merge_claims(*collections: Iterable[AtomicClaim]) -> list[AtomicClaim]:
     return sorted(merged.values(), key=lambda c: (c.start, c.end, normalize(c.text)))
 
 
+def _literal_spans(response: str, text: str) -> list[tuple[int, int]]:
+    """Return every literal occurrence without guessing semantic content."""
+    if not text:
+        return []
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    while True:
+        start = response.find(text, offset)
+        if start < 0:
+            return spans
+        spans.append((start, start + len(text)))
+        offset = start + 1
+
+
+def _repair_claim_span(response: str, text: str) -> tuple[str, int, int] | None:
+    """Recover only a mechanical offset error for a unique literal fragment.
+
+    The model still supplies the claim text. This helper merely locates that
+    same text in the answer, never paraphrases it, and never guesses between
+    repeated occurrences. The stored audit remains byte-exact and checkable.
+    """
+    candidates: set[tuple[int, int]] = set(_literal_spans(response, text))
+    stripped = text.strip()
+    if stripped and stripped != text:
+        candidates.update(_literal_spans(response, stripped))
+    if not candidates:
+        # Newline-versus-space is a serialisation error, not a semantic edit.
+        # Persist the original answer slice only when this match is unique.
+        tokens = stripped.split()
+        if tokens:
+            pattern = r"\\s+".join(re.escape(token) for token in tokens)
+            candidates.update((match.start(), match.end()) for match in re.finditer(pattern, response))
+    if len(candidates) != 1:
+        return None
+    start, end = next(iter(candidates))
+    return response[start:end], start, end
+
+
 def _validate_claims(payload: Any, response: str, source: str) -> list[AtomicClaim]:
     try:
         validate_json_document(payload, CLAIM_SCHEMA)
@@ -147,18 +186,24 @@ def _validate_claims(payload: Any, response: str, source: str) -> list[AtomicCla
     claims: list[AtomicClaim] = []
     for raw in payload["claims"]:
         start, end, text = int(raw["start"]), int(raw["end"]), str(raw["text"])
-        if not (0 <= start < end <= len(response)):
-            raise StructuredOutputParseError(f"{source} claim offsets are outside the response")
-        if response[start:end] != text:
-            raise StructuredOutputParseError(
-                f"{source} claim text does not exactly equal response[start:end]"
-            )
+        if not (0 <= start < end <= len(response)) or response[start:end] != text:
+            repaired = _repair_claim_span(response, text)
+            if repaired is None:
+                raise StructuredOutputParseError(
+                    f"{source} claim does not identify one exact response substring"
+                )
+            text, start, end = repaired
         claims.append(AtomicClaim(text=text, start=start, end=end, sources=(source,)))
     return merge_claims(claims)
 
 
 def _response_field(value: Any, field: str) -> Any:
     return value.get(field) if isinstance(value, dict) else getattr(value, field, None)
+
+
+def _validated_critical_verdict(payload: dict[str, Any]) -> str:
+    validate_json_document(payload, VERDICT_SCHEMA)
+    return str(payload["verdict"])
 
 
 class _CachedComponent:
@@ -188,6 +233,7 @@ class _CachedComponent:
             config_value(section, "max_tokens_ceiling", max(self.max_tokens, 8192))
         )
         self.max_retries = int(cfg.llm.max_retries)
+        self.max_protocol_retries = int(config_value(section, "max_protocol_retries", 4))
         self.backoff_base = float(cfg.llm.retry_backoff_base_s)
         self.backoff_max = float(getattr(cfg.llm, "retry_backoff_max_s", 60))
         self.request_timeout_s = float(getattr(cfg.llm, "request_timeout_s", 90))
@@ -197,8 +243,10 @@ class _CachedComponent:
         self.cache_read_dirs = [Path(str(path)) for path in raw_read_dirs]
         self.cache_only = bool(cache_only)
         self.usage = usage
-        if self.max_tokens <= 0 or self.max_retries <= 0 or self.request_timeout_s <= 0:
+        if self.max_tokens <= 0 or self.max_retries < 0 or self.request_timeout_s <= 0:
             raise ValueError(f"invalid {self.component} runtime limits")
+        if self.max_protocol_retries <= 0:
+            raise ValueError(f"{self.component}.max_protocol_retries must be positive")
         if self.max_tokens_ceiling < self.max_tokens:
             raise ValueError(f"{self.component}.max_tokens_ceiling must be at least max_tokens")
         if self.backoff_max < self.backoff_base:
@@ -307,7 +355,10 @@ class _CachedComponent:
             return isinstance(exc, CriticalRetryableTruncation) or is_retryable_llm_exception(exc)
 
         for attempt in Retrying(
-            stop=stop_after_attempt(self.max_retries),
+            # ``0`` keeps retrying only transient 429/5xx/network failures
+            # until the outer DataSphere wall-time deadline. Each completed
+            # artifact is atomically cached before the next claim begins.
+            stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
             wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
             retry=retry_if_exception(should_retry),
             reraise=True,
@@ -327,6 +378,42 @@ class _CachedComponent:
                     ) from exc
         assert result is not None
         return result
+
+    def _retry_validated_json(
+        self,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
+        name: str,
+        validator: Callable[[dict[str, Any]], _T],
+    ) -> _T:
+        """Bounded recovery for malformed structured artifacts.
+
+        Transport errors are retried by ``_retry_json`` according to the
+        long-lived provider policy. A malformed payload is not a transport
+        error, so reissue it only a small, explicit number of times with a
+        schema correction. Deterministic offset recovery is attempted before
+        this fallback.
+        """
+        retry_messages = list(messages)
+        for protocol_attempt in range(self.max_protocol_retries):
+            payload = self._retry_json(retry_messages, schema, name)
+            try:
+                return validator(payload)
+            except (StructuredOutputParseError, StructuredOutputSchemaError):
+                if protocol_attempt + 1 >= self.max_protocol_retries:
+                    raise
+                retry_messages = [
+                    *messages,
+                    {
+                        "role": "system",
+                        "content": (
+                            "The preceding structured answer was rejected. Return one JSON object matching the "
+                            "given schema exactly. For every claim, copy text verbatim from the answer and use "
+                            "zero-based, end-exclusive Python offsets for that exact substring."
+                        ),
+                    },
+                ]
+        raise AssertionError("unreachable structured-output retry state")
 
 
 class AtomicClaimExtractor(_CachedComponent):
@@ -361,8 +448,12 @@ class AtomicClaimExtractor(_CachedComponent):
         ]
         start = time.perf_counter()
         try:
-            payload = self._retry_json(messages, CLAIM_SCHEMA, "atomic_claims")
-            claims = _validate_claims(payload, response, "atomic")
+            claims = self._retry_validated_json(
+                messages,
+                CLAIM_SCHEMA,
+                "atomic_claims",
+                lambda payload: _validate_claims(payload, response, "atomic"),
+            )
         except Exception as exc:  # noqa: BLE001
             raise CriticalProtocolError("atomic claim extraction failed") from exc
         self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
@@ -414,8 +505,12 @@ class FullContextReviewer(_CachedComponent):
         ]
         start = time.perf_counter()
         try:
-            payload = self._retry_json(messages, CLAIM_SCHEMA, "coverage_candidates")
-            claims = _validate_claims(payload, response, "global_review")
+            claims = self._retry_validated_json(
+                messages,
+                CLAIM_SCHEMA,
+                "coverage_candidates",
+                lambda payload: _validate_claims(payload, response, "global_review"),
+            )
         except Exception as exc:  # noqa: BLE001
             raise CriticalProtocolError("full-context coverage review failed") from exc
         self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
@@ -514,9 +609,12 @@ class CriticalClaimVerifier(_CachedComponent):
         ]
         start = time.perf_counter()
         try:
-            payload = self._retry_json(messages, VERDICT_SCHEMA, "critical_claim_verdict")
-            validate_json_document(payload, VERDICT_SCHEMA)
-            verdict = str(payload["verdict"])
+            verdict = self._retry_validated_json(
+                messages,
+                VERDICT_SCHEMA,
+                "critical_claim_verdict",
+                _validated_critical_verdict,
+            )
         except Exception as exc:  # noqa: BLE001
             raise CriticalProtocolError(f"critical claim verification failed for {claim!r}") from exc
         self._save(key, {"verdict": verdict})

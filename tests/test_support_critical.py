@@ -112,19 +112,30 @@ def test_strict_serialization_does_not_grow_a_critical_field():
     assert ScoreResult.from_dict(ScoreResult(EG=1.0).to_dict()).critical is None
 
 
-def test_claim_offsets_must_be_exact_and_sources_merge():
+def test_claim_offsets_are_repaired_only_for_a_unique_verbatim_fragment_and_sources_merge():
     response = "Paris has 2 museums."
     claims = _validate_claims(
-        {"claims": [{"text": "Paris has 2 museums", "start": 0, "end": 19}]},
+        # The model's end index is deliberately wrong. The claim text is a
+        # unique answer substring, so local code can recover the exact span
+        # without altering the factual fragment.
+        {"claims": [{"text": "Paris has 2 museums", "start": 0, "end": 18}]},
         response,
         "atomic",
     )
-    assert claims[0].sources == ("atomic",)
+    assert claims[0].sources == ("atomic",) and claims[0].end == 19
     merged = merge_claims(claims, [AtomicClaim(claims[0].text, 0, 19, ("global_review",))])
     assert merged[0].sources == ("atomic", "global_review")
     with pytest.raises(Exception):
         _validate_claims(
             {"claims": [{"text": "Paris has 3 museums", "start": 0, "end": 19}]}, response, "atomic"
+        )
+
+
+def test_repaired_offset_never_guesses_between_repeated_answer_substrings():
+    response = "Paris is old. Paris is old."
+    with pytest.raises(StructuredOutputParseError, match="one exact response substring"):
+        _validate_claims(
+            {"claims": [{"text": "Paris is old", "start": 1, "end": 13}]}, response, "atomic"
         )
 
 
@@ -259,3 +270,23 @@ def test_critical_verdict_cache_reads_previous_namespace_without_writing_it(tmp_
     result = replay.verify_claim(claim, claim, None)
     assert result.verdict == "entailed" and result.cache_hit is True
     assert not fresh_cache.exists()
+
+
+def test_malformed_claim_payload_gets_bounded_schema_retry_after_offset_recovery(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.support_critical.claim_extractor.max_protocol_retries = 2
+
+    class MalformedThenValid(AtomicClaimExtractor):
+        calls = 0
+
+        def _retry_json(self, messages, schema, name):  # noqa: ARG002
+            self.calls += 1
+            if self.calls == 1:
+                return {"claims": [{"text": "a claim absent from the answer", "start": 0, "end": 1}]}
+            return {"claims": [{"text": "Paris has two museums", "start": 2, "end": 3}]}
+
+    extractor = MalformedThenValid(cfg)
+    extracted = extractor.extract("Paris has two museums.")
+    assert extracted[0].start == 0 and extracted[0].end == 21
+    assert extracted[0].text == "Paris has two museums"
+    assert extractor.calls == 2

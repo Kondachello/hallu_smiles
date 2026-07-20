@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never, wait_exponential
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .config import resolve_api_key
@@ -172,6 +172,8 @@ class RelationVerifier:
         if self.max_tokens <= 0:
             raise ValueError("llm.max_tokens must be positive when configured")
         self.max_retries = int(cfg.llm.max_retries)
+        if self.max_retries < 0:
+            raise ValueError("llm.max_retries must be non-negative")
         self.backoff_base = float(cfg.llm.retry_backoff_base_s)
         self.backoff_max = float(getattr(cfg.llm, "retry_backoff_max_s", 60))
         if self.backoff_max < self.backoff_base:
@@ -218,7 +220,9 @@ class RelationVerifier:
         try:
             verdict = None
             for attempt in Retrying(
-                stop=stop_after_attempt(self.max_retries),
+                # ``0`` delegates the final deadline to the enclosing Job and
+                # keeps polling Vertex after transient 429/5xx responses.
+                stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
                 wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
                 retry=retry_if_exception(is_retryable_llm_exception),
                 reraise=True,

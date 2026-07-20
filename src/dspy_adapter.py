@@ -865,7 +865,30 @@ def is_retryable_llm_exception(exc: BaseException) -> bool:
         "ServiceUnavailableError",
         "Timeout",
     }
-    return any(type(item).__name__ in transient_names for item in chain)
+    if any(type(item).__name__ in transient_names for item in chain):
+        return True
+
+    # Some LiteLLM/OpenAI compatibility layers discard ``response`` and
+    # ``status_code`` while wrapping an otherwise ordinary Exception.  Do not
+    # abandon a long, cache-backed Job merely because that wrapper lost its
+    # typed HTTP metadata: recognise only explicit transient HTTP/capacity
+    # signatures, after deterministic structured-output failures were already
+    # excluded above.
+    transient_message = " ".join(str(item) for item in chain).lower()
+    if re.search(r"(?<!\d)(?:408|409|425|429|5\d\d)(?!\d)", transient_message):
+        return True
+    return any(
+        phrase in transient_message
+        for phrase in (
+            "rate limit",
+            "rate_limit",
+            "capacity is temporarily exhausted",
+            "service unavailable",
+            "connection reset",
+            "connection aborted",
+            "temporarily unavailable",
+        )
+    )
 
 
 def vllm_guided_json_adapter() -> Any:

@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never, wait_exponential
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .dspy_adapter import (
@@ -250,7 +250,9 @@ class KGExtractor:
         self.debug_dump_after_s = float(raw_dump_after) if raw_dump_after else None
         if self.debug_dump_after_s is not None and self.debug_dump_after_s <= 0:
             raise ValueError("DATASPHERE_KGGEN_DUMP_AFTER_SECONDS must be positive when set")
-        self.max_retries = cfg.llm.max_retries
+        self.max_retries = int(cfg.llm.max_retries)
+        if self.max_retries < 0:
+            raise ValueError("llm.max_retries must be non-negative")
         self.backoff_base = cfg.llm.retry_backoff_base_s
         self.backoff_max = float(
             cfg.llm.get("retry_backoff_max_s", 60)
@@ -814,7 +816,10 @@ class KGExtractor:
         start = time.perf_counter()
         graph: Graph | None = None
         for attempt in Retrying(
-            stop=stop_after_attempt(self.max_retries),
+            # ``0`` means retry transient provider failures until the outer
+            # DataSphere wall-time limit.  Completed graph calls are flushed
+            # atomically, so an interrupted Job resumes from cache.
+            stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
             # Vertex's public on-demand pool can return 429 for several
             # minutes.  Cap the exponential wait so a large retry budget
             # keeps polling capacity rather than sleeping past the enclosing

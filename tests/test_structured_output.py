@@ -515,8 +515,14 @@ def test_retry_classifier_retries_only_transient_failures():
     class ArbitraryServerFailure(Exception):
         status_code = 507
 
+    class MetadataStrippedRateLimit(Exception):
+        pass
+
     assert is_retryable_llm_exception(TimeoutError()) is True
     assert is_retryable_llm_exception(ServiceUnavailable()) is True
     assert is_retryable_llm_exception(ArbitraryServerFailure()) is True
+    assert is_retryable_llm_exception(
+        MetadataStrippedRateLimit("gateway error 429: Vertex capacity is temporarily exhausted")
+    ) is True
     assert is_retryable_llm_exception(BadRequest()) is False
     assert is_retryable_llm_exception(StructuredOutputSchemaError("bad root")) is False

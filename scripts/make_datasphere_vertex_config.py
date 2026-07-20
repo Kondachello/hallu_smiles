@@ -109,10 +109,9 @@ def main() -> None:
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--concurrency", type=int, default=1)
     # Public/on-demand Vertex capacity can briefly return HTTP 429 even for a
-    # single in-flight request.  The bounded CPU probe must distinguish that
-    # transient provider condition from malformed structured output, while
-    # keeping its total wait finite.  Seven attempts wait for at most 315
-    # seconds (5 + 10 + 20 + 40 + 80 + 160) before the final attempt.
+    # single in-flight request.  ``0`` is deliberate: retry transient
+    # provider failures until the enclosing DataSphere Job wall-time limit.
+    # Positive values retain a finite local attempt budget for short probes.
     parser.add_argument("--max-retries", type=int, default=7)
     parser.add_argument("--retry-backoff-base-s", type=float, default=5.0)
     parser.add_argument("--retry-backoff-max-s", type=float, default=60.0)
@@ -125,8 +124,8 @@ def main() -> None:
         raise ValueError("--max-tokens must be positive")
     if args.concurrency <= 0:
         raise ValueError("--concurrency must be positive")
-    if args.max_retries <= 0:
-        raise ValueError("--max-retries must be positive")
+    if args.max_retries < 0:
+        raise ValueError("--max-retries must be non-negative (0 retries until Job timeout)")
     if args.retry_backoff_base_s <= 0:
         raise ValueError("--retry-backoff-base-s must be positive")
     if args.retry_backoff_max_s <= 0:
