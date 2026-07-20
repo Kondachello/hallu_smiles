@@ -345,39 +345,61 @@ class KGExtractor:
     def _cache_path(self, key: str) -> Path:
         return self.cache_dir / f"{key}.json"
 
+    def _cache_candidates(self, key: str):
+        """Yield the writable cache first, then immutable read-through roots."""
+        yield "primary", self._cache_path(key)
+        for index, root in enumerate(self.cache_read_dirs, start=1):
+            yield f"read-through-{index}", root / f"{key}.json"
+
+    @staticmethod
+    def _read_cache_file(path: Path, key: str) -> Graph | None:
+        """Return a structurally valid cache entry without any network access."""
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(envelope, dict) or set(envelope) != {
+                "protocol", "cache_key", "graph", "graph_sha256"
+            }:
+                return None
+            if envelope["protocol"] != "hallu-kg-cache-v2" or envelope["cache_key"] != key:
+                return None
+            graph_payload = envelope["graph"]
+            if not isinstance(graph_payload, dict) or set(graph_payload) != {
+                "entities", "relations"
+            }:
+                return None
+            canonical = json.dumps(
+                graph_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != envelope["graph_sha256"]:
+                return None
+            graph = Graph.from_dict(graph_payload)
+            # Round-tripping catches malformed/dropped relation rows.
+            return graph if graph.to_dict() == graph_payload else None
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    def cache_location(self, key: str) -> tuple[str, Path] | None:
+        """Locate a valid entry across primary/read-through roots.
+
+        This is intentionally validation-aware: a file merely existing is not
+        evidence that a cache-only experiment can reproduce it.  A corrupt
+        primary entry must also not hide a valid immutable historical entry.
+        """
+        for origin, path in self._cache_candidates(key):
+            if self._read_cache_file(path, key) is not None:
+                return origin, path
+        return None
+
     def _load_cache(self, key: str) -> Graph | None:
         # The primary directory is writable for this run.  Read-through roots
         # are historical, content-addressed graph namespaces: they are never
         # modified and an envelope/key check still rejects incompatible graphs.
-        for root in [self.cache_dir, *self.cache_read_dirs]:
-            p = root / f"{key}.json"
-            if not p.exists():
-                continue
-            try:
-                envelope = json.loads(p.read_text(encoding="utf-8"))
-                if not isinstance(envelope, dict) or set(envelope) != {
-                    "protocol", "cache_key", "graph", "graph_sha256"
-                }:
-                    return None
-                if envelope["protocol"] != "hallu-kg-cache-v2" or envelope["cache_key"] != key:
-                    return None
-                graph_payload = envelope["graph"]
-                if not isinstance(graph_payload, dict) or set(graph_payload) != {
-                    "entities", "relations"
-                }:
-                    return None
-                canonical = json.dumps(
-                    graph_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-                )
-                if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != envelope["graph_sha256"]:
-                    return None
-                graph = Graph.from_dict(graph_payload)
-                # Round-tripping catches malformed/dropped relation rows.
-                if graph.to_dict() != graph_payload:
-                    return None
+        # Invalid files are cache misses at that root, not a reason to skip a
+        # valid later read-through root.
+        for _, path in self._cache_candidates(key):
+            graph = self._read_cache_file(path, key)
+            if graph is not None:
                 return graph
-            except Exception:
-                continue
         return None
 
     def _save_cache(self, key: str, graph: Graph) -> None:

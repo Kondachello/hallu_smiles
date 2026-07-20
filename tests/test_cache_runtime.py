@@ -253,6 +253,57 @@ def test_extraction_summary_proves_exact_reference_answer_pairs_and_cache(tmp_pa
     assert payload["completed_records"] == payload["expected_records"]
     assert len(payload["expected_cache_keys"]) == 6
     assert all(record["cache_file_exists"] for record in payload["cache_records"])
+    assert {record["cache_origin"] for record in payload["cache_records"]} == {"primary"}
+
+
+def test_extraction_summary_accepts_valid_read_through_graph_cache(tmp_path):
+    from run import write_extraction_summary
+    from src.extract import Graph
+
+    historical = tmp_path / "historical-kg"
+    writer_cfg = _cfg(tmp_path)
+    writer_cfg.cache_dir = str(historical)
+    writer = KGExtractor(writer_cfg, backend=FakeKGGen())
+    replay_cfg = _cfg(tmp_path)
+    replay_cfg.cache_read_dirs = [str(historical)]
+    replay = KGExtractor(replay_cfg, backend=FakeKGGen(), cache_only=True)
+    instance = Instance(
+        response_id="r1", source_id="s1", task="QA", gen_model="fixture", split="test",
+        context="Context one", query="Question one", response="Answer one", y=0,
+    )
+    graph = Graph({"entity"}, {("entity", "rel", "entity")})
+    for text in (instance.context, instance.query, instance.response):
+        writer._save_cache(writer._cache_key(text), graph)
+
+    path = write_extraction_summary(
+        [instance], {"s1": (graph, graph)}, {"r1": graph}, [], replay, tmp_path / "result"
+    )
+    payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "ready"
+    assert not list((tmp_path / "kg").glob("*.json"))
+    assert {record["cache_origin"] for record in payload["cache_records"]} == {"read-through-1"}
+
+
+def test_corrupt_primary_cache_does_not_hide_valid_read_through_graph(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.extraction.explicit_clustering = False
+    historical = tmp_path / "historical-kg"
+    writer_cfg = copy.deepcopy(cfg)
+    writer_cfg.cache_dir = str(historical)
+    writer = KGExtractor(writer_cfg, backend=FakeKGGen())
+    expected = writer.extract("Alice sees Bob")
+    key = writer._cache_key("Alice sees Bob")
+
+    replay_cfg = copy.deepcopy(cfg)
+    replay_cfg.cache_read_dirs = [str(historical)]
+    primary = Path(replay_cfg.cache_dir)
+    primary.mkdir(parents=True)
+    (primary / f"{key}.json").write_text("{}\n", encoding="utf-8")
+    replay = KGExtractor(replay_cfg, backend=FakeKGGen(), cache_only=True)
+
+    assert replay.extract("Alice sees Bob") == expected
+    assert replay.cache_location(key) == ("read-through-1", historical / f"{key}.json")
 
 
 def test_cache_only_zero_live_call_invariant_rejects_any_recorded_call():

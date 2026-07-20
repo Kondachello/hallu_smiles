@@ -225,13 +225,15 @@ def write_extraction_summary(
         if not normalized:
             return None
         key = extractor._cache_key(normalized)
-        path = extractor._cache_path(key)
+        location = extractor.cache_location(key)
+        origin, path = location if location is not None else ("missing", extractor._cache_path(key))
         record = {
             "cache_key": key,
             "kind": kind,
             "text_sha256": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
             "cache_file": path.name,
-            "cache_file_exists": path.is_file(),
+            "cache_file_exists": location is not None,
+            "cache_origin": origin,
         }
         cache_records.setdefault(key, record)
         return record
