@@ -18,6 +18,7 @@ from .scoring import (
     decision_at_threshold,
     p_unsupported,
 )
+from .cache import CacheOnlyMissError
 from .parser import STATUS_MALFORMED, parse_triples
 from .types import (
     STATUS_EMPTY_GRAPH,
@@ -57,6 +58,8 @@ class GraphEvalDetector:
             extraction = self.extractor.extract(item.response)
             usage.wall_time_ms_extract = (time.perf_counter() - start) * 1000.0
             usage.extractor_calls += int(extraction.usage.get("extractor_calls", 1))
+        except CacheOnlyMissError:
+            raise  # replay-integrity failure, not a per-item state
         except Exception as exc:  # noqa: BLE001 - transport/model failure is a state
             return self._failed(item, {"stage": "extraction", "error": repr(exc)}, usage)
 
@@ -79,7 +82,8 @@ class GraphEvalDetector:
             start = time.perf_counter()
             p_consistent = self.nli.score_pairs(pairs)
             usage.wall_time_ms_verify = (time.perf_counter() - start) * 1000.0
-            usage.nli_calls += len(pairs)
+        except CacheOnlyMissError:
+            raise  # replay-integrity failure, not a per-item state
         except Exception as exc:  # noqa: BLE001
             return self._failed(item, {"stage": "nli", "error": repr(exc)}, usage)
 
@@ -87,6 +91,15 @@ class GraphEvalDetector:
             return self._failed(
                 item, {"stage": "nli", "error": "score count != triple count"}, usage
             )
+
+        # Account model calls vs cache hits when the NLI layer is cache-backed;
+        # this is what lets a warm replay prove 0 model calls.
+        stats = getattr(self.nli, "last_stats", None)
+        if isinstance(stats, dict):
+            usage.nli_calls += int(stats.get("misses", len(pairs)))
+            usage.nli_cache_hits += int(stats.get("hits", 0))
+        else:
+            usage.nli_calls += len(pairs)
 
         per_triple = [p_unsupported(p) for p in p_consistent]
         raw_score = aggregate(per_triple, self.aggregation)

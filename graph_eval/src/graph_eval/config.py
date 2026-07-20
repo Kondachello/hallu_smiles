@@ -9,6 +9,9 @@ from .scoring import (
     VALID_AGGREGATIONS,
 )
 
+# Values that are not an exact, reproducible Hugging Face commit.
+_UNPINNED_REVISIONS = frozenset({"main", "master", "REQUIRED_EXACT_COMMIT_SHA"})
+
 
 @dataclass(frozen=True)
 class ExtractorConfig:
@@ -53,6 +56,17 @@ class GraphEvalConfig:
             raise ValueError(f"unknown nli.aggregation: {self.nli.aggregation!r}")
         if self.extractor.output_mode not in ("paper_prompt", "structured_json"):
             raise ValueError(f"unknown extractor.output_mode: {self.extractor.output_mode!r}")
+        if self.nli.backend not in ("fake", "hhem"):
+            raise ValueError(f"unknown nli.backend: {self.nli.backend!r}")
+        if self.extractor.backend not in ("fake", "gateway", "vllm"):
+            raise ValueError(f"unknown extractor.backend: {self.extractor.backend!r}")
+        # A real HHEM run must pin an exact HF commit, never a floating tag.
+        if self.nli.backend == "hhem" and (
+            not self.nli.revision or self.nli.revision in _UNPINNED_REVISIONS
+        ):
+            raise ValueError(
+                "nli.revision must be an exact Hugging Face commit SHA for backend='hhem'"
+            )
 
 
 def _select(cls, values: dict) -> dict:

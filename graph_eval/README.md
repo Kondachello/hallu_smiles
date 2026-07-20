@@ -26,12 +26,16 @@ hallucination). All research metrics/thresholds are the experiment framework's j
 
 ## Status
 - **Stage 1 — offline core: done.** Types/contract, parser, verbalizer, scoring,
-  atomic cache, fake extractor + fake NLI, `GraphEvalDetector`. 25 unit tests, fully
-  offline (no torch/openai/network).
-- Stage 2 — local HHEM NLI adapter (pinned revision): pending.
+  atomic cache, fake extractor + fake NLI, `GraphEvalDetector`.
+- **Stage 2 — HHEM NLI adapter + NLI cache: done.** `nli/hhem.py` (lazy torch,
+  pinned-revision guard, batched, `predict` -> `p_consistent`), `nli/cached.py`
+  (per-pair cache, warm replay = 0 model calls), `factory.build_nli`. Config rejects
+  an unpinned HHEM revision.
 - Stage 3 — Cloud Run gateway extractor (+ `structured_json` variant, retries, cache): pending.
 - Stage 4 — standalone CLI (JSONL in/out): pending.
 - Stage 5 — `HalluGraphDetectorAdapter` + parity check: pending.
+
+38 offline unit tests (no torch/openai/network; real HHEM inference runs in DataSphere).
 
 ## Run the tests (offline)
 ```bash
