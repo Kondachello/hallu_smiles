@@ -53,7 +53,9 @@ secret; it never calls Gemini Developer API and never stores Google credentials.
 The Job fetches a credential-protected gateway manifest before generating its
 job-local config, so endpoint and gateway revision participate in cache keys.
 See [the CPU 3-QA gateway runbook](docs/vertex-gateway-datasphere.md) and the
-[team Vertex/DataSphere runbook](docs/vertex-datasphere-team-runbook.md).
+[team Vertex/DataSphere runbook](docs/vertex-datasphere-team-runbook.md). For
+a task-agnostic hand-off to coding agents, see the
+[Cloud Run + DataSphere agent tutorial](docs/cloud-run-datasphere-agent-tutorial.md).
 
 **OpenRouter (alternative local profile)**
 ```bash
