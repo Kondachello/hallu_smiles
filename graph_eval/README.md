@@ -31,11 +31,16 @@ hallucination). All research metrics/thresholds are the experiment framework's j
   pinned-revision guard, batched, `predict` -> `p_consistent`), `nli/cached.py`
   (per-pair cache, warm replay = 0 model calls), `factory.build_nli`. Config rejects
   an unpinned HHEM revision.
-- Stage 3 — Cloud Run gateway extractor (+ `structured_json` variant, retries, cache): pending.
+- **Stage 3 — gateway extractor: done.** `extraction/gateway.py` (lazy openai,
+  injectable client, bounded repair on truncation/malformed), versioned Appendix-A
+  `prompt.py`, `retry.py` (retry 429/5xx/timeout, fail-fast 4xx), `extraction/cached.py`
+  (key = prompt/schema/model/manifest/decoding). `paper_prompt` + `structured_json`;
+  `factory.build_extractor`.
 - Stage 4 — standalone CLI (JSONL in/out): pending.
 - Stage 5 — `HalluGraphDetectorAdapter` + parity check: pending.
 
-38 offline unit tests (no torch/openai/network; real HHEM inference runs in DataSphere).
+56 offline unit tests (no torch/openai/network; real HHEM/gateway calls run in DataSphere).
+An end-to-end cache-only replay is proven to make zero model/gateway calls.
 
 ## Run the tests (offline)
 ```bash

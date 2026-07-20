@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from .cache import JsonCache
 from .config import GraphEvalConfig
+from .extraction.cached import CachedExtractor, extraction_identity
+from .extraction.fake import FakeExtractor
 from .nli.cached import CachedNLI
 from .nli.fake import FakeNLI
 from .verbalize import VERBALIZER_VERSION
@@ -37,3 +39,27 @@ def build_nli(cfg: GraphEvalConfig, *, cache: bool = True):
         return inner
     store = JsonCache(cfg.cache_dir, cfg.nli.cache_namespace, cache_only=cfg.cache_only)
     return CachedNLI(inner, store, identity=identity)
+
+
+def build_extractor(
+    cfg: GraphEvalConfig, *, client=None, manifest_sha256: str | None = None, cache: bool = True
+):
+    """Return an Extractor for ``cfg.extractor.backend`` (fake | gateway), cache-wrapped."""
+    backend = cfg.extractor.backend
+    if backend == "fake":
+        inner = FakeExtractor()
+        identity = {**extraction_identity(cfg.extractor, manifest_sha256), "model": "fake"}
+    elif backend == "gateway":
+        from .extraction.gateway import GatewayExtractor  # lazy: no openai at load
+
+        inner = GatewayExtractor(cfg.extractor, client=client, manifest_sha256=manifest_sha256)
+        identity = extraction_identity(cfg.extractor, manifest_sha256)
+    elif backend == "vllm":  # pragma: no cover - plan section 7.4, not yet implemented
+        raise NotImplementedError("local vLLM extractor is a separate gated config (plan 7.4)")
+    else:  # pragma: no cover - guarded by config.validate()
+        raise ValueError(f"unknown extractor.backend: {backend!r}")
+
+    if not cache:
+        return inner
+    store = JsonCache(cfg.cache_dir, cfg.extractor.cache_namespace, cache_only=cfg.cache_only)
+    return CachedExtractor(inner, store, identity=identity)

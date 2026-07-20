@@ -22,6 +22,7 @@ class ExtractorConfig:
     temperature: float = 0.0
     max_tokens: int = 2048
     max_retries: int = 5
+    max_repairs: int = 2
     api_base_env: str = "HALLU_GATEWAY_URL"
     api_key_env: str = "HALLU_GATEWAY_API_KEY"
     cache_namespace: str = "grapheval/extraction/v1"

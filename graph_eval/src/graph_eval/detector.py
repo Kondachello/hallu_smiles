@@ -58,6 +58,8 @@ class GraphEvalDetector:
             extraction = self.extractor.extract(item.response)
             usage.wall_time_ms_extract = (time.perf_counter() - start) * 1000.0
             usage.extractor_calls += int(extraction.usage.get("extractor_calls", 1))
+            if extraction.usage.get("extraction_cache_hit"):
+                usage.extraction_cache_hits += 1
         except CacheOnlyMissError:
             raise  # replay-integrity failure, not a per-item state
         except Exception as exc:  # noqa: BLE001 - transport/model failure is a state

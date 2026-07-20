@@ -25,15 +25,17 @@ is the plan's own Stage-1 criterion ("works without network, transformers, DataS
 Pydantic can be layered on later behind the `yaml`/`gateway` extras if richer schema
 validation is wanted.
 
-## D3 — Parser canonicalizes to JSON; paper's raw list-of-triples handled in Stage 3
-**Plan (§6.2, §7.3):** `paper_prompt` returns the paper's raw list-of-triples format.
-**Done so far:** the Stage-1 parser accepts a JSON array of `[s,r,o]` (or an object
-with a `triples` list). The exact Appendix-A textual format parser lands with the
-gateway extractor in Stage 3; raw output is always preserved (`ParseOutcome.raw_output`)
-and malformed output is reported, never guessed.
-**Why:** Stage 1 is backend-agnostic core; the paper-format specifics belong with the
-real extractor. Not a semantic deviation — the contract (ordered triples, keep raw,
-flag invalid/duplicate) is already met.
+## D3 — Extractor emits JSON triples (not the paper's freeform text list) — settled in Stage 3
+**Plan (§6.2, §7.3):** `paper_prompt` returns the paper's raw list-of-triples text format.
+**Done (Stage 3):** the Appendix-A prompt instructs the model to return a **JSON array**
+of `[s,r,o]` string triples, and `structured_json` mode enforces it via the gateway's
+`json_schema`. The parser accepts that array (or a `{"triples": [...]}` object), always
+preserves raw output, reports malformed output, and flags invalid/duplicate triples.
+**Why:** JSON is a stricter, machine-checkable contract than free text and is exactly what
+the gateway's structured mode guarantees; it removes a class of brittle text parsing while
+keeping Appendix-A *semantics* (entity/coref/relation steps, exactly three non-empty
+strings, full coverage). Raw output is retained, so a paper-format parser could be added
+later without losing provenance. Not a deviation from the algorithm, only its wire format.
 
 ## Followed exactly (not deviations, noted to avoid confusion)
 - `H(response) = max_i (1 - p_consistent_i)`; paper threshold `0.5` strict `>` (plan §6.3).
