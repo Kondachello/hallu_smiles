@@ -20,5 +20,8 @@ hhem = ["transformers>=4.45,<5", "torch>=2.2"]
 yaml = ["PyYAML>=6"]
 dev = ["pytest>=7"]
 
+[project.scripts]
+graph-eval = "graph_eval.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

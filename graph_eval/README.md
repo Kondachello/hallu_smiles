@@ -36,10 +36,11 @@ hallucination). All research metrics/thresholds are the experiment framework's j
   `prompt.py`, `retry.py` (retry 429/5xx/timeout, fail-fast 4xx), `extraction/cached.py`
   (key = prompt/schema/model/manifest/decoding). `paper_prompt` + `structured_json`;
   `factory.build_extractor`.
-- Stage 4 — standalone CLI (JSONL in/out): pending.
+- **Stage 4 — standalone CLI: done.** `python -m graph_eval.cli predict` (no-gold JSONL
+  in, predictions JSONL out), resume-safe, runs fully offline with fake backends.
 - Stage 5 — `HalluGraphDetectorAdapter` + parity check: pending.
 
-56 offline unit tests (no torch/openai/network; real HHEM/gateway calls run in DataSphere).
+59 offline unit tests (no torch/openai/network; real HHEM/gateway calls run in DataSphere).
 An end-to-end cache-only replay is proven to make zero model/gateway calls.
 
 ## Run the tests (offline)
