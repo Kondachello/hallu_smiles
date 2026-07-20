@@ -1,0 +1,11 @@
+# Core framework intentionally stays stdlib-first for offline development and mock tests.
+# Install these only for the later analysis/large-artifact stages described in docs.
+PyYAML>=6
+jsonschema>=4.23,<5
+numpy
+pandas
+scikit-learn
+scipy
+pyarrow
+zstandard
+psutil

@@ -13,6 +13,10 @@ results/*
 
 # RAGTruth data (download with download_data.py)
 data/*.jsonl
+data/ragtruth/
+data/subsets/
+runs/
+examples/mock_output/
 
 # synthetic smoke fixtures
 tests/fixture_data/
