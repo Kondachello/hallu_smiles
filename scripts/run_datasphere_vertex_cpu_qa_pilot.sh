@@ -31,6 +31,8 @@ REPLAY_SUPPORT="$RUN_ROOT/cache-replay/support"
 REPLAY_CRITICAL="$RUN_ROOT/cache-replay/support-critical"
 METADATA="$RUN_ROOT/run_metadata.json"
 USAGE_COUNTS="$RUN_ROOT/usage-counts.json"
+HISTORICAL_LINEAGE="$RUN_ROOT/historical-baseline-lineage.json"
+KG_CACHE_PREFLIGHT="$RUN_ROOT/historical-kg-cache-preflight.json"
 CHECKPOINT_ROOT=""
 BASELINE_CACHE_ROOT=""
 CRITICAL_CACHE_ROOT=""
@@ -112,26 +114,52 @@ test "$GATEWAY_MANIFEST_SHA256" = "$EXPECTED_GATEWAY_MANIFEST_SHA256" || {
   exit 2
 }
 CHECKPOINT_BASE="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa/qa-${QA_SAMPLE_SIZE}-test-${QA_TEST_SOURCES}-cv-${QA_CV_FOLDS}"
-# Historical 100-QA caches predate this source commit.  They are read-only
-# input artifacts: cache keys still validate model, gateway, protocol and text.
+# Historical 100-QA caches predate this source commit. They are read-only input
+# artifacts. A runtime-image rebuild must not accidentally turn an otherwise
+# identical model/gateway/extraction cache into a miss, so resolve an explicit
+# recorded lineage and prove every C/Q/A key before the main pipeline starts.
 test -d "$CHECKPOINT_BASE" || {
   echo "Historical QA checkpoint base is absent: $CHECKPOINT_BASE" >&2
   exit 2
 }
-BASELINE_CACHE_ROOT="$(find "$CHECKPOINT_BASE" -mindepth 1 -maxdepth 1 -type d -name "*-${GATEWAY_MANIFEST_SHA256}" -print 2>/dev/null | sort | tail -n 1)"
-test -n "$BASELINE_CACHE_ROOT" || {
-  echo "No historical 100-QA checkpoint matches this gateway manifest." >&2
+mapfile -t BASELINE_CANDIDATES < <(
+  find "$CHECKPOINT_BASE" -mindepth 1 -maxdepth 1 -type d -name "*-${GATEWAY_MANIFEST_SHA256}" -print 2>/dev/null | sort
+)
+VALID_BASELINE_CANDIDATES=()
+for candidate in "${BASELINE_CANDIDATES[@]}"; do
+  test -d "$candidate/kg" && test -d "$candidate/verdicts" && test -f "$candidate/checkpoint-identity.json" || continue
+  if "$CLIENT_PYTHON" "$ROOT/scripts/resolve_datasphere_historical_cache_lineage.py" \
+    --lineages "$ROOT/datasphere/historical_kg_cache_lineages.json" \
+    --checkpoint-identity "$candidate/checkpoint-identity.json" \
+    --runtime-manifest "$RUNTIME_MANIFEST" --gateway-manifest-sha256 "$GATEWAY_MANIFEST_SHA256" \
+    --qa-total "$QA_SAMPLE_SIZE" --qa-train "$QA_TRAIN_SOURCES" --qa-test "$QA_TEST_SOURCES" --cv-folds "$QA_CV_FOLDS" \
+    --output "$RUN_ROOT/.candidate-historical-lineage.json" >/dev/null 2>&1; then
+    VALID_BASELINE_CANDIDATES+=("$candidate")
+  fi
+done
+if (( ${#VALID_BASELINE_CANDIDATES[@]} != 1 )); then
+  echo "Expected exactly one compatible historical QA checkpoint; found ${#VALID_BASELINE_CANDIDATES[@]}." >&2
+  printf 'candidates checked: %s\\n' "${BASELINE_CANDIDATES[*]:-none}" >&2
   exit 2
-}
-test -d "$BASELINE_CACHE_ROOT/kg" && test -d "$BASELINE_CACHE_ROOT/verdicts" || {
-  echo "Historical checkpoint is missing kg/ or verdicts/." >&2
-  exit 2
-}
+fi
+BASELINE_CACHE_ROOT="${VALID_BASELINE_CANDIDATES[0]}"
+"$CLIENT_PYTHON" "$ROOT/scripts/resolve_datasphere_historical_cache_lineage.py" \
+  --lineages "$ROOT/datasphere/historical_kg_cache_lineages.json" \
+  --checkpoint-identity "$BASELINE_CACHE_ROOT/checkpoint-identity.json" \
+  --runtime-manifest "$RUNTIME_MANIFEST" --gateway-manifest-sha256 "$GATEWAY_MANIFEST_SHA256" \
+  --qa-total "$QA_SAMPLE_SIZE" --qa-train "$QA_TRAIN_SOURCES" --qa-test "$QA_TEST_SOURCES" --cv-folds "$QA_CV_FOLDS" \
+  --output "$HISTORICAL_LINEAGE"
+HISTORICAL_LLM_RUNTIME_FINGERPRINT="$("$CLIENT_PYTHON" - "$HISTORICAL_LINEAGE" <<'PY'
+import json
+import sys
+print(json.load(open(sys.argv[1], encoding='utf-8'))['llm_runtime_fingerprint'])
+PY
+)"
 CRITICAL_CACHE_ROOT="$CHECKPOINT_BASE/support-critical/${EXPECTED_SOURCE_COMMIT}-${GATEWAY_MANIFEST_SHA256}"
 CHECKPOINT_ROOT="$CRITICAL_CACHE_ROOT"
 mkdir -p "$CRITICAL_CACHE_ROOT/kg" "$CRITICAL_CACHE_ROOT/critical_claims" \
   "$CRITICAL_CACHE_ROOT/critical_coverage" "$CRITICAL_CACHE_ROOT/critical_verdicts"
-"$CLIENT_PYTHON" - "$CRITICAL_CACHE_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" "$BASELINE_CACHE_ROOT" <<'PY'
+"$CLIENT_PYTHON" - "$CRITICAL_CACHE_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" "$BASELINE_CACHE_ROOT" "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -145,6 +173,7 @@ Path(sys.argv[1]).write_text(json.dumps({
         'alpha_cv_folds': int(sys.argv[7]),
     },
     'historical_baseline_cache_root': sys.argv[8],
+    'historical_llm_runtime_fingerprint': sys.argv[9],
     'protocol': 'hallu-vertex-qa-support-critical-checkpoint-v1',
 }, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
@@ -153,6 +182,7 @@ PY
   --base-config "$ROOT/config.yaml" --gateway-manifest "$GATEWAY_MANIFEST" \
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$BASELINE_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$BASELINE_CACHE_ROOT" \
+  --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
   --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/baseline-runtime-config-identity.json"
@@ -161,9 +191,18 @@ PY
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$CRITICAL_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$CRITICAL_CACHE_ROOT" \
   --kg-cache-read-dir "$BASELINE_CACHE_ROOT/kg" \
+  --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
   --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/critical-runtime-config-identity.json"
+
+# Generate the same deterministic manifest as the original 100-QA run, then
+# validate every graph lookup serially. A bad lineage now fails here—before
+# threaded extraction, metric tuning, or any new Vertex claim-verifier call.
+"$CLIENT_PYTHON" "$ROOT/scripts/preflight_datasphere_kg_cache.py" \
+  --config "$BASELINE_CONFIG" --data-dir "$DATA_DIR" \
+  --qa-sample-size "$QA_SAMPLE_SIZE" --qa-test-fraction "$QA_TEST_FRACTION" \
+  --manifest-output "$QA_MANIFEST" --report "$KG_CACHE_PREFLIGHT"
 
 require_complete_extraction() {
   "$CLIENT_PYTHON" - "$1/extraction_summary.json" "$2" <<'PY'
@@ -187,8 +226,7 @@ PY
 # The current manifest must resolve exclusively through the historical graph
 # cache.  A cache miss fails immediately rather than silently re-extracting.
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage extract \
-  --relation-mode strict --qa-sample --qa-sample-size "$QA_SAMPLE_SIZE" \
-  --qa-test-fraction "$QA_TEST_FRACTION" --qa-manifest-out "$QA_MANIFEST" \
+  --relation-mode strict --qa-manifest "$QA_MANIFEST" \
   --output-dir "$STRICT_OUT" --cache-only
 require_complete_extraction "$STRICT_OUT" "$QA_SAMPLE_SIZE"
 mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-extraction-cache-usage.jsonl"

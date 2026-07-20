@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -119,6 +120,38 @@ def test_cache_only_extractor_reads_historical_read_through_root(tmp_path):
     replay = KGExtractor(replay_cfg, backend=FakeKGGen(), cache_only=True)
     assert replay.extract("Alice sees Bob") == expected
     assert not list((tmp_path / "kg").glob("*.json"))
+
+
+def test_kg_cache_preflight_reports_every_missing_graph_before_extraction(tmp_path):
+    from src.cache_preflight import verify_kg_cache
+    from src.extract import Graph
+
+    cfg = _cfg(tmp_path)
+    cfg.extraction.explicit_clustering = False
+    Path(cfg.cache_dir).mkdir(parents=True)
+    writer = KGExtractor(cfg, cache_only=True)
+    rows = [
+        Instance(
+            response_id="r1", source_id="s1", task="QA", gen_model="fixture", split="train",
+            context="Context one", query="Question one", response="Answer one", y=0,
+        ),
+        Instance(
+            response_id="r2", source_id="s2", task="QA", gen_model="fixture", split="test",
+            context="Context two", query="Question two", response="Answer two", y=1,
+        ),
+    ]
+    graph = Graph({"entity"}, {("entity", "rel", "entity")})
+    for row in rows:
+        for text in (row.context, row.query, row.response):
+            writer._save_cache(writer._cache_key(text), graph)
+
+    assert verify_kg_cache(cfg, rows)["status"] == "ready"
+    missing_key = writer._cache_key(rows[1].response)
+    (Path(cfg.cache_dir) / f"{missing_key}.json").unlink()
+    report = verify_kg_cache(cfg, rows)
+    assert report["status"] == "missing"
+    assert report["missing_count"] == 1
+    assert report["missing"][0]["response_id"] == "r2"
 
 
 def test_fake_and_live_extractors_cannot_share_cache_entries(tmp_path):

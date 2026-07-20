@@ -77,6 +77,53 @@ def test_vertex_runtime_config_keeps_historical_kg_reads_separate_from_writes(tm
     assert cfg["cache_read_dirs"] == [str(historical)]
 
 
+def test_vertex_runtime_config_can_replay_a_recorded_historical_llm_identity(tmp_path):
+    manifest = tmp_path / "gateway.json"
+    runtime = tmp_path / "runtime.json"
+    output = tmp_path / "runtime.yaml"
+    manifest.write_text(json.dumps(_manifest()), encoding="utf-8")
+    runtime.write_text(json.dumps({"runtime_fingerprint": "new-cpu-image"}), encoding="utf-8")
+    legacy = "vertex-gateway:historical-cache-identity"
+    completed = subprocess.run([
+        sys.executable, str(SCRIPTS / "make_datasphere_vertex_config.py"),
+        "--base-config", str(ROOT / "config.yaml"), "--gateway-manifest", str(manifest),
+        "--gateway-url", "https://gateway.example.run.app", "--datasphere-runtime-manifest", str(runtime),
+        "--output", str(output), "--data-dir", "/data", "--work-dir", str(tmp_path / "work"),
+        "--llm-runtime-fingerprint-override", legacy,
+    ], check=True, text=True, capture_output=True)
+    cfg = yaml.safe_load(output.read_text(encoding="utf-8"))
+    identity = json.loads(completed.stdout)
+    assert cfg["llm"]["runtime_fingerprint"] == legacy
+    assert identity["historical_cache_identity"] is True
+    assert identity["computed_runtime_fingerprint"] != legacy
+
+
+def test_historical_cache_lineage_requires_exact_checkpoint_gateway_and_client_runtime(tmp_path):
+    registry = ROOT / "datasphere" / "historical_kg_cache_lineages.json"
+    lineage = json.loads(registry.read_text(encoding="utf-8"))["lineages"][0]
+    checkpoint = tmp_path / "checkpoint-identity.json"
+    runtime = tmp_path / "runtime.json"
+    output = tmp_path / "resolved.json"
+    checkpoint.write_text(json.dumps({
+        "protocol": lineage["checkpoint_protocol"],
+        "source_commit": lineage["source_commit"],
+        "gateway_manifest_sha256": lineage["gateway_manifest_sha256"],
+        "qa_sample": {"total": 100, "train": 80, "test": 20, "alpha_cv_folds": 5},
+    }), encoding="utf-8")
+    runtime.write_text(json.dumps({"client_runtime": lineage["client_runtime"]}), encoding="utf-8")
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "resolve_datasphere_historical_cache_lineage.py"),
+        "--lineages", str(registry), "--checkpoint-identity", str(checkpoint),
+        "--runtime-manifest", str(runtime),
+        "--gateway-manifest-sha256", lineage["gateway_manifest_sha256"],
+        "--qa-total", "100", "--qa-train", "80", "--qa-test", "20", "--cv-folds", "5",
+        "--output", str(output),
+    ], check=True)
+    assert json.loads(output.read_text(encoding="utf-8"))["llm_runtime_fingerprint"] == (
+        lineage["llm_runtime_fingerprint"]
+    )
+
+
 def test_vertex_config_rejects_model_or_region_drift(tmp_path):
     manifest = _manifest()
     manifest["vertex_location"] = "us-central1"
@@ -169,8 +216,10 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "timeout --signal=TERM --kill-after=60s 43200" in command
     subprocess.run([sys.executable, str(SCRIPTS / "validate_datasphere_job.py"), "--job", str(rendered), "--repo-root", str(ROOT)], check=True)
     runner = (SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh").read_text(encoding="utf-8")
-    assert "--qa-sample --qa-sample-size \"$QA_SAMPLE_SIZE\"" in runner
-    assert "--qa-manifest-out \"$QA_MANIFEST\"" in runner
+    assert "preflight_datasphere_kg_cache.py" in runner
+    assert "historical_kg_cache_lineages.json" in runner
+    assert "--llm-runtime-fingerprint-override \"$HISTORICAL_LLM_RUNTIME_FINGERPRINT\"" in runner
+    assert "--qa-manifest \"$QA_MANIFEST\"" in runner
     assert "require_complete_extraction \"$STRICT_OUT\" \"$QA_SAMPLE_SIZE\"" in runner
     assert "--relation-mode strict" in runner
     assert "--relation-mode support" in runner

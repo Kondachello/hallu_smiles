@@ -1,0 +1,20 @@
+{
+  "protocol": "hallu-historical-kg-cache-lineages-v1",
+  "lineages": [
+    {
+      "id": "vertex-100qa-20260719-r1",
+      "checkpoint_protocol": "hallu-vertex-qa-checkpoint-v2",
+      "source_commit": "cc1a2a12230fd9bc0461f471715aafea87c941a0",
+      "gateway_manifest_sha256": "9407591410b215ba41478290526acd3a4ea32f3dd70a63076c6394c95e37c845",
+      "llm_runtime_fingerprint": "vertex-gateway:9ba169c4f2de8a246c756948b24a3860a54cc419957004d9ed351c2ad538b3bd",
+      "client_runtime": {
+        "dspy": "2.6.27",
+        "kg-gen": "0.4.0",
+        "litellm": "1.60.4",
+        "python": "3.11.15",
+        "torch": "2.6.0+cpu",
+        "torch_cuda": null
+      }
+    }
+  ]
+}

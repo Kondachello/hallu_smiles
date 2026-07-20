@@ -83,6 +83,15 @@ def main() -> None:
         default=[],
         help="Immutable historical KG cache directory to search after the primary cache (repeatable).",
     )
+    parser.add_argument(
+        "--llm-runtime-fingerprint-override",
+        default=None,
+        help=(
+            "Exact, recorded LLM cache identity for a validated historical checkpoint. "
+            "This affects cache lookup only; the current DataSphere runtime is still recorded "
+            "under vertex_gateway."
+        ),
+    )
     # Vertex's 2.5 Flash can spend part of a structured extraction on internal
     # reasoning.  1024 truncated real RAGTruth relation lists in the first
     # probe, while the provider bills actual generated tokens rather than this
@@ -117,6 +126,12 @@ def main() -> None:
         raise ValueError("--retry-backoff-max-s must be at least --retry-backoff-base-s")
     if args.cv_folds < 2:
         raise ValueError("--cv-folds must be at least 2")
+    if args.llm_runtime_fingerprint_override is not None:
+        override = str(args.llm_runtime_fingerprint_override).strip()
+        if not override.startswith("vertex-gateway:") or len(override) <= len("vertex-gateway:"):
+            raise ValueError(
+                "--llm-runtime-fingerprint-override must be a non-empty vertex-gateway identity"
+            )
 
     with open(args.base_config, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -149,7 +164,12 @@ def main() -> None:
         f"{manifest['vertex_model']}:{manifest['gateway_release']}:"
         f"{manifest['cloud_run_revision']}"
     )
-    llm["runtime_fingerprint"] = f"vertex-gateway:{combined_hash}"
+    computed_llm_fingerprint = f"vertex-gateway:{combined_hash}"
+    llm["runtime_fingerprint"] = (
+        str(args.llm_runtime_fingerprint_override).strip()
+        if args.llm_runtime_fingerprint_override is not None
+        else computed_llm_fingerprint
+    )
     llm["max_tokens"] = args.max_tokens
     llm["concurrency"] = args.concurrency
     llm["max_retries"] = args.max_retries
@@ -185,7 +205,12 @@ def main() -> None:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    print(json.dumps({"gateway_manifest_sha256": manifest_hash, "runtime_fingerprint": llm["runtime_fingerprint"]}))
+    print(json.dumps({
+        "gateway_manifest_sha256": manifest_hash,
+        "runtime_fingerprint": llm["runtime_fingerprint"],
+        "computed_runtime_fingerprint": computed_llm_fingerprint,
+        "historical_cache_identity": args.llm_runtime_fingerprint_override is not None,
+    }))
 
 
 if __name__ == "__main__":
