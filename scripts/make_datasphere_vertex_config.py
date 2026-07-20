@@ -84,6 +84,15 @@ def main() -> None:
         help="Immutable historical KG cache directory to search after the primary cache (repeatable).",
     )
     parser.add_argument(
+        "--critical-cache-read-root",
+        action="append",
+        default=[],
+        help=(
+            "Immutable prior support-critical cache root. Its component namespaces are read-through only "
+            "and may be repeated."
+        ),
+    )
+    parser.add_argument(
         "--llm-runtime-fingerprint-override",
         default=None,
         help=(
@@ -189,9 +198,16 @@ def main() -> None:
     config["cache_read_dirs"] = [str(Path(path)) for path in args.kg_cache_read_dir]
     config.setdefault("relation_verifier", {})["cache_dir"] = str(cache_root / "verdicts")
     critical = config.setdefault("support_critical", {})
-    critical.setdefault("claim_extractor", {})["cache_dir"] = str(cache_root / "critical_claims")
-    critical.setdefault("coverage_reviewer", {})["cache_dir"] = str(cache_root / "critical_coverage")
-    critical.setdefault("claim_verifier", {})["cache_dir"] = str(cache_root / "critical_verdicts")
+    for section_name, namespace in (
+        ("claim_extractor", "critical_claims"),
+        ("coverage_reviewer", "critical_coverage"),
+        ("claim_verifier", "critical_verdicts"),
+    ):
+        section = critical.setdefault(section_name, {})
+        section["cache_dir"] = str(cache_root / namespace)
+        section["cache_read_dirs"] = [
+            str(Path(root) / namespace) for root in args.critical_cache_read_root
+        ]
     config["output_dir"] = str(work_dir / "results")
     config["eval"]["alpha_cv_folds"] = args.cv_folds
     config.setdefault("vertex_gateway", {}).update(

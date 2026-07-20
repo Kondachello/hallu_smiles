@@ -78,6 +78,14 @@ class CriticalProtocolError(RuntimeError):
     """Raised when a critical component cannot produce its strict artifact."""
 
 
+class CriticalCompletionTruncatedError(StructuredOutputParseError):
+    """A schema response was cut off by the provider's output-token ceiling."""
+
+
+class CriticalRetryableTruncation(CriticalCompletionTruncatedError):
+    """A token-ceiling retry remains available for this otherwise strict response."""
+
+
 @dataclass(frozen=True)
 class AtomicClaim:
     text: str
@@ -173,16 +181,26 @@ class _CachedComponent:
         self.structured_output = structured_output_settings(cfg.llm)
         self.temperature = float(cfg.llm.temperature)
         self.max_tokens = int(config_value(section, "max_tokens", 512))
+        # Gemini can consume output budget on hidden reasoning before emitting a
+        # tiny JSON object.  Keep the configured value as the first attempt,
+        # then make a bounded transport retry on ``finish_reason=length``.
+        self.max_tokens_ceiling = int(
+            config_value(section, "max_tokens_ceiling", max(self.max_tokens, 8192))
+        )
         self.max_retries = int(cfg.llm.max_retries)
         self.backoff_base = float(cfg.llm.retry_backoff_base_s)
         self.backoff_max = float(getattr(cfg.llm, "retry_backoff_max_s", 60))
         self.request_timeout_s = float(getattr(cfg.llm, "request_timeout_s", 90))
         self.prompt_version = str(config_value(section, "prompt_version", "v1"))
         self.cache_dir = Path(str(config_value(section, "cache_dir")))
+        raw_read_dirs = config_value(section, "cache_read_dirs", []) or []
+        self.cache_read_dirs = [Path(str(path)) for path in raw_read_dirs]
         self.cache_only = bool(cache_only)
         self.usage = usage
         if self.max_tokens <= 0 or self.max_retries <= 0 or self.request_timeout_s <= 0:
             raise ValueError(f"invalid {self.component} runtime limits")
+        if self.max_tokens_ceiling < self.max_tokens:
+            raise ValueError(f"{self.component}.max_tokens_ceiling must be at least max_tokens")
         if self.backoff_max < self.backoff_base:
             raise ValueError("llm.retry_backoff_max_s must be at least retry_backoff_base_s")
         if not self.cache_only:
@@ -193,6 +211,10 @@ class _CachedComponent:
             "protocol": self.protocol,
             "component": self.component,
             "prompt_version": self.prompt_version,
+            # The key contains the initial request budget.  The ceiling is a
+            # transport-only recovery limit: a completed response produced on
+            # the first attempt remains valid after a code update adds bounded
+            # retries, so this deliberately preserves durable partial caches.
             "max_tokens": self.max_tokens,
             "llm": llm_runtime_fingerprint(self.cfg),
             "api_base": self.api_base,
@@ -203,11 +225,17 @@ class _CachedComponent:
         ).hexdigest()
 
     def _load(self, key: str) -> dict[str, Any] | None:
-        try:
-            payload = json.loads((self.cache_dir / f"{key}.json").read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else None
-        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
-            return None
+        # The primary root is writable for the active protocol namespace;
+        # prior roots are read-through only. This lets a retrying Job reuse
+        # completed claim/verdict artifacts after its source commit changes.
+        for root in [self.cache_dir, *self.cache_read_dirs]:
+            try:
+                payload = json.loads((root / f"{key}.json").read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    return payload
+            except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+                continue
+        return None
 
     def _save(self, key: str, payload: dict[str, Any]) -> None:
         dest = self.cache_dir / f"{key}.json"
@@ -219,7 +247,14 @@ class _CachedComponent:
         if self.usage is not None:
             self.usage.record_call(self.component, key, elapsed, cached=cached)
 
-    def _call_json(self, messages: list[dict[str, str]], schema: dict[str, Any], name: str) -> dict[str, Any]:
+    def _call_json(
+        self,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
+        name: str,
+        *,
+        max_tokens: int,
+    ) -> dict[str, Any]:
         try:
             from litellm import completion  # type: ignore
         except Exception as exc:  # pragma: no cover - live-only dependency
@@ -228,7 +263,7 @@ class _CachedComponent:
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "max_tokens": int(max_tokens),
             "timeout": self.request_timeout_s,
             "num_retries": 0,
         }
@@ -250,8 +285,15 @@ class _CachedComponent:
         if not isinstance(choices, (list, tuple)) or len(choices) != 1:
             raise StructuredOutputParseError(f"{self.component} completion must contain one choice")
         choice = choices[0]
-        if _response_field(choice, "finish_reason") != "stop":
-            raise StructuredOutputParseError(f"{self.component} completion did not finish cleanly")
+        finish_reason = str(_response_field(choice, "finish_reason") or "").lower()
+        if finish_reason == "length":
+            raise CriticalCompletionTruncatedError(
+                f"{self.component} completion hit max_tokens={max_tokens}"
+            )
+        if finish_reason != "stop":
+            raise StructuredOutputParseError(
+                f"{self.component} completion did not finish cleanly: {finish_reason or 'missing'}"
+            )
         content = _response_field(_response_field(choice, "message"), "content")
         if not isinstance(content, str):
             raise StructuredOutputParseError(f"{self.component} response has no text content")
@@ -259,14 +301,30 @@ class _CachedComponent:
 
     def _retry_json(self, messages: list[dict[str, str]], schema: dict[str, Any], name: str) -> dict[str, Any]:
         result: dict[str, Any] | None = None
+        token_budget = self.max_tokens
+
+        def should_retry(exc: BaseException) -> bool:
+            return isinstance(exc, CriticalRetryableTruncation) or is_retryable_llm_exception(exc)
+
         for attempt in Retrying(
             stop=stop_after_attempt(self.max_retries),
             wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
-            retry=retry_if_exception(is_retryable_llm_exception),
+            retry=retry_if_exception(should_retry),
             reraise=True,
         ):
             with attempt:
-                result = self._call_json(messages, schema, name)
+                try:
+                    result = self._call_json(messages, schema, name, max_tokens=token_budget)
+                except CriticalCompletionTruncatedError as exc:
+                    if token_budget >= self.max_tokens_ceiling:
+                        raise StructuredOutputParseError(
+                            f"{self.component} remained truncated at max_tokens={token_budget}"
+                        ) from exc
+                    next_budget = min(token_budget * 2, self.max_tokens_ceiling)
+                    token_budget = next_budget
+                    raise CriticalRetryableTruncation(
+                        f"{self.component} retrying after token truncation with max_tokens={next_budget}"
+                    ) from exc
         assert result is not None
         return result
 

@@ -91,14 +91,17 @@ support_critical:
     cache_dir: ".cache/critical_claims"
     prompt_version: "atomic-claims-v1"
     max_tokens: 2048
+    max_tokens_ceiling: 8192
   coverage_reviewer:
     cache_dir: ".cache/critical_coverage"
     prompt_version: "full-context-coverage-v1"
     max_tokens: 2048
+    max_tokens_ceiling: 8192
   claim_verifier:
     cache_dir: ".cache/critical_verdicts"
     prompt_version: "closed-world-claim-verdict-v1"
     max_tokens: 512
+    max_tokens_ceiling: 8192
     max_evidence_sentences: 8
   tuning:
     beta_grid: [0.25, 0.5, 0.75]

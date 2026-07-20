@@ -33,6 +33,7 @@ METADATA="$RUN_ROOT/run_metadata.json"
 USAGE_COUNTS="$RUN_ROOT/usage-counts.json"
 HISTORICAL_LINEAGE="$RUN_ROOT/historical-baseline-lineage.json"
 KG_CACHE_PREFLIGHT="$RUN_ROOT/historical-kg-cache-preflight.json"
+CRITICAL_GATEWAY_PROBE="$RUN_ROOT/support-critical-gateway-probe.json"
 CHECKPOINT_ROOT=""
 BASELINE_CACHE_ROOT=""
 CRITICAL_CACHE_ROOT=""
@@ -155,7 +156,20 @@ import sys
 print(json.load(open(sys.argv[1], encoding='utf-8'))['llm_runtime_fingerprint'])
 PY
 )"
-CRITICAL_CACHE_ROOT="$CHECKPOINT_BASE/support-critical/${EXPECTED_SOURCE_COMMIT}-${GATEWAY_MANIFEST_SHA256}"
+# Critical artifacts are independent of source commit when their component
+# protocol, prompt version, LLM identity, and evidence key are unchanged. A
+# stable namespace therefore resumes a partial Job instead of discarding every
+# completed verdict after a retry-only code change. Older commit namespaces are
+# read-through inputs and remain untouched.
+CRITICAL_PROTOCOL_NAMESPACE="support-critical-v1-${GATEWAY_MANIFEST_SHA256}"
+CRITICAL_CACHE_ROOT="$CHECKPOINT_BASE/support-critical/$CRITICAL_PROTOCOL_NAMESPACE"
+CRITICAL_CACHE_READ_ARGS=()
+if test -d "$CHECKPOINT_BASE/support-critical"; then
+  while IFS= read -r previous_critical_root; do
+    test "$previous_critical_root" = "$CRITICAL_CACHE_ROOT" && continue
+    CRITICAL_CACHE_READ_ARGS+=(--critical-cache-read-root "$previous_critical_root")
+  done < <(find "$CHECKPOINT_BASE/support-critical" -mindepth 1 -maxdepth 1 -type d -name "*-${GATEWAY_MANIFEST_SHA256}" -print 2>/dev/null | sort)
+fi
 CHECKPOINT_ROOT="$CRITICAL_CACHE_ROOT"
 mkdir -p "$CRITICAL_CACHE_ROOT/kg" "$CRITICAL_CACHE_ROOT/critical_claims" \
   "$CRITICAL_CACHE_ROOT/critical_coverage" "$CRITICAL_CACHE_ROOT/critical_verdicts"
@@ -174,6 +188,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     },
     'historical_baseline_cache_root': sys.argv[8],
     'historical_llm_runtime_fingerprint': sys.argv[9],
+    'critical_protocol_namespace': 'support-critical-v1',
     'protocol': 'hallu-vertex-qa-support-critical-checkpoint-v1',
 }, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
@@ -192,6 +207,7 @@ PY
   --output "$CRITICAL_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$CRITICAL_CACHE_ROOT" \
   --kg-cache-read-dir "$BASELINE_CACHE_ROOT/kg" \
   --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
+  "${CRITICAL_CACHE_READ_ARGS[@]}" \
   --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 1000 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/critical-runtime-config-identity.json"
@@ -203,6 +219,12 @@ PY
   --config "$BASELINE_CONFIG" --data-dir "$DATA_DIR" \
   --qa-sample-size "$QA_SAMPLE_SIZE" --qa-test-fraction "$QA_TEST_FRACTION" \
   --manifest-output "$QA_MANIFEST" --report "$KG_CACHE_PREFLIGHT"
+
+# Probe the exact three new schemas before baseline reports/tuning. It does
+# not require a particular semantic answer, and its cache-only replay proves
+# the critical namespace is writable and resumable before the 100-QA loop.
+"$CLIENT_PYTHON" "$ROOT/scripts/check_support_critical_gateway_probe.py" \
+  --config "$CRITICAL_CONFIG" --report "$CRITICAL_GATEWAY_PROBE"
 
 require_complete_extraction() {
   "$CLIENT_PYTHON" - "$1/extraction_summary.json" "$2" <<'PY'

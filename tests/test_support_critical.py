@@ -6,7 +6,9 @@ import pytest
 from src.critical import (
     AtomicClaim,
     AtomicClaimExtractor,
+    CriticalCompletionTruncatedError,
     CriticalClaimVerifier,
+    StructuredOutputParseError,
     FakeCriticalClaimPipeline,
     _validate_claims,
     merge_claims,
@@ -194,3 +196,66 @@ def test_claim_and_verdict_caches_replay_without_live_calls(tmp_path):
     replay_verifier = CriticalClaimVerifier(cfg, cache_only=True, embedder=DictEmbedder())
     second = replay_verifier.verify_claim("Paris has two museums.", "Paris has two museums.", None)
     assert second.verdict == "entailed" and second.cache_hit is True
+
+
+def test_critical_truncation_escalates_only_the_transport_budget(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.llm.max_retries = 3
+    cfg.support_critical.claim_verifier.max_tokens = 64
+    cfg.support_critical.claim_verifier.max_tokens_ceiling = 256
+
+    class TruncatesOnce(CriticalClaimVerifier):
+        calls: list[int] = []
+
+        def _call_json(self, messages, schema, name, *, max_tokens):  # noqa: ARG002
+            self.calls.append(max_tokens)
+            if len(self.calls) == 1:
+                raise CriticalCompletionTruncatedError("simulated length")
+            return {"verdict": "entailed"}
+
+    verifier = TruncatesOnce(cfg, embedder=DictEmbedder())
+    assert verifier._retry_json([], {}, "test") == {"verdict": "entailed"}
+    assert verifier.calls == [64, 128]
+
+
+def test_critical_truncation_fails_at_the_configured_ceiling(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.llm.max_retries = 4
+    cfg.support_critical.claim_verifier.max_tokens = 64
+    cfg.support_critical.claim_verifier.max_tokens_ceiling = 128
+
+    class AlwaysTruncated(CriticalClaimVerifier):
+        calls: list[int] = []
+
+        def _call_json(self, messages, schema, name, *, max_tokens):  # noqa: ARG002
+            self.calls.append(max_tokens)
+            raise CriticalCompletionTruncatedError("simulated length")
+
+    verifier = AlwaysTruncated(cfg, embedder=DictEmbedder())
+    with pytest.raises(StructuredOutputParseError, match="remained truncated"):
+        verifier._retry_json([], {}, "test")
+    assert verifier.calls == [64, 128]
+
+
+def test_critical_verdict_cache_reads_previous_namespace_without_writing_it(tmp_path):
+    old_cache = tmp_path / "prior" / "critical_verdicts"
+    cfg = _cfg(tmp_path)
+    cfg.support_critical.claim_verifier.cache_dir = str(old_cache)
+
+    class StubVerifier(CriticalClaimVerifier):
+        def _retry_json(self, messages, schema, name):  # noqa: ARG002
+            return {"verdict": "entailed"}
+
+    claim = "Paris has two museums."
+    writer = StubVerifier(cfg, embedder=DictEmbedder())
+    assert writer.verify_claim(claim, claim, None).cache_hit is False
+    written = list(old_cache.glob("*.json"))
+    assert len(written) == 1
+
+    fresh_cache = tmp_path / "active" / "critical_verdicts"
+    cfg.support_critical.claim_verifier.cache_dir = str(fresh_cache)
+    cfg.support_critical.claim_verifier.cache_read_dirs = [str(old_cache)]
+    replay = CriticalClaimVerifier(cfg, cache_only=True, embedder=DictEmbedder())
+    result = replay.verify_claim(claim, claim, None)
+    assert result.verdict == "entailed" and result.cache_hit is True
+    assert not fresh_cache.exists()

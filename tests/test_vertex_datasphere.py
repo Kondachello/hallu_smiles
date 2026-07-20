@@ -65,16 +65,27 @@ def test_vertex_runtime_config_keeps_historical_kg_reads_separate_from_writes(tm
     manifest.write_text(json.dumps(_manifest()), encoding="utf-8")
     runtime.write_text(json.dumps({"runtime_fingerprint": "cpu-image-fingerprint"}), encoding="utf-8")
     historical = tmp_path / "historical" / "kg"
+    critical_historical = tmp_path / "historical-critical"
     subprocess.run([
         sys.executable, str(SCRIPTS / "make_datasphere_vertex_config.py"),
         "--base-config", str(ROOT / "config.yaml"), "--gateway-manifest", str(manifest),
         "--gateway-url", "https://gateway.example.run.app", "--datasphere-runtime-manifest", str(runtime),
         "--output", str(output), "--data-dir", "/read-only/ragtruth", "--work-dir", str(tmp_path / "work"),
         "--cache-root", str(tmp_path / "new-cache"), "--kg-cache-read-dir", str(historical),
+        "--critical-cache-read-root", str(critical_historical),
     ], check=True)
     cfg = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert cfg["cache_dir"] == str(tmp_path / "new-cache" / "kg")
     assert cfg["cache_read_dirs"] == [str(historical)]
+    for namespace in ("critical_claims", "critical_coverage", "critical_verdicts"):
+        section = {
+            "critical_claims": "claim_extractor",
+            "critical_coverage": "coverage_reviewer",
+            "critical_verdicts": "claim_verifier",
+        }[namespace]
+        assert cfg["support_critical"][section]["cache_read_dirs"] == [
+            str(critical_historical / namespace)
+        ]
 
 
 def test_vertex_runtime_config_can_replay_a_recorded_historical_llm_identity(tmp_path):
@@ -231,6 +242,9 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "--cache-root \"$BASELINE_CACHE_ROOT\"" in runner
     assert "--cache-root \"$CRITICAL_CACHE_ROOT\"" in runner
     assert "--kg-cache-read-dir \"$BASELINE_CACHE_ROOT/kg\"" in runner
+    assert "--critical-cache-read-root" in runner
+    assert "support-critical-v1-${GATEWAY_MANIFEST_SHA256}" in runner
+    assert "check_support_critical_gateway_probe.py" in runner
     assert 'hallu-vertex-qa-support-critical-checkpoint-v1' in runner
     assert "support-critical-live-usage.jsonl" in runner
     assert "cmp \"$STRICT_OUT/metrics.csv\" \"$REPLAY_STRICT/metrics.csv\"" in runner
