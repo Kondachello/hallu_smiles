@@ -1,0 +1,31 @@
+# GraphEval example config — REDACTED.
+# The gateway API key is NEVER stored here; only the env-var *name* is referenced.
+# DataSphere injects HALLU_GATEWAY_API_KEY into the Job environment at runtime.
+
+extractor:
+  backend: gateway              # fake | gateway | vllm
+  model: openai/gemini-2.5-flash
+  prompt_profile: grapheval_appendix_a_v1
+  output_mode: paper_prompt     # paper_prompt | structured_json
+  temperature: 0.0
+  max_tokens: 2048
+  max_retries: 5
+  api_base_env: HALLU_GATEWAY_URL
+  api_key_env: HALLU_GATEWAY_API_KEY
+  cache_namespace: grapheval/extraction/v1
+
+nli:
+  backend: hhem                 # fake | hhem
+  model: vectara/hallucination_evaluation_model
+  revision: REQUIRED_EXACT_COMMIT_SHA   # pin an exact HF commit before any live gate
+  model_label: hhem-2.1-open
+  device: cpu
+  dtype: float32
+  batch_size: 8
+  evidence_policy: full_context_native
+  aggregation: max_unsupported
+  paper_threshold: 0.5
+  cache_namespace: grapheval/nli/v1
+
+cache_dir: .cache/graph_eval
+cache_only: false
