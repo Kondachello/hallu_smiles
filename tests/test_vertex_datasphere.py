@@ -261,6 +261,7 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "--critical-cache-read-root" in runner
     assert "support-critical-v1-${GATEWAY_MANIFEST_SHA256}" in runner
     assert "check_support_critical_gateway_probe.py" in runner
+    assert "preflight_support_critical_resilience.py" in runner
     assert 'hallu-vertex-qa-support-critical-checkpoint-v1' in runner
     assert "support-critical-live-usage.jsonl" in runner
     assert "cmp \"$STRICT_OUT/metrics.csv\" \"$REPLAY_STRICT/metrics.csv\"" in runner

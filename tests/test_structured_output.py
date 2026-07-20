@@ -518,11 +518,19 @@ def test_retry_classifier_retries_only_transient_failures():
     class MetadataStrippedRateLimit(Exception):
         pass
 
+    class NameResolutionError(Exception):
+        pass
+
+    class RemoteProtocolError(Exception):
+        pass
+
     assert is_retryable_llm_exception(TimeoutError()) is True
     assert is_retryable_llm_exception(ServiceUnavailable()) is True
     assert is_retryable_llm_exception(ArbitraryServerFailure()) is True
     assert is_retryable_llm_exception(
         MetadataStrippedRateLimit("gateway error 429: Vertex capacity is temporarily exhausted")
     ) is True
+    assert is_retryable_llm_exception(NameResolutionError("temporary DNS lookup failure")) is True
+    assert is_retryable_llm_exception(RemoteProtocolError("HTTP2 framing error")) is True
     assert is_retryable_llm_exception(BadRequest()) is False
     assert is_retryable_llm_exception(StructuredOutputSchemaError("bad root")) is False

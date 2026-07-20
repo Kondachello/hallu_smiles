@@ -864,6 +864,17 @@ def is_retryable_llm_exception(exc: BaseException) -> bool:
         "RateLimitError",
         "ServiceUnavailableError",
         "Timeout",
+        # httpx/urllib/aiohttp and gateway wrappers use these names while
+        # often discarding the underlying socket exception and HTTP status.
+        "ReadTimeout",
+        "ConnectTimeout",
+        "ConnectError",
+        "RemoteProtocolError",
+        "ProtocolError",
+        "NetworkError",
+        "NameResolutionError",
+        "ClientConnectorError",
+        "ClientOSError",
     }
     if any(type(item).__name__ in transient_names for item in chain):
         return True
@@ -886,7 +897,17 @@ def is_retryable_llm_exception(exc: BaseException) -> bool:
             "service unavailable",
             "connection reset",
             "connection aborted",
+            "connection refused",
+            "connection timed out",
+            "timed out",
+            "read timeout",
+            "connect timeout",
             "temporarily unavailable",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "dns lookup",
+            "http2 framing",
+            "unexpected eof",
         )
     )
 

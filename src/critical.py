@@ -113,6 +113,7 @@ class CriticalVerdict:
     verdict: str
     evidence: tuple[EvidenceSpan, ...]
     cache_hit: bool = False
+    protocol_fallback: bool = False
 
     def __post_init__(self) -> None:
         if self.verdict not in CRITICAL_VERDICTS:
@@ -275,6 +276,64 @@ def _validate_claims(payload: Any, response: str, source: str) -> list[AtomicCla
     return merge_claims(claims)
 
 
+_FALLBACK_SPANS_FIELD = "_hallu_fallback_sentence_spans"
+
+
+def _sentence_fallback_claims(response: str, source: str) -> list[AtomicClaim]:
+    """Create exact, conservative claim candidates without an LLM response.
+
+    This is a continuity mechanism for a provider that repeatedly violates the
+    JSON/offset contract.  It does not invent factual content: each candidate
+    is a verbatim non-empty answer sentence (or line).  The ordinary strict
+    evidence verifier still decides its four-way verdict.  Thus a malformed
+    model artifact cannot abort the entire experiment or silently become
+    ``entailed``.
+    """
+    return [
+        AtomicClaim(text=text, start=start, end=end, sources=(source,))
+        for _, start, end, text in _sentences(response)
+    ]
+
+
+def _claim_cache_payload(claims: Sequence[AtomicClaim]) -> dict[str, Any]:
+    """Serialize claims while retaining deterministic-fallback provenance."""
+    payload: dict[str, Any] = {
+        "claims": [{"text": claim.text, "start": claim.start, "end": claim.end} for claim in claims]
+    }
+    fallback_spans = sorted({
+        (claim.start, claim.end)
+        for claim in claims
+        if any(source.endswith("_fallback_sentence") for source in claim.sources)
+    })
+    if fallback_spans:
+        # This private cache field is intentionally not part of the LLM schema.
+        # It preserves audit provenance across cache-only replay.
+        payload[_FALLBACK_SPANS_FIELD] = [[start, end] for start, end in fallback_spans]
+    return payload
+
+
+def _claims_from_cache(payload: dict[str, Any], response: str, source: str) -> list[AtomicClaim]:
+    """Validate a claim cache entry and restore any fallback provenance."""
+    core = {"claims": payload.get("claims")}
+    claims = _validate_claims(core, response, source)
+    raw_spans = payload.get(_FALLBACK_SPANS_FIELD, [])
+    if not isinstance(raw_spans, list):
+        raise StructuredOutputParseError("critical claim cache has malformed fallback spans")
+    fallback_spans: set[tuple[int, int]] = set()
+    for raw in raw_spans:
+        if not isinstance(raw, list) or len(raw) != 2:
+            raise StructuredOutputParseError("critical claim cache has malformed fallback span")
+        fallback_spans.add((int(raw[0]), int(raw[1])))
+    if not fallback_spans:
+        return claims
+    fallback_source = f"{source}_fallback_sentence"
+    return [
+        replace(claim, sources=(fallback_source,))
+        if (claim.start, claim.end) in fallback_spans else claim
+        for claim in claims
+    ]
+
+
 def _response_field(value: Any, field: str) -> Any:
     return value.get(field) if isinstance(value, dict) else getattr(value, field, None)
 
@@ -368,6 +427,28 @@ class _CachedComponent:
         tmp = dest.with_name(f"{key}.{os.getpid()}.{threading.get_ident()}.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, dest)
+
+    def _load_claims(self, key: str, response: str, source: str) -> list[AtomicClaim] | None:
+        """Load a valid claim artifact, treating a corrupt live cache as a miss.
+
+        A completed cache file is an optimisation, never authority to make a
+        live Job fail.  In cache-only mode it remains strict: a malformed
+        artifact is reported as a cache miss rather than prompting the model.
+        """
+        cached = self._load(key)
+        if cached is None:
+            return None
+        try:
+            claims = _claims_from_cache(cached, response, source)
+        except (StructuredOutputParseError, StructuredOutputSchemaError, TypeError, ValueError) as exc:
+            if self.cache_only:
+                raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json") from exc
+            return None
+        self._record(key, 0.0, cached=True)
+        return claims
+
+    def _save_claims(self, key: str, claims: Sequence[AtomicClaim]) -> None:
+        self._save(key, _claim_cache_payload(claims))
 
     def _record(self, key: str, elapsed: float, cached: bool) -> None:
         if self.usage is not None:
@@ -513,11 +594,9 @@ class AtomicClaimExtractor(_CachedComponent):
 
     def _extract_segment(self, segment: str) -> list[AtomicClaim]:
         key = self._cache_key(self._segment_key_payload(segment))
-        cached = self._load(key)
+        cached = self._load_claims(key, segment, "atomic")
         if cached is not None:
-            claims = _validate_claims(cached, segment, "atomic")
-            self._record(key, 0.0, cached=True)
-            return claims
+            return cached
         if self.cache_only:
             raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json")
         messages = [
@@ -533,13 +612,26 @@ class AtomicClaimExtractor(_CachedComponent):
             {"role": "user", "content": f"Answer segment:\n{segment}"},
         ]
         start = time.perf_counter()
-        claims = self._retry_validated_json(
-            messages,
-            CLAIM_SCHEMA,
-            "atomic_claims",
-            lambda payload: _validate_claims(payload, segment, "atomic"),
-        )
-        self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
+        try:
+            claims = self._retry_validated_json(
+                messages,
+                CLAIM_SCHEMA,
+                "atomic_claims",
+                lambda payload: _validate_claims(payload, segment, "atomic"),
+            )
+        except CriticalOutputLimitError:
+            # Let a larger segment bisect first. At the deterministic floor,
+            # exact sentence candidates preserve coverage without more futile
+            # output-budget retries.
+            if len(segment) > self.min_chunk_chars:
+                raise
+            claims = _sentence_fallback_claims(segment, "atomic_fallback_sentence")
+        except (StructuredOutputParseError, StructuredOutputSchemaError):
+            # The provider has already had max_protocol_retries chances to
+            # repair the schema/offsets. Do not discard the entire 100-QA run
+            # because it paraphrased a single claim.
+            claims = _sentence_fallback_claims(segment, "atomic_fallback_sentence")
+        self._save_claims(key, claims)
         self._record(key, time.perf_counter() - start, cached=False)
         return claims
 
@@ -566,11 +658,9 @@ class AtomicClaimExtractor(_CachedComponent):
         # This is especially valuable for the partial cache produced before
         # segmentation existed.
         key = self._cache_key({"response": response})
-        cached = self._load(key)
+        cached = self._load_claims(key, response, "atomic")
         if cached is not None:
-            claims = _validate_claims(cached, response, "atomic")
-            self._record(key, 0.0, cached=True)
-            return claims
+            return cached
         # Short responses retain the historical one-request cache identity;
         # only long answers take the new resumable segmented path.
         if not self.chunk_chars or len(response) <= self.chunk_chars:
@@ -600,19 +690,26 @@ class AtomicClaimExtractor(_CachedComponent):
                 # A provider can hit an output ceiling even for a nominally
                 # short but claim-dense answer. Fall through to the same
                 # deterministic bisection machinery rather than fail late.
-                if len(response) <= self.min_chunk_chars:
-                    raise CriticalProtocolError("atomic claim extraction exceeded the minimum chunk safety floor")
-                claims = self._extract_chunk(_AnswerChunk(response, 0, len(response)))
+                claims = (
+                    _sentence_fallback_claims(response, "atomic_fallback_sentence")
+                    if len(response) <= self.min_chunk_chars
+                    else self._extract_chunk(_AnswerChunk(response, 0, len(response)))
+                )
                 merged = merge_claims(claims)
                 # A compact answer-level index makes cache-only replay work
                 # even when a provider unexpectedly forced bisection below
                 # the configured chunk threshold. Leaf caches remain useful
                 # for resuming an interrupted live attempt.
-                self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in merged]})
+                self._save_claims(key, merged)
                 return merged
+            except (StructuredOutputParseError, StructuredOutputSchemaError):
+                claims = _sentence_fallback_claims(response, "atomic_fallback_sentence")
+                self._save_claims(key, claims)
+                self._record(key, time.perf_counter() - start, cached=False)
+                return claims
             except Exception as exc:  # noqa: BLE001
                 raise CriticalProtocolError("atomic claim extraction failed") from exc
-            self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
+            self._save_claims(key, claims)
             self._record(key, time.perf_counter() - start, cached=False)
             return claims
         try:
@@ -625,7 +722,7 @@ class AtomicClaimExtractor(_CachedComponent):
         # Index the deterministic leaf artifacts under the historical
         # full-answer key as well. This is an atomic replay marker, not the
         # source of truth during an interrupted live extraction.
-        self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in merged]})
+        self._save_claims(key, merged)
         return merged
 
 
@@ -665,11 +762,9 @@ class FullContextReviewer(_CachedComponent):
         self, segment: str, context: str, query: str | None, known_claims: Sequence[AtomicClaim]
     ) -> list[AtomicClaim]:
         key = self._cache_key(self._segment_key_payload(segment, context, query, known_claims))
-        cached = self._load(key)
+        cached = self._load_claims(key, segment, "global_review")
         if cached is not None:
-            claims = _validate_claims(cached, segment, "global_review")
-            self._record(key, 0.0, cached=True)
-            return claims
+            return cached
         if self.cache_only:
             raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json")
         known = "\n".join(f"- {claim.text}" for claim in known_claims) or "(none)"
@@ -691,13 +786,22 @@ class FullContextReviewer(_CachedComponent):
             },
         ]
         start = time.perf_counter()
-        claims = self._retry_validated_json(
-            messages,
-            CLAIM_SCHEMA,
-            "coverage_candidates",
-            lambda payload: _validate_claims(payload, segment, "global_review"),
-        )
-        self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
+        try:
+            claims = self._retry_validated_json(
+                messages,
+                CLAIM_SCHEMA,
+                "coverage_candidates",
+                lambda payload: _validate_claims(payload, segment, "global_review"),
+            )
+        except CriticalOutputLimitError:
+            if len(segment) > self.min_chunk_chars:
+                raise
+            claims = _sentence_fallback_claims(segment, "global_review_fallback_sentence")
+        except (StructuredOutputParseError, StructuredOutputSchemaError):
+            # Coverage is an additional adversarial review. Its protocol
+            # failure must not erase the answer-level candidate coverage.
+            claims = _sentence_fallback_claims(segment, "global_review_fallback_sentence")
+        self._save_claims(key, claims)
         self._record(key, time.perf_counter() - start, cached=False)
         return claims
 
@@ -731,11 +835,9 @@ class FullContextReviewer(_CachedComponent):
             "query": query or "",
             "known_claims": [c.to_dict() for c in known_claims],
         })
-        cached = self._load(key)
+        cached = self._load_claims(key, response, "global_review")
         if cached is not None:
-            claims = _validate_claims(cached, response, "global_review")
-            self._record(key, 0.0, cached=True)
-            return claims
+            return cached
         if not self.chunk_chars or len(response) <= self.chunk_chars:
             if self.cache_only:
                 raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json")
@@ -765,17 +867,24 @@ class FullContextReviewer(_CachedComponent):
                     lambda payload: _validate_claims(payload, response, "global_review"),
                 )
             except CriticalOutputLimitError:
-                if len(response) <= self.min_chunk_chars:
-                    raise CriticalProtocolError("full-context coverage review exceeded the minimum chunk safety floor")
-                claims = self._review_chunk(
-                    _AnswerChunk(response, 0, len(response)), context, query, known_claims
+                claims = (
+                    _sentence_fallback_claims(response, "global_review_fallback_sentence")
+                    if len(response) <= self.min_chunk_chars
+                    else self._review_chunk(
+                        _AnswerChunk(response, 0, len(response)), context, query, known_claims
+                    )
                 )
                 merged = merge_claims(claims)
-                self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in merged]})
+                self._save_claims(key, merged)
                 return merged
+            except (StructuredOutputParseError, StructuredOutputSchemaError):
+                claims = _sentence_fallback_claims(response, "global_review_fallback_sentence")
+                self._save_claims(key, claims)
+                self._record(key, time.perf_counter() - start, cached=False)
+                return claims
             except Exception as exc:  # noqa: BLE001
                 raise CriticalProtocolError("full-context coverage review failed") from exc
-            self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in claims]})
+            self._save_claims(key, claims)
             self._record(key, time.perf_counter() - start, cached=False)
             return claims
         try:
@@ -785,7 +894,7 @@ class FullContextReviewer(_CachedComponent):
         except Exception as exc:  # noqa: BLE001
             raise CriticalProtocolError("full-context coverage review failed") from exc
         merged = merge_claims(claims)
-        self._save(key, {"claims": [{"text": c.text, "start": c.start, "end": c.end} for c in merged]})
+        self._save_claims(key, merged)
         return merged
 
 
@@ -861,7 +970,10 @@ class CriticalClaimVerifier(_CachedComponent):
         cached = self._load(key)
         if cached is not None and cached.get("verdict") in CRITICAL_VERDICTS:
             self._record(key, 0.0, cached=True)
-            return CriticalVerdict(str(cached["verdict"]), tuple(evidence), cache_hit=True)
+            return CriticalVerdict(
+                str(cached["verdict"]), tuple(evidence), cache_hit=True,
+                protocol_fallback=bool(cached.get("_hallu_protocol_fallback", False)),
+            )
         if self.cache_only:
             raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json")
         evidence_text = "\n".join(f"[{span.source}:{span.index}] {span.text}" for span in evidence)
@@ -886,11 +998,23 @@ class CriticalClaimVerifier(_CachedComponent):
                 "critical_claim_verdict",
                 _validated_critical_verdict,
             )
+            protocol_fallback = False
+        except (CriticalOutputLimitError, StructuredOutputParseError, StructuredOutputSchemaError):
+            # There is no defensible positive/negative inference when a scalar
+            # verifier repeatedly violates its own schema. ``unknown`` is the
+            # only conservative four-way result and remains train-tunable.
+            verdict = "unknown"
+            protocol_fallback = True
         except Exception as exc:  # noqa: BLE001
             raise CriticalProtocolError(f"critical claim verification failed for {claim!r}") from exc
-        self._save(key, {"verdict": verdict})
+        payload: dict[str, Any] = {"verdict": verdict}
+        if protocol_fallback:
+            payload["_hallu_protocol_fallback"] = True
+        self._save(key, payload)
         self._record(key, time.perf_counter() - start, cached=False)
-        return CriticalVerdict(verdict, tuple(evidence), cache_hit=False)
+        return CriticalVerdict(
+            verdict, tuple(evidence), cache_hit=False, protocol_fallback=protocol_fallback
+        )
 
     # Interface parity with RelationVerifier for graph-edge scoring.
     def verify(
@@ -925,6 +1049,7 @@ class CriticalClaimPipeline:
                 "evidence": [span.to_dict() for span in decision.evidence],
                 "verdict": decision.verdict,
                 "verifier_cache_hit": decision.cache_hit,
+                "verifier_protocol_fallback": decision.protocol_fallback,
             })
         return audits
 

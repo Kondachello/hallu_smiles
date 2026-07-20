@@ -34,6 +34,7 @@ USAGE_COUNTS="$RUN_ROOT/usage-counts.json"
 HISTORICAL_LINEAGE="$RUN_ROOT/historical-baseline-lineage.json"
 KG_CACHE_PREFLIGHT="$RUN_ROOT/historical-kg-cache-preflight.json"
 CRITICAL_GATEWAY_PROBE="$RUN_ROOT/support-critical-gateway-probe.json"
+CRITICAL_RESILIENCE_PREFLIGHT="$RUN_ROOT/support-critical-resilience-preflight.json"
 CHECKPOINT_ROOT=""
 BASELINE_CACHE_ROOT=""
 CRITICAL_CACHE_ROOT=""
@@ -219,6 +220,13 @@ PY
   --config "$BASELINE_CONFIG" --data-dir "$DATA_DIR" \
   --qa-sample-size "$QA_SAMPLE_SIZE" --qa-test-fraction "$QA_TEST_FRACTION" \
   --manifest-output "$QA_MANIFEST" --report "$KG_CACHE_PREFLIGHT"
+
+# Check every selected answer's deterministic segmentation and no-network
+# fallback offsets before asking Vertex anything. This catches code/config
+# regressions that otherwise surface only halfway through the scoring loop.
+"$CLIENT_PYTHON" "$ROOT/scripts/preflight_support_critical_resilience.py" \
+  --config "$CRITICAL_CONFIG" --data-dir "$DATA_DIR" --qa-manifest "$QA_MANIFEST" \
+  --report "$CRITICAL_RESILIENCE_PREFLIGHT"
 
 # Probe the exact three new schemas before baseline reports/tuning. It does
 # not require a particular semantic answer, and its cache-only replay proves

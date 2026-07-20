@@ -371,3 +371,86 @@ def test_long_coverage_review_is_chunked_and_replays_without_calls(tmp_path):
     assert writer.calls > 1
     assert "".join(response[claim.start:claim.end] for claim in claims) == response
     assert FullContextReviewer(cfg, cache_only=True).review(response, "Alpha is red.", None, []) == claims
+
+
+def test_invalid_claim_offsets_fall_back_to_exact_sentences_and_replay(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.support_critical.claim_extractor.max_protocol_retries = 2
+    response = "Alpha has one. Beta has two."
+
+    class AlwaysParaphrases(AtomicClaimExtractor):
+        calls = 0
+
+        def _retry_json(self, messages, schema, name):  # noqa: ARG002
+            self.calls += 1
+            return {"claims": [{"text": "Alpha owns one", "start": 0, "end": 14}]}
+
+    writer = AlwaysParaphrases(cfg)
+    claims = writer.extract(response)
+    assert writer.calls == 2
+    assert [claim.text for claim in claims] == ["Alpha has one.", "Beta has two."]
+    assert all(claim.sources == ("atomic_fallback_sentence",) for claim in claims)
+    assert AtomicClaimExtractor(cfg, cache_only=True).extract(response) == claims
+
+
+def test_invalid_coverage_offsets_fall_back_to_exact_sentences_and_replay(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.support_critical.coverage_reviewer.max_protocol_retries = 2
+    response = "Alpha has one. Beta has two."
+
+    class AlwaysParaphrases(FullContextReviewer):
+        calls = 0
+
+        def _retry_json(self, messages, schema, name):  # noqa: ARG002
+            self.calls += 1
+            return {"claims": [{"text": "Beta owns two", "start": 0, "end": 13}]}
+
+    writer = AlwaysParaphrases(cfg)
+    claims = writer.review(response, "", None, [])
+    assert writer.calls == 2
+    assert [claim.text for claim in claims] == ["Alpha has one.", "Beta has two."]
+    assert all(claim.sources == ("global_review_fallback_sentence",) for claim in claims)
+    assert FullContextReviewer(cfg, cache_only=True).review(response, "", None, []) == claims
+
+
+def test_scalar_verifier_schema_failure_is_cached_as_conservative_unknown(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.support_critical.claim_verifier.max_protocol_retries = 2
+
+    class InvalidVerdict(CriticalClaimVerifier):
+        calls = 0
+
+        def _retry_json(self, messages, schema, name):  # noqa: ARG002
+            self.calls += 1
+            return {"verdict": "maybe"}
+
+    writer = InvalidVerdict(cfg, embedder=DictEmbedder())
+    first = writer.verify_claim("Alpha has one.", "Alpha has one.", None)
+    assert first.verdict == "unknown" and first.protocol_fallback is True and writer.calls == 2
+    replay = CriticalClaimVerifier(cfg, cache_only=True, embedder=DictEmbedder()).verify_claim(
+        "Alpha has one.", "Alpha has one.", None
+    )
+    assert replay.verdict == "unknown" and replay.cache_hit and replay.protocol_fallback
+
+
+def test_corrupt_live_claim_cache_is_recomputed_but_cache_only_stays_strict(tmp_path):
+    cfg = _cfg(tmp_path)
+    response = "Alpha has one."
+
+    class ValidClaims(AtomicClaimExtractor):
+        calls = 0
+
+        def _retry_json(self, messages, schema, name):  # noqa: ARG002
+            self.calls += 1
+            return {"claims": [{"text": response, "start": 0, "end": len(response)}]}
+
+    writer = ValidClaims(cfg)
+    key = writer._cache_key({"response": response})
+    writer._save(key, {"claims": [{"text": "not present", "start": 0, "end": 11}]})
+    assert writer.extract(response)[0].text == response and writer.calls == 1
+
+    bad = "Beta has two."
+    bad_key = writer._cache_key({"response": bad})
+    writer._save(bad_key, {"claims": [{"text": "not present", "start": 0, "end": 11}]})
+    with pytest.raises(CacheOnlyMissError):
+        AtomicClaimExtractor(cfg, cache_only=True).extract(bad)
