@@ -38,9 +38,12 @@ hallucination). All research metrics/thresholds are the experiment framework's j
   `factory.build_extractor`.
 - **Stage 4 — standalone CLI: done.** `python -m graph_eval.cli predict` (no-gold JSONL
   in, predictions JSONL out), resume-safe, runs fully offline with fake backends.
-- Stage 5 — `HalluGraphDetectorAdapter` + parity check: pending.
+- **Stage 5 — HalluGraph adapter + parity: done.** `../detector_adapters/hallugraph_adapter.py`
+  wraps existing HalluGraph in this contract by reusing `run.build_refgraph` +
+  `score_response` verbatim; a parity test asserts it equals `run.build_rows` output.
+  `run.py` / `src/` are unchanged.
 
-59 offline unit tests (no torch/openai/network; real HHEM/gateway calls run in DataSphere).
+59 graph_eval + 3 adapter-parity offline tests (no torch/openai/network; real HHEM/gateway calls run in DataSphere).
 An end-to-end cache-only replay is proven to make zero model/gateway calls.
 
 ## Run the tests (offline)

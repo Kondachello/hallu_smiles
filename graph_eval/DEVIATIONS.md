@@ -37,6 +37,18 @@ keeping Appendix-A *semantics* (entity/coref/relation steps, exactly three non-e
 strings, full coverage). Raw output is retained, so a paper-format parser could be added
 later without losing provenance. Not a deviation from the algorithm, only its wire format.
 
+## D4 — Shared contract lives in `graph_eval.types`; adapters in `detector_adapters/`
+**Plan (§5, §11):** a common `DetectionInput/DetectionResult` contract and a
+`detector_adapters/` layer created at integration.
+**Done (Stage 5):** the contract is defined once in `graph_eval/types.py` (GraphEval is
+its reference implementation) and the HalluGraph adapter imports it. Adapters live in a
+top-level `detector_adapters/` package, separate from both frameworks. GraphEval does not
+import HalluGraph; HalluGraph (`run.py`/`src/`) is unchanged; neither imports the future
+experiment framework. The adapter reuses `run.build_refgraph` + `score_response` verbatim,
+so it is a thin wrapper and parity with `run.build_rows` holds by construction.
+**Why:** one source of truth for the contract prevents drift between the two detectors; a
+separate contract-only micro-package would add packaging overhead with no benefit.
+
 ## Followed exactly (not deviations, noted to avoid confusion)
 - `H(response) = max_i (1 - p_consistent_i)`; paper threshold `0.5` strict `>` (plan §6.3).
 - Empty/all-invalid answer graph => `empty_graph` with `raw_score=None`, never 0/1 (plan §9).
