@@ -1,0 +1,59 @@
+# Render with scripts/render_experiment_framework_datasphere_mock_job.py.
+# This is fully offline: two synthetic inputs, fake detector backends, no
+# RAGTruth, Cloud Run, HHEM, secret, or model/network calls.
+name: experiment-framework-cpu-mock-__RUN_ID__
+desc: Offline paired HalluGraph and GraphEval framework smoke test with deterministic replay.
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export RUN_ROOT="$PWD/experiment-framework-mock-artifacts/__RUN_ID__";
+  mkdir -p "$RUN_ROOT";
+  git init source;
+  git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
+  git -C source fetch --depth 1 origin __GIT_COMMIT__;
+  git -C source checkout --detach FETCH_HEAD;
+  actual_commit="$(git -C source rev-parse HEAD)";
+  test "$actual_commit" = "__GIT_COMMIT__";
+  export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
+  export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  printf "[artifact] output=%s\\n" "$ARCHIVE_PATH";
+  archive_ready=0;
+  archive_artifacts() {
+    if test "$archive_ready" = 1; then return 0; fi;
+    tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")";
+    tar -tzf "$ARCHIVE_PATH" >/dev/null;
+    test -s "$ARCHIVE_PATH";
+    chmod a+r "$ARCHIVE_PATH";
+    archive_ready=1;
+  };
+  archive_on_exit() {
+    status=$?;
+    trap - EXIT;
+    if ! archive_artifacts; then
+      echo "failed to create a readable framework mock artifact" >&2;
+      if test "$status" -eq 0; then status=1; fi;
+    fi;
+    if test -f "$RUN_ROOT/mock.stdout.log"; then echo "[diagnostics] mock stdout tail"; tail -n 200 "$RUN_ROOT/mock.stdout.log" || true; fi;
+    if test -f "$RUN_ROOT/mock.stderr.log"; then echo "[diagnostics] mock stderr tail"; tail -n 200 "$RUN_ROOT/mock.stderr.log" || true; fi;
+    exit "$status";
+  };
+  trap archive_on_exit EXIT;
+  set +e;
+  timeout --signal=TERM --kill-after=30s 900 bash source/scripts/run_experiment_framework_datasphere_mock.sh >"$RUN_ROOT/mock.stdout.log" 2>"$RUN_ROOT/mock.stderr.log";
+  status=$?;
+  set -e;
+  if ! archive_artifacts; then status=1; fi;
+  exit "$status"'
+env:
+__DOCKER_ENV_BLOCK__
+outputs:
+  - experiment-framework-cpu-mock-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+flags:
+  - attach-project-disk
+cloud-instance-types:
+  - c1.4
+working-storage:
+  type: SSD
+  size: 100Gb
+graceful-shutdown:
+  signal: SIGTERM
+  timeout: 30s
