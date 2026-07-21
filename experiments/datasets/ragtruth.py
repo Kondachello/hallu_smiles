@@ -20,6 +20,7 @@ from ..contracts import assert_no_gold
 DATASET_NAME = "RAGTruth"
 SAMPLER_VERSION = "ragtruth-source-sampler-v1"
 MATERIALIZER_VERSION = "ragtruth-materializer-v1"
+ONE_INSTANCE_MATERIALIZER_VERSION = "ragtruth-one-instance-materializer-v1"
 OFFICIAL_RAW_BASE = "https://raw.githubusercontent.com/ParticleMedia/RAGTruth"
 _COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -265,6 +266,95 @@ def create_source_sample_manifest(
 
 def write_sample_manifest(path: str | Path, manifest: Mapping[str, Any]) -> None:
     atomic_write_json(path, dict(manifest))
+
+
+def materialize_one_response_no_gold(
+    source_info_path: str | Path,
+    response_path: str | Path,
+    *,
+    response_id: str,
+) -> dict[str, Any]:
+    """Build one detector-safe RAGTruth record selected by an explicit response id.
+
+    This is intentionally different from the source-level sampler.  It is for a
+    plumbing probe, not a scientific sample: the caller names exactly one response
+    and this function copies only detector-allowed fields from the raw source and
+    response records.  In particular, neither ``labels`` nor ``quality`` is read
+    into the returned object, logged, or used for selection.
+    """
+    requested_id = str(response_id).strip()
+    if not requested_id:
+        raise ValueError("response_id must be a non-empty string")
+
+    response_row: dict[str, Any] | None = None
+    for line_number, raw_line, response in iter_jsonl(response_path):
+        if str(response.get("id", "")) == requested_id:
+            response_row = {
+                "line_number": line_number,
+                "raw_record_sha256": sha256_bytes(raw_line.encode("utf-8")),
+                "record": response,
+            }
+            break
+    if response_row is None:
+        raise ValueError(f"RAGTruth response_id was not found: {requested_id!r}")
+
+    response = response_row["record"]
+    source_id = str(response.get("source_id", ""))
+    source_row: dict[str, Any] | None = None
+    for line_number, raw_line, source in iter_jsonl(source_info_path):
+        if str(source.get("source_id", "")) == source_id:
+            source_row = {
+                "line_number": line_number,
+                "raw_record_sha256": sha256_bytes(raw_line.encode("utf-8")),
+                "record": source,
+            }
+            break
+    if source_row is None:
+        raise ValueError(f"RAGTruth response {requested_id!r} has no source record {source_id!r}")
+
+    source = source_row["record"]
+    context, query = build_context_query(source)
+    record_id_material = ":".join(
+        (
+            ONE_INSTANCE_MATERIALIZER_VERSION,
+            source_row["raw_record_sha256"],
+            response_row["raw_record_sha256"],
+        )
+    )
+    dataset_record_id = sha256_bytes(record_id_material.encode("utf-8"))[:24]
+    input_record = {
+        "dataset_record_id": dataset_record_id,
+        "source_id": source_id,
+        "response_id": requested_id,
+        "split": str(response.get("split", "")),
+        "context_raw": context,
+        "query_raw": query,
+        "response_raw": str(response.get("response", "")),
+        "original_prompt_raw": str(source.get("prompt", "")),
+        "context_hash": sha256_bytes(context.encode("utf-8")),
+        "query_hash": sha256_bytes((query or "").encode("utf-8")),
+        "response_hash": sha256_bytes(str(response.get("response", "")).encode("utf-8")),
+        "source_record_sha256": source_row["raw_record_sha256"],
+        "response_record_sha256": response_row["raw_record_sha256"],
+        "source_line_number": source_row["line_number"],
+        "response_line_number": response_row["line_number"],
+        "context_construction_policy": "ragtruth-task-native-v1",
+        "query_construction_policy": "ragtruth-task-native-v1",
+        "context_document_ids": [f"source:{source_id}"],
+        "context_document_order": [f"source:{source_id}"],
+        "metadata": {
+            "dataset_record_id": dataset_record_id,
+            "task": str(source.get("task_type", "unknown")),
+            "source_dataset": str(source.get("source", "unknown")),
+            "generator_model": str(response.get("model", "unknown")),
+            "generator_temperature": response.get("temperature"),
+            "context_document_ids": [f"source:{source_id}"],
+            "context_document_order": [f"source:{source_id}"],
+        },
+        "gold_access_state": "hidden",
+    }
+    assert_no_gold(input_record)
+    return input_record
 
 
 def materialize_subset(
