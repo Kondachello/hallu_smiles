@@ -12,6 +12,7 @@ usage() {
 
 PROJECT_ID=""; RUN_ID=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"
 IMAGE=""; PROFILE="default"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-id) PROJECT_ID="$2"; shift 2 ;;
@@ -30,7 +31,7 @@ git fetch --quiet origin "refs/heads/$BRANCH"
 git merge-base --is-ancestor "$COMMIT" FETCH_HEAD || {
   echo "Commit is not pushed to origin/$BRANCH." >&2; exit 2;
 }
-RESOLVED_IMAGE="$(python3 scripts/resolve_datasphere_runtime_image.py \
+RESOLVED_IMAGE="$($PYTHON_BIN scripts/resolve_datasphere_runtime_image.py \
   --repository "${DATASPHERE_VERTEX_CPU_RUNTIME_REPOSITORY:-ghcr.io/kondachello/hallu-smiles-datasphere-vertex-cpu}" \
   --commit "$COMMIT" --wait-seconds "${DATASPHERE_RUNTIME_WAIT_SECONDS:-1800}")"
 if [[ -n "$IMAGE" && "$IMAGE" != "$RESOLVED_IMAGE" ]]; then
@@ -39,9 +40,9 @@ if [[ -n "$IMAGE" && "$IMAGE" != "$RESOLVED_IMAGE" ]]; then
 fi
 IMAGE="$RESOLVED_IMAGE"
 RENDERED="datasphere/jobs/rendered/experiment-framework-cpu-mock-${RUN_ID}.yaml"
-python3 scripts/render_experiment_framework_datasphere_mock_job.py \
+$PYTHON_BIN scripts/render_experiment_framework_datasphere_mock_job.py \
   --commit "$COMMIT" --run-id "$RUN_ID" --docker-image "$IMAGE" --output "$RENDERED"
-python3 scripts/validate_datasphere_job.py --job "$RENDERED" --repo-root .
+$PYTHON_BIN scripts/validate_datasphere_job.py --job "$RENDERED" --repo-root .
 datasphere --profile "$PROFILE" project get --id "$PROJECT_ID" >/dev/null
 datasphere --profile "$PROFILE" project job execute --async -p "$PROJECT_ID" -c "$RENDERED" \
   -o "${RENDERED%.yaml}.execution.json"
