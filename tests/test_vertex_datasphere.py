@@ -294,6 +294,7 @@ def test_cpu_vertex_qa_job_defaults_to_platform_deadline_for_resumable_long_runs
     assert 'QA_SAMPLE_SIZE="1000"' in command
     assert "timeout --signal=TERM" not in command
     assert "bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh" in command
+    assert "#" not in command
 
 
 def test_cpu_dockerfile_is_pinned_and_has_no_llama_or_vllm(tmp_path):

@@ -1,6 +1,8 @@
 # Render with scripts/render_datasphere_vertex_qa_pilot_job.py; do not submit this template directly.
 name: hallu-vertex-cpu-qa-__RUN_ID__
 desc: Parameterized strict/support/support-critical HalluGraph QA evaluation through Cloud Run and Vertex AI.
+# Long runs intentionally have no arbitrary in-container watchdog. DataSphere
+# owns any platform deadline; durable content-addressed checkpoints make resume safe.
 cmd: >-
   bash -lc 'set -Eeuo pipefail;
   export RUN_ROOT="$PWD/vertex-cpu-qa-artifacts/__RUN_ID__";
@@ -44,8 +46,6 @@ cmd: >-
   };
   trap archive_on_exit EXIT;
   set +e;
-  # No arbitrary in-container watchdog: DataSphere controls any platform deadline,
-  # while each completed content-addressed entry is persisted for a safe resume.
   __JOB_RUN_COMMAND__ >"$RUN_ROOT/qa.stdout.log" 2>"$RUN_ROOT/qa.stderr.log";
   status=$?;
   set -e;
