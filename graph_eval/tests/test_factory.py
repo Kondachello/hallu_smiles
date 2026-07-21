@@ -1,7 +1,7 @@
 from graph_eval.config import from_dict
 from graph_eval.detector import GraphEvalDetector
 from graph_eval.extraction.fake import FakeExtractor
-from graph_eval.factory import build_nli
+from graph_eval.factory import build_extractor, build_nli
 from graph_eval.types import DetectionInput
 
 
@@ -31,3 +31,13 @@ def test_build_hhem_backend_does_not_import_torch(tmp_path):
     )
     nli = build_nli(cfg)  # constructing HHEM adapter must not import torch/transformers
     assert nli.model_label == "hhem-2.1-open"
+
+
+def test_shared_kggen_backend_requires_and_returns_injected_extractor(tmp_path):
+    cfg = from_dict({"extractor": {"backend": "shared_kggen"}, "cache_dir": str(tmp_path)})
+    injected = FakeExtractor()
+    assert build_extractor(cfg, injected_extractor=injected) is injected
+    import pytest
+
+    with pytest.raises(ValueError, match="requires injected_extractor"):
+        build_extractor(cfg)

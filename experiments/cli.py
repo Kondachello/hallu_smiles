@@ -18,6 +18,7 @@ from .demo import run_demo
 from .detectors import build_grapheval_fake, build_hallugraph_fake
 from .evaluation import evaluate_joined_predictions, join_gold
 from .runner import run_paired, seal_run
+from .shared_graphs import GraphCacheSource, SharedKGGraphProvider
 
 
 def _load_json(path: str) -> dict:
@@ -110,6 +111,49 @@ def cmd_archive_validate(args: argparse.Namespace) -> int:
     return 0 if result["valid"] else 2
 
 
+def _cache_sources(values: list[str]) -> list[GraphCacheSource]:
+    sources: list[GraphCacheSource] = []
+    for value in values:
+        try:
+            source_id, raw_path = value.split("=", 1)
+        except ValueError as exc:
+            raise ValueError("--source must be SOURCE_ID=PATH") from exc
+        if not source_id.strip() or not raw_path.strip():
+            raise ValueError("--source must be SOURCE_ID=PATH")
+        sources.append(GraphCacheSource(source_id.strip(), Path(raw_path).expanduser()))
+    return sources
+
+
+def cmd_cache_inspect(args: argparse.Namespace) -> int:
+    """Read-only structural cache audit; does not construct KGGen or read secrets."""
+    import run
+    from src.config import load_config
+    from src.extract import UsageLogger
+
+    cfg = load_config(args.hallugraph_config)
+    cfg._data["cache_dir"] = str(Path(args.writable_cache).expanduser())
+    cfg.cache_dir = cfg._data["cache_dir"]
+    sources = _cache_sources(args.source)
+    provider = SharedKGGraphProvider(
+        run.get_extractor(cfg, fake=False, usage=UsageLogger(None), cache_only=True),
+        sources=sources,
+        cache_mode="cache_only" if args.instances else "inspect_only",
+    )
+    report = provider.inspection()
+    if args.instances:
+        records = read_jsonl(args.instances)
+        try:
+            report["coverage"] = provider.preflight(records, roles=tuple(args.role))
+        except Exception as exc:  # report remains useful even if cache-only coverage fails
+            report["coverage_error"] = repr(exc)
+            report["valid"] = False
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps({"output": str(output), "valid": report["valid"]}, ensure_ascii=False))
+    return 0 if report["valid"] else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="experiments", description="Offline-safe GraphEval × HalluGraph experiment framework")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -179,6 +223,17 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--runs-root", required=True)
     validate.add_argument("--run-id", required=True)
     validate.set_defaults(func=cmd_archive_validate)
+
+    cache = sub.add_parser("cache", help="read-only KGGen graph-cache inspection")
+    cache_sub = cache.add_subparsers(dest="cache_command", required=True)
+    inspect = cache_sub.add_parser("inspect", help="validate cache envelopes and optional instance coverage; no model/API calls")
+    inspect.add_argument("--hallugraph-config", default="config.yaml")
+    inspect.add_argument("--source", action="append", default=[], metavar="SOURCE_ID=PATH", help="read-only historical cache source; repeatable")
+    inspect.add_argument("--writable-cache", default=".cache/kg", help="current-run cache namespace used only to resolve possible local hits")
+    inspect.add_argument("--instances", help="optional materialized instances.no_gold.jsonl for exact cache-key coverage")
+    inspect.add_argument("--role", action="append", choices=("response", "context", "query"), default=["response"])
+    inspect.add_argument("--output", required=True)
+    inspect.set_defaults(func=cmd_cache_inspect)
     return parser
 
 

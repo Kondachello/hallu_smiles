@@ -196,6 +196,13 @@ res = detector.predict(item)
   gateway-манифеста.
 - `build_nli(cfg, *, cache=True)` — `fake`→FakeNLI, `hhem`→HHEMNLIModel (torch грузится лениво).
 
+### Controlled shared-KGGen extractor
+
+`extractor.backend: shared_kggen` допустим только когда framework передаёт
+`injected_extractor`. Он не создаёт GraphEval gateway client и не оборачивает общий граф
+в GraphEval extraction cache: это гарантия, что ответный KGGen-граф был создан один раз
+в shared preprocessing. См. `docs/shared-kggen-controlled-track.md`.
+
 ### CLI (standalone, resume-safe)
 ```bash
 python -m graph_eval.cli predict \

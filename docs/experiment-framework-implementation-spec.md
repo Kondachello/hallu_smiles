@@ -96,7 +96,7 @@ Framework должен понимать следующие `comparison_track`:
 |---|---|---|
 | `kggen_untyped_adaptation` | Текущий HalluGraph-KGGen против текущего GraphEval | Первый исполнимый primary track |
 | `faithful_replication` | Авторские extractor/verifier каждого метода | Нельзя заявлять готовым без spaCy+SLM HalluGraph и parity evidence |
-| `controlled_shared_answer_graph` | Один answer graph, разные verifier-механизмы | Реализовать после общего graph IR |
+| `controlled_shared_answer_graph` | Один answer graph, разные verifier-механизмы | Реализован как `controlled_shared_kggen_response_v1`; см. `shared-kggen-controlled-track.md` |
 | `controlled_shared_all_graphs` | Общие answer/context/query extraction artifacts | Отдельный controlled этап |
 | `typed_graph_ablation` | B0–B4 абляции типов | Расширение после baseline |
 | `selective_nli_hybrid` | Structural method + selective NLI | Не primary для первого сравнения |
@@ -1714,4 +1714,3 @@ Framework не готов, пока не выполнено всё следую�
 9. После каждого этапа запускать узкие и затем общие regression tests.
 10. Не считать работу законченной только потому, что CLI выдаёт один score: главным
     deliverable является валидируемый, воспроизводимый и анализируемый archive.
-

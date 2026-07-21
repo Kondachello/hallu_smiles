@@ -15,7 +15,7 @@ _UNPINNED_REVISIONS = frozenset({"main", "master", "REQUIRED_EXACT_COMMIT_SHA"})
 
 @dataclass(frozen=True)
 class ExtractorConfig:
-    backend: str = "fake"  # fake | gateway | vllm
+    backend: str = "fake"  # fake | gateway | vllm | shared_kggen
     model: str = "openai/gemini-2.5-flash"
     prompt_profile: str = "grapheval_appendix_a_v1"
     output_mode: str = "paper_prompt"  # paper_prompt | structured_json
@@ -59,7 +59,7 @@ class GraphEvalConfig:
             raise ValueError(f"unknown extractor.output_mode: {self.extractor.output_mode!r}")
         if self.nli.backend not in ("fake", "hhem"):
             raise ValueError(f"unknown nli.backend: {self.nli.backend!r}")
-        if self.extractor.backend not in ("fake", "gateway", "vllm"):
+        if self.extractor.backend not in ("fake", "gateway", "vllm", "shared_kggen"):
             raise ValueError(f"unknown extractor.backend: {self.extractor.backend!r}")
         # A real HHEM run must pin an exact HF commit, never a floating tag.
         if self.nli.backend == "hhem" and (

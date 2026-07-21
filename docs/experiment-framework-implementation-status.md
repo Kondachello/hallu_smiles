@@ -12,6 +12,23 @@ runner и записывает проверяемый prediction archive. Он �
 
 ## Что реализовано
 
+### Controlled shared-KGGen track and reusable graph caches
+
+`controlled_shared_kggen_response_v1` is now an explicit additional track. It
+materializes the response graph once, passes the immutable result to HalluGraph and
+GraphEval, and records shared graph IDs/hashes in both predictions. The existing
+`kggen_untyped_adaptation` construction is unchanged.
+
+`experiments/shared_graphs.py` validates historical `hallu-kg-cache-v2` sources,
+detects corrupt/conflicting entries and supports cache-only/read-through policies.
+`python -m experiments.cli cache inspect` performs a read-only structural and optional
+no-gold coverage audit. Details: `docs/shared-kggen-controlled-track.md` and
+`docs/graph-cache-reuse.md`.
+
+`examples/mock_shared_kggen_one_instance.py` provides a response-ID two-pass probe. Its
+first offline pass materializes common graphs and its second proves `cache_only` replay
+from the same configurable `cache_root`; both use FakeKGGen/FakeNLI and seal archives.
+
 ### 1. Общий framework-facing контракт
 
 `experiments/contracts.py` использует уже проверенные `DetectionInput` и

@@ -43,8 +43,15 @@ def run_paired(
     instances_path: str | Path,
     detectors: Mapping[str, DetectorProtocol],
     resume: bool = False,
+    shared_graph_provider: Any | None = None,
 ) -> dict[str, Any]:
-    """Run each supplied adapter on exactly the same immutable no-gold records."""
+    """Run each adapter on immutable no-gold records.
+
+    A controlled track supplies ``shared_graph_provider``.  Its response graph is
+    materialized before either detector and is then attached to both prediction rows.
+    This makes graph identity, rather than matching configuration text, the proof that
+    extraction was shared.
+    """
     if not detectors:
         raise ValueError("at least one detector is required")
     instances = load_no_gold_instances(instances_path)
@@ -54,19 +61,53 @@ def run_paired(
     stages = archive.read_jsonl("stages/stage_calls.jsonl") if resume else []
 
     archive.update_status("running_predictions", started_at_utc=utc_now(), gold_access_state="hidden")
-    for method_key, detector in detectors.items():
-        method = getattr(detector, "method_name", method_key)
-        variant = getattr(detector, "variant_name", method_key)
-        for record in instances:
-            response_id = str(record["response_id"])
-            if (method, response_id) in completed:
-                continue
-            item = make_detection_input(record)
-            started = time.perf_counter()
+    for record in instances:
+        item = make_detection_input(record)
+        response_id = str(record["response_id"])
+        pending = [
+            (method_key, detector, getattr(detector, "method_name", method_key), getattr(detector, "variant_name", method_key))
+            for method_key, detector in detectors.items()
+            if (getattr(detector, "method_name", method_key), response_id) not in completed
+        ]
+        if not pending:
+            continue
+        shared_failure: Exception | None = None
+        shared_ref: dict[str, str] = {}
+        shared_cached = False
+        if shared_graph_provider is not None:
+            started_shared = time.perf_counter()
             try:
-                result = detector.predict(item)
-            except Exception as exc:  # a per-item failure is not a positive prediction
-                result = _failed_result(item, method, exc)
+                shared = shared_graph_provider.prepare_response(item)
+                shared_ref = shared.reference()
+                shared_cached = bool(shared.cache_hit)
+                shared_status = "ok"
+            except Exception as exc:  # common graph failure is never a prediction
+                shared_failure = exc
+                shared_status = "model_failed"
+            stages.append(
+                {
+                    "stage_call_id": f"{archive.run_id}:shared_response:{response_id}",
+                    "run_id": archive.run_id,
+                    "method_run_id": f"{archive.run_id}:shared_preprocessing",
+                    "source_id": item.source_id,
+                    "response_id": item.response_id,
+                    "stage_name": "shared_response_extraction",
+                    "component_name": "shared_kggen",
+                    "status": shared_status,
+                    "wall_time_ms": round((time.perf_counter() - started_shared) * 1000.0, 3),
+                    "cached": shared_cached,
+                    "gold_access_state": "hidden",
+                }
+            )
+        for method_key, detector, method, variant in pending:
+            started = time.perf_counter()
+            if shared_failure is not None:
+                result = _failed_result(item, method, RuntimeError(f"shared_response_extraction: {shared_failure!r}"))
+            else:
+                try:
+                    result = detector.predict(item)
+                except Exception as exc:  # a per-item failure is not a positive prediction
+                    result = _failed_result(item, method, exc)
             elapsed_ms = round((time.perf_counter() - started) * 1000.0, 3)
             row = result_record(result, variant=variant)
             row.update(
@@ -79,6 +120,9 @@ def run_paired(
                     "completed_at_utc": utc_now(),
                 }
             )
+            if shared_graph_provider is not None and shared_ref:
+                row["artifact_refs"] = {**dict(row.get("artifact_refs", {})), **shared_ref}
+                row.update(shared_ref)
             predictions.append(row)
             stages.append(
                 {
@@ -100,10 +144,14 @@ def run_paired(
     stages.sort(key=lambda row: (row["method_run_id"], row["response_id"]))
     archive.write_jsonl("predictions/raw_predictions.jsonl", predictions)
     archive.write_jsonl("stages/stage_calls.jsonl", stages)
+    if shared_graph_provider is not None:
+        archive.write_json("cache/cache_inventory.json", shared_graph_provider.inspection())
+        archive.write_jsonl("cache/cache_resolution.jsonl", shared_graph_provider.resolution_records())
+        archive.write_jsonl("shared_graphs/graph_index.jsonl", shared_graph_provider.artifact_records())
     paired = pair_predictions(predictions)
     archive.write_jsonl("predictions/paired_predictions.jsonl", paired)
     archive.update_status("predictions_complete", finished_predictions_at_utc=utc_now())
-    return {"n_instances": len(instances), "n_predictions": len(predictions), "methods": sorted({row["method"] for row in predictions})}
+    return {"n_instances": len(instances), "n_predictions": len(predictions), "methods": sorted({row["method"] for row in predictions}), "shared_graphs": len(shared_graph_provider.artifact_records()) if shared_graph_provider is not None else 0}
 
 
 def pair_predictions(predictions: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -115,7 +163,12 @@ def pair_predictions(predictions: Iterable[Mapping[str, Any]]) -> list[dict[str,
         hallu = by_method.get("hallugraph")
         graph = by_method.get("grapheval")
         statuses = [row.get("status") for row in (hallu, graph) if row]
-        both_ok = len(statuses) == 2 and all(status == "ok" for status in statuses)
+        shared_graphs = {
+            str(row.get("shared_graph_sha256"))
+            for row in (hallu, graph) if row and row.get("shared_graph_sha256")
+        }
+        shared_graph_consistent = len(shared_graphs) in {0, 1}
+        both_ok = len(statuses) == 2 and all(status == "ok" for status in statuses) and shared_graph_consistent
         if hallu and graph and both_ok:
             h_score, g_score = hallu.get("raw_score"), graph.get("raw_score")
             disagreement = None if h_score is None or g_score is None else abs(float(h_score) - float(g_score))
@@ -130,6 +183,8 @@ def pair_predictions(predictions: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 "hallugraph_score": hallu.get("raw_score") if hallu else None,
                 "grapheval_score": graph.get("raw_score") if graph else None,
                 "both_status_ok": both_ok,
+                "shared_response_graph_consistent": shared_graph_consistent,
+                "shared_response_graph_sha256": next(iter(shared_graphs)) if len(shared_graphs) == 1 else None,
                 "absolute_score_difference": disagreement,
                 "gold_access_state": "hidden",
             }

@@ -87,7 +87,7 @@ class RunArchive:
         if archive.path.exists():
             raise FileExistsError(f"run archive already exists: {archive.path}")
         for relative in (
-            "gold", "stages", "graphs", "grapheval", "hallugraph", "predictions",
+            "gold", "stages", "graphs", "shared_graphs", "cache", "grapheval", "hallugraph", "predictions",
             "evaluation", "audit", "payloads/sha256", "reports/tables", "reports/plots",
         ):
             (archive.path / relative).mkdir(parents=True, exist_ok=True)
@@ -148,6 +148,9 @@ class RunArchive:
             self.path / "predictions/raw_predictions.jsonl",
             self.path / "predictions/paired_predictions.jsonl",
             self.path / "stages/stage_calls.jsonl",
+            self.path / "shared_graphs/graph_index.jsonl",
+            self.path / "cache/cache_resolution.jsonl",
+            self.path / "cache/cache_inventory.json",
         ]
         checksums = {str(path.relative_to(self.path)): sha256_file(path) for path in tracked if path.exists()}
         seal = {

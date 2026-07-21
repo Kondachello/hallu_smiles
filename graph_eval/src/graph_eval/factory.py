@@ -42,9 +42,15 @@ def build_nli(cfg: GraphEvalConfig, *, cache: bool = True):
 
 
 def build_extractor(
-    cfg: GraphEvalConfig, *, client=None, manifest_sha256: str | None = None, cache: bool = True
+    cfg: GraphEvalConfig, *, client=None, manifest_sha256: str | None = None, cache: bool = True,
+    injected_extractor=None,
 ):
-    """Return an Extractor for ``cfg.extractor.backend`` (fake | gateway), cache-wrapped."""
+    """Return an Extractor for ``cfg.extractor.backend``, cache-wrapped when owned here.
+
+    ``shared_kggen`` is deliberately injection-only: its graph belongs to the
+    experiment-level shared preprocessing stage, so GraphEval must neither create a
+    second LLM client nor wrap the common cache in its private cache namespace.
+    """
     backend = cfg.extractor.backend
     if backend == "fake":
         inner = FakeExtractor()
@@ -56,6 +62,10 @@ def build_extractor(
         identity = extraction_identity(cfg.extractor, manifest_sha256)
     elif backend == "vllm":  # pragma: no cover - plan section 7.4, not yet implemented
         raise NotImplementedError("local vLLM extractor is a separate gated config (plan 7.4)")
+    elif backend == "shared_kggen":
+        if injected_extractor is None:
+            raise ValueError("extractor.backend='shared_kggen' requires injected_extractor")
+        return injected_extractor
     else:  # pragma: no cover - guarded by config.validate()
         raise ValueError(f"unknown extractor.backend: {backend!r}")
 

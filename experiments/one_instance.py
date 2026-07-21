@@ -9,11 +9,15 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .artifacts import RunArchive, atomic_write_jsonl
 from .datasets.ragtruth import materialize_one_response_no_gold
-from .detectors import build_grapheval_fake, build_hallugraph_fake
+from .detectors import (
+    build_controlled_shared_kggen_fake,
+    build_grapheval_fake,
+    build_hallugraph_fake,
+)
 from .runner import run_paired, seal_run
 
 PROBE_VERSION = "ragtruth-one-instance-paired-probe-v1"
@@ -148,3 +152,102 @@ def render_probe_summary(archive: RunArchive) -> str:
     body.extend(f"  {name:<{width}} : {value}" for name, value in rows)
     border = "=" * max(len(line) for line in body)
     return "\n".join((border, *body, border, f"archive: {archive.path}"))
+
+
+def run_ragtruth_one_instance_shared_kggen_mock_probe(
+    *,
+    source_info_path: str | Path,
+    response_path: str | Path,
+    response_id: str,
+    output_root: str | Path,
+    run_id: str | None = None,
+    hallugraph_config: str | Path = "config.yaml",
+    cache_root: str | Path | None = None,
+) -> tuple[RunArchive, RunArchive, dict[str, Any]]:
+    """Run one response twice: materialize shared KGGen graph, then cache-only replay.
+
+    Both passes use the real HalluGraph and GraphEval adapters, but FakeKGGen/FakeNLI.
+    It is a deterministic integration probe, not a live detector-quality experiment.
+    ``cache_root`` is the only storage contract: locally it may be a temporary path;
+    on DataSphere it should point at a Project-storage directory supplied by the job.
+    """
+    record = materialize_one_response_no_gold(source_info_path, response_path, response_id=response_id)
+    base_id = _validated_run_id(run_id) if run_id is not None else default_run_id(record["response_id"])
+    root = Path(output_root)
+    selected_cache_root = Path(cache_root) if cache_root is not None else root / f"{base_id}-shared-kg-cache"
+
+    def execute(*, suffix: str, cache_mode: str) -> tuple[RunArchive, Any, dict[str, Any]]:
+        archive = RunArchive.create(
+            root,
+            run_id=f"{base_id}-{suffix}",
+            manifest={
+                "run_purpose": "ragtruth_one_instance_shared_kggen_mock_probe",
+                "probe_version": "ragtruth-one-instance-shared-kggen-cache-v1",
+                "comparison_track": "controlled_shared_kggen_response_v1",
+                "selected_response_id": record["response_id"],
+                "selected_source_id": record["source_id"],
+                "cache_mode": cache_mode,
+                "cache_root": str(selected_cache_root),
+                "network_access": False,
+                "backend_mode": "fake_shared_kggen_v1",
+                "gold_passed_to_detectors": False,
+            },
+        )
+        instances_path = archive.path / "instances.no_gold.jsonl"
+        atomic_write_jsonl(instances_path, [record])
+        detectors, provider = build_controlled_shared_kggen_fake(
+            hallugraph_config, cache_mode=cache_mode, cache_root=selected_cache_root
+        )
+        summary = run_paired(
+            archive, instances_path=instances_path, detectors=detectors,
+            shared_graph_provider=provider,
+        )
+        seal_run(archive, instances_path)
+        validation = archive.validate()
+        if not validation["valid"]:
+            raise RuntimeError(f"invalid shared-KGGen probe archive: {validation['errors']}")
+        return archive, provider, summary
+
+    cold, cold_provider, cold_summary = execute(suffix="materialize", cache_mode="read_write")
+    replay, replay_provider, replay_summary = execute(suffix="cache-replay", cache_mode="cache_only")
+    cold_predictions = {row["method"]: row for row in cold.read_jsonl("predictions/raw_predictions.jsonl")}
+    replay_predictions = {row["method"]: row for row in replay.read_jsonl("predictions/raw_predictions.jsonl")}
+    shared_hashes = {
+        row["shared_graph_sha256"]
+        for row in (*cold_predictions.values(), *replay_predictions.values())
+    }
+    report = {
+        "probe_version": "ragtruth-one-instance-shared-kggen-cache-v1",
+        "response_id": record["response_id"],
+        "source_id": record["source_id"],
+        "cache_root": str(selected_cache_root),
+        "materialize_archive": str(cold.path),
+        "cache_replay_archive": str(replay.path),
+        "materialize_summary": cold_summary,
+        "cache_replay_summary": replay_summary,
+        "materialize_kggen_api_calls": cold_provider.extractor.usage.summary()["api_calls"],
+        "cache_replay_kggen_api_calls": replay_provider.extractor.usage.summary()["api_calls"],
+        "shared_graph_sha256": next(iter(shared_hashes)) if len(shared_hashes) == 1 else None,
+        "shared_graph_consistent_across_passes": len(shared_hashes) == 1,
+        "gold_access_state": "hidden",
+    }
+    cold.write_json("reports/shared_kggen_two_pass_report.json", report)
+    replay.write_json("reports/shared_kggen_two_pass_report.json", report)
+    if report["cache_replay_kggen_api_calls"] != 0 or not report["shared_graph_consistent_across_passes"]:
+        raise RuntimeError("shared KGGen cache replay invariant failed")
+    return cold, replay, report
+
+
+def render_shared_kggen_mock_probe_summary(report: Mapping[str, Any]) -> str:
+    """Human-readable, no-gold handoff for the two-pass offline probe."""
+    rows = [
+        ("response_id", str(report["response_id"])),
+        ("materialize KGGen calls", str(report["materialize_kggen_api_calls"])),
+        ("cache replay KGGen calls", str(report["cache_replay_kggen_api_calls"])),
+        ("same shared graph", str(report["shared_graph_consistent_across_passes"])),
+        ("cache root", str(report["cache_root"])),
+    ]
+    width = max(len(name) for name, _ in rows)
+    lines = ["RAGTRUTH ONE-INSTANCE SHARED-KGGEN CACHE PROBE (OFFLINE)"]
+    lines.extend(f"  {name:<{width}} : {value}" for name, value in rows)
+    return "\n".join(lines)
