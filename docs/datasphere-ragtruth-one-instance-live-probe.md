@@ -50,9 +50,11 @@ Before submission all of these must be true:
 2. CI has built the CPU runtime image for that same commit. The updated image includes
    `openai`, the local MiniLM snapshot, a pinned HHEM snapshot at
    `0e7edb3689e710c52ba120086e8f91ea3ee87f23`, and the HHEM custom model's required
-   pinned `google/flan-t5-base` config/tokenizer cache at
+   pinned `google/flan-t5-base` config/tokenizer directory at
    `d224e0d50f2fe7d975c973cf46d933e4dfaf2a3e`; runtime networking to Hugging Face is
    disabled.
+   During the image build, HHEM's custom-model config is explicitly bound to that
+   local directory; it never relies on a version-dependent Hugging Face cache layout.
 3. The Project disk contains the approved read-only RAGTruth files at
    `$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth/source_info.jsonl` and
    `$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth/response.jsonl`.

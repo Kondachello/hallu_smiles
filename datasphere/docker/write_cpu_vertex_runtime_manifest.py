@@ -27,7 +27,7 @@ def main() -> None:
     parser.add_argument("--hhem-path", required=True)
     parser.add_argument("--hhem-revision", required=True)
     parser.add_argument("--hhem-foundation-revision", required=True)
-    parser.add_argument("--hhem-foundation-cache", required=True)
+    parser.add_argument("--hhem-foundation-path", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     embedding = Path(args.embedding_path)
@@ -59,7 +59,7 @@ def main() -> None:
         "hhem_path": str(hhem),
         "hhem_foundation_model": "google/flan-t5-base",
         "hhem_foundation_revision": args.hhem_foundation_revision,
-        "hhem_foundation_cache": args.hhem_foundation_cache,
+        "hhem_foundation_path": args.hhem_foundation_path,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["runtime_fingerprint"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

@@ -8,6 +8,7 @@ CLIENT_PYTHON="${CLIENT_PYTHON:-/opt/hallu/client/bin/python}"
 RUNTIME_MANIFEST="${RUNTIME_MANIFEST:-/opt/hallu/runtime-manifest.json}"
 EMBEDDING_MODEL_PATH="${EMBEDDING_MODEL_PATH:-/opt/hallu/models/all-MiniLM-L6-v2}"
 HHEM_MODEL_PATH="${HHEM_MODEL_PATH:-/opt/hallu/models/hhem-2.1-open}"
+HHEM_FOUNDATION_PATH="${HHEM_FOUNDATION_PATH:-/opt/hallu/models/flan-t5-base}"
 HHEM_REVISION="${HHEM_REVISION:-0e7edb3689e710c52ba120086e8f91ea3ee87f23}"
 EXPECTED_SOURCE_COMMIT="${EXPECTED_SOURCE_COMMIT:?Set the source commit in the Job template}"
 DATASPHERE_DOCKER_IMAGE_ID="${DATASPHERE_DOCKER_IMAGE_ID:?Set immutable Docker identity in the Job template}"
@@ -38,7 +39,8 @@ echo "[live-one-instance] stage=runtime-preflight response_id=$RESPONSE_ID"
   --embedding-path "$EMBEDDING_MODEL_PATH" --hhem-path "$HHEM_MODEL_PATH" \
   --expected-source-commit "$EXPECTED_SOURCE_COMMIT" --report "$RUN_ROOT/cpu-runtime.json"
 "$CLIENT_PYTHON" "$ROOT/scripts/check_datasphere_hhem_offline.py" \
-  --model-path "$HHEM_MODEL_PATH" --revision "$HHEM_REVISION" --report "$RUN_ROOT/hhem-offline-smoke.json"
+  --model-path "$HHEM_MODEL_PATH" --foundation-path "$HHEM_FOUNDATION_PATH" \
+  --revision "$HHEM_REVISION" --report "$RUN_ROOT/hhem-offline-smoke.json"
 
 # This proves the Job received the Project secret. The bearer value is never
 # echoed, and the raw response is validated then replaced by the safe manifest.

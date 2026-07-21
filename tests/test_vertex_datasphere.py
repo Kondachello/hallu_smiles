@@ -283,5 +283,8 @@ def test_cpu_dockerfile_is_pinned_and_has_no_llama_or_vllm(tmp_path):
     assert "all-minilm-l6-v2" in text
     assert (ROOT / "datasphere/docker/client.requirements.txt").is_file()
     assert (ROOT / "datasphere/docker/write_cpu_vertex_runtime_manifest.py").is_file()
+    assert (ROOT / "scripts/prepare_datasphere_hhem_foundation.py").is_file()
     assert "datasphere/docker/client.requirements.txt" in text
     assert "datasphere/docker/write_cpu_vertex_runtime_manifest.py" in text
+    assert "/opt/hallu/models/flan-t5-base" in text
+    assert "prepare_datasphere_hhem_foundation.py" in text
