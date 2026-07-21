@@ -60,6 +60,18 @@ def validate_completion_envelope(response: Any, *, label: str = "DSPy completion
         )
 
 
+def is_length_truncation(exc: BaseException) -> bool:
+    """Recognise only the completion guard's explicit ``finish_reason='length'`` state.
+
+    This deliberately does not treat arbitrary malformed JSON as retryable. A retry
+    may request a larger completion budget only after the provider says the structured
+    response was cut off by its output limit.
+    """
+    if not isinstance(exc, StructuredOutputParseError):
+        return False
+    return bool(re.search(r"did not finish cleanly:\s*['\"]length['\"]", str(exc)))
+
+
 def install_dspy_completion_guard(lm: Any) -> None:
     """Install a version-tolerant finish-reason guard on a DSPy LM instance.
 

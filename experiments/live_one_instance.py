@@ -154,6 +154,7 @@ def run_ragtruth_one_instance_live_probe(
     logical_model = str((hallu_payload.get("llm") or {}).get("model", ""))
     if not logical_model:
         raise ValueError("HalluGraph runtime config has no llm.model")
+    hallu_llm = hallu_payload.get("llm") or {}
     manifest = json.loads(Path(gateway_manifest_path).read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("gateway manifest must be a JSON object")
@@ -198,6 +199,12 @@ def run_ragtruth_one_instance_live_probe(
             cloud_run_revision=manifest["cloud_run_revision"],
         )
         audit.event(
+            "hallugraph_token_policy", "ok",
+            max_tokens=hallu_llm.get("max_tokens"),
+            length_retry_attempts=hallu_llm.get("length_retry_attempts", 0),
+            length_retry_max_tokens=hallu_llm.get("length_retry_max_tokens"),
+        )
+        audit.event(
             "input_materialization", "ok", response_id=record["response_id"], source_id=record["source_id"],
             source_record_sha256=record["source_record_sha256"], response_record_sha256=record["response_record_sha256"],
             context_sha256=record["context_hash"], query_sha256=record["query_hash"], response_sha256=record["response_hash"],
@@ -212,6 +219,9 @@ def run_ragtruth_one_instance_live_probe(
                 "gateway_origin": origin,
                 "hhem_model_path": str(model_path),
                 "hhem_revision": nli_cfg.get("revision"),
+                "hallugraph_max_tokens": hallu_llm.get("max_tokens"),
+                "hallugraph_length_retry_attempts": hallu_llm.get("length_retry_attempts", 0),
+                "hallugraph_length_retry_max_tokens": hallu_llm.get("length_retry_max_tokens"),
                 "gold_access_state": "hidden",
             },
         )
@@ -219,6 +229,7 @@ def run_ragtruth_one_instance_live_probe(
             hallugraph_config=hallugraph_config,
             grapheval_config=graph_payload,
             gateway_manifest_sha256=manifest_sha256,
+            hallugraph_usage_path=archive.path / "audit/hallugraph_extraction_attempts.jsonl",
         )
         audit.event("detector_construction", "ok", methods=sorted(detectors))
         summary = run_paired(archive, instances_path=archive.path / "instances.no_gold.jsonl", detectors=detectors)
@@ -266,4 +277,3 @@ def render_live_probe_summary(archive: RunArchive) -> str:
     lines.extend(f"  {label:<{width}} : {value}" for label, value in rows)
     border = "=" * max(len(line) for line in lines)
     return "\n".join((border, *lines, border, f"archive: {archive.path}"))
-

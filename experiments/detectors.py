@@ -45,7 +45,13 @@ def build_hallugraph_fake(config_path: str | Path = "config.yaml") -> DetectorPr
     return adapter
 
 
-def build_real_detectors(*, hallugraph_config: str | Path, grapheval_config: dict, gateway_manifest_sha256: str | None) -> dict[str, DetectorProtocol]:
+def build_real_detectors(
+    *,
+    hallugraph_config: str | Path,
+    grapheval_config: dict,
+    gateway_manifest_sha256: str | None,
+    hallugraph_usage_path: str | Path | None = None,
+) -> dict[str, DetectorProtocol]:
     """Construct real backends only when the caller explicitly supplies live config.
 
     The function never reads credentials itself; the existing detector factories receive
@@ -71,7 +77,7 @@ def build_real_detectors(*, hallugraph_config: str | Path, grapheval_config: dic
     graph_detector.variant_name = "configured_live_v1"  # type: ignore[attr-defined]
 
     hallu_cfg = load_config(hallugraph_config)
-    usage = UsageLogger(None)
+    usage = UsageLogger(hallugraph_usage_path)
     hallu_detector = HalluGraphAdapter(
         hallu_cfg,
         run.get_extractor(hallu_cfg, fake=False, usage=usage),

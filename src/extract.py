@@ -29,7 +29,9 @@ from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_neve
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .dspy_adapter import (
+    StructuredOutputParseError,
     install_dspy_completion_guard,
+    is_length_truncation,
     is_retryable_llm_exception,
     structured_output_settings,
 )
@@ -158,6 +160,14 @@ class UsageLogger:
                     "cum_completion_tokens": self.completion_tokens,
                 }) + "\n")
 
+    def record_event(self, event: str, **fields: Any) -> None:
+        """Persist an auditable extractor event without pretending it is a graph call."""
+        if not self.path:
+            return
+        with self._lock:
+            with open(self.path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"event": event, **fields}) + "\n")
+
     def summary(self) -> dict[str, Any]:
         return {
             "api_calls": self.calls,
@@ -194,6 +204,18 @@ class KGExtractor:
             if hasattr(cfg.llm, "get")
             else getattr(cfg.llm, "max_tokens", None)
         )
+        self.length_retry_attempts = int(config_value(cfg.llm, "length_retry_attempts", 0))
+        self.length_retry_max_tokens = config_value(cfg.llm, "length_retry_max_tokens", None)
+        if self.length_retry_attempts < 0:
+            raise ValueError("llm.length_retry_attempts must be non-negative")
+        if self.length_retry_attempts and self.max_tokens is None:
+            raise ValueError("llm.length_retry_attempts requires an explicit llm.max_tokens")
+        if self.length_retry_attempts:
+            if self.length_retry_max_tokens is None:
+                raise ValueError("llm.length_retry_attempts requires llm.length_retry_max_tokens")
+            self.length_retry_max_tokens = int(self.length_retry_max_tokens)
+            if self.length_retry_max_tokens <= int(self.max_tokens):
+                raise ValueError("llm.length_retry_max_tokens must exceed llm.max_tokens")
         self.cluster = cfg.extraction.cluster
         self.cluster_context_mode = str(
             config_value(cfg.extraction, "cluster_context_mode", "empty")
@@ -328,6 +350,8 @@ class KGExtractor:
             "llm": llm_runtime_fingerprint(self.cfg),
             "api_base": config_value(self.cfg.llm, "api_base"),
             "max_tokens": self.max_tokens,
+            "length_retry_attempts": self.length_retry_attempts,
+            "length_retry_max_tokens": self.length_retry_max_tokens,
             "cluster": self.cluster,
             "cluster_context_mode": self.cluster_context_mode,
             "cluster_context_protocol": CLUSTER_CONTEXT_PROTOCOL,
@@ -795,6 +819,57 @@ class KGExtractor:
         }
         return Graph(entities, relations)
 
+    def _set_backend_max_tokens(self, budget: int | None) -> None:
+        """Apply a bounded retry budget to the existing KGGen DSPy LM instance."""
+        backend = self._get_backend()
+        lm = getattr(backend, "lm", None)
+        kwargs = getattr(lm, "kwargs", None)
+        if not isinstance(kwargs, dict):
+            raise RuntimeError("KGGen backend does not expose mutable DSPy LM kwargs")
+        if budget is None:
+            kwargs.pop("max_tokens", None)
+        else:
+            kwargs["max_tokens"] = int(budget)
+
+    @contextmanager
+    def _temporary_output_budget(self, budget: int | None):
+        original = self.max_tokens
+        if budget == original:
+            yield
+            return
+        self.max_tokens = budget
+        self._set_backend_max_tokens(budget)
+        try:
+            yield
+        finally:
+            self.max_tokens = original
+            self._set_backend_max_tokens(original)
+
+    def _call_with_transport_retries(
+        self, text: str, *, cache_key: str, kind: str
+    ) -> Graph:
+        graph: Graph | None = None
+        for attempt in Retrying(
+            # ``0`` means retry transient provider failures until the outer
+            # DataSphere wall-time limit. Completed graph calls are flushed atomically.
+            stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
+            wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
+            retry=retry_if_exception(is_retryable_llm_exception),
+            reraise=True,
+        ):
+            with attempt:
+                if self.debug_dump_after_s is not None:
+                    faulthandler.dump_traceback_later(
+                        self.debug_dump_after_s, repeat=False, exit=False
+                    )
+                try:
+                    graph = self._call_backend(text, cache_key=cache_key, kind=kind)
+                finally:
+                    if self.debug_dump_after_s is not None:
+                        faulthandler.cancel_dump_traceback_later()
+        assert graph is not None
+        return graph
+
     def extract(self, text: str, kind: str = "graph") -> Graph:
         """Extract a graph from a single text, using the disk cache.
 
@@ -815,33 +890,27 @@ class KGExtractor:
 
         start = time.perf_counter()
         graph: Graph | None = None
-        for attempt in Retrying(
-            # ``0`` means retry transient provider failures until the outer
-            # DataSphere wall-time limit.  Completed graph calls are flushed
-            # atomically, so an interrupted Job resumes from cache.
-            stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
-            # Vertex's public on-demand pool can return 429 for several
-            # minutes.  Cap the exponential wait so a large retry budget
-            # keeps polling capacity rather than sleeping past the enclosing
-            # DataSphere Job deadline.
-            wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
-            retry=retry_if_exception(is_retryable_llm_exception),
-            reraise=True,
-        ):
-            with attempt:
-                if self.debug_dump_after_s is not None:
-                    # This is intentionally timer-based rather than SIGUSR1:
-                    # the prior external signal dump occasionally segfaulted
-                    # Pydantic while we were diagnosing the local runtime.
-                    faulthandler.dump_traceback_later(
-                        self.debug_dump_after_s, repeat=False, exit=False
-                    )
-                try:
-                    graph = self._call_backend(text, cache_key=key, kind=kind)
-                finally:
-                    if self.debug_dump_after_s is not None:
-                        faulthandler.cancel_dump_traceback_later()
-        # With reraise=True, we only reach here on success, so graph is bound.
+        budgets = [self.max_tokens]
+        if self.length_retry_attempts:
+            budgets.extend([self.length_retry_max_tokens] * self.length_retry_attempts)
+        for budget_attempt, budget in enumerate(budgets, start=1):
+            try:
+                with self._temporary_output_budget(budget):
+                    graph = self._call_with_transport_retries(text, cache_key=key, kind=kind)
+                break
+            except StructuredOutputParseError as exc:
+                may_retry = is_length_truncation(exc) and budget_attempt < len(budgets)
+                self.usage.record_event(
+                    "structured_output_length_retry",
+                    kind=kind,
+                    attempt=budget_attempt,
+                    effective_max_tokens=budget,
+                    next_max_tokens=budgets[budget_attempt] if may_retry else None,
+                    retrying=may_retry,
+                    cache_key=key,
+                )
+                if not may_retry:
+                    raise
         assert graph is not None
         elapsed = time.perf_counter() - start
         self._save_cache(key, graph)

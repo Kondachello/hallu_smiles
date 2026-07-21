@@ -35,7 +35,10 @@ class HHEMNLIModel:
         from transformers import AutoModelForSequenceClassification  # lazy, heavy
 
         return AutoModelForSequenceClassification.from_pretrained(
-            self.config.model, trust_remote_code=True, revision=self.revision
+            self.config.model,
+            trust_remote_code=True,
+            revision=self.revision,
+            local_files_only=True,
         )
 
     def score_pairs(self, pairs: Sequence[tuple[str, str]]) -> list[float]:

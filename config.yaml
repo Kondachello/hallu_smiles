@@ -11,6 +11,11 @@ llm:
   temperature: 0.0
   request_timeout_s: 90              # bound local/remote LLM calls; retries remain controlled below
   max_retries: 5
+  # Production live probes may override these via their Job-local runtime config.
+  # A non-stop structured completion remains invalid; a bounded retry is allowed
+  # only when the gateway explicitly returns finish_reason="length".
+  length_retry_attempts: 0
+  length_retry_max_tokens: null
   retry_backoff_base_s: 2
   concurrency: 4                      # baseline; CPU gateway probe derives 1 in its local config
   structured_output_transport: "none" # gateway job sets native response_format

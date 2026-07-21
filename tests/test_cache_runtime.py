@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,12 +11,17 @@ import pytest
 
 from src.cache import CacheOnlyMissError, evaluation_runtime_metadata
 from src.data import Instance
-from src.dspy_adapter import StructuredOutputSchemaError
+from src.dspy_adapter import (
+    StructuredOutputParseError,
+    StructuredOutputSchemaError,
+    install_dspy_completion_guard,
+)
 from src.extract import (
     CLUSTER_EQUIVALENCE_POLICY,
     ClusteringCollapseError,
     FakeKGGen,
     KGExtractor,
+    UsageLogger,
 )
 from src.matching import SBERTEmbedder
 from src.verifier import RelationVerifier
@@ -445,3 +451,53 @@ def test_extractor_fails_fast_on_schema_error_but_retries_timeout(tmp_path):
     graph = KGExtractor(cfg, backend=transient).extract("Swiss chard after timeout")
     assert transient.calls == 3
     assert graph.relations == {("Swiss chard", "similar to", "spinach")}
+
+
+def test_extractor_retries_only_length_truncation_with_one_larger_audited_budget(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.extraction.cluster = False
+    cfg.llm.max_tokens = 8192
+    cfg.llm.length_retry_attempts = 1
+    cfg.llm.length_retry_max_tokens = 12288
+    usage_path = tmp_path / "length-retry.jsonl"
+
+    class Backend:
+        def __init__(self):
+            self.calls = 0
+            class LM:
+                def __init__(self):
+                    self.kwargs = {"max_tokens": 8192}
+                    self.responses = [
+                        {"choices": [{"finish_reason": "length", "message": {"content": "{}"}}]},
+                        {"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}]},
+                    ]
+
+                def forward(self, **kwargs):  # noqa: ARG002
+                    return self.responses.pop(0)
+
+            self.lm = LM()
+            install_dspy_completion_guard(self.lm)
+
+        def generate(self, **kwargs):  # noqa: ARG002
+            self.calls += 1
+            self.lm.forward()
+            return SimpleNamespace(
+                entities={"Swiss chard", "spinach"},
+                relations={("Swiss chard", "similar to", "spinach")},
+            )
+
+    backend = Backend()
+    graph = KGExtractor(cfg, backend=backend, usage=UsageLogger(usage_path)).extract("Swiss chard")
+    assert graph.relations == {("Swiss chard", "similar to", "spinach")}
+    assert backend.calls == 2
+    assert backend.lm.kwargs["max_tokens"] == 8192
+    events = [json.loads(line) for line in usage_path.read_text(encoding="utf-8").splitlines()]
+    assert events[0] == {
+        "event": "structured_output_length_retry",
+        "kind": "graph",
+        "attempt": 1,
+        "effective_max_tokens": 8192,
+        "next_max_tokens": 12288,
+        "retrying": True,
+        "cache_key": events[0]["cache_key"],
+    }

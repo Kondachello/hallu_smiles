@@ -1,4 +1,6 @@
 import pytest
+import sys
+from types import SimpleNamespace
 
 from graph_eval.config import NLIConfig, from_dict
 from graph_eval.nli.hhem import HHEMNLIModel, _as_floats
@@ -68,3 +70,26 @@ def test_config_requires_pinned_hhem_revision():
         from_dict({"nli": {"backend": "hhem", "revision": "main"}})  # floating tag
     cfg = from_dict({"nli": {"backend": "hhem", "revision": "abc123"}})
     assert cfg.nli.revision == "abc123"
+
+
+def test_real_loader_forces_local_files_only(monkeypatch):
+    seen = {}
+
+    class AutoModelForSequenceClassification:
+        @staticmethod
+        def from_pretrained(*args, **kwargs):
+            seen["args"] = args
+            seen["kwargs"] = kwargs
+            return object()
+
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoModelForSequenceClassification=AutoModelForSequenceClassification
+    ))
+    nli = HHEMNLIModel(NLIConfig(backend="hhem", model="/mounted/hhem", revision="pinned-sha"))
+    assert nli._default_load() is not None
+    assert seen["args"] == ("/mounted/hhem",)
+    assert seen["kwargs"] == {
+        "trust_remote_code": True,
+        "revision": "pinned-sha",
+        "local_files_only": True,
+    }

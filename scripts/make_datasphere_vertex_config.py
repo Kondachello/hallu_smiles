@@ -107,6 +107,14 @@ def main() -> None:
     # ceiling.  Use a safe ceiling and one in-flight source for the bounded
     # on-demand capacity probe.
     parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument(
+        "--length-retry-max-tokens", type=int, default=None,
+        help="one bounded KGGen retry budget after a strict finish_reason='length' rejection",
+    )
+    parser.add_argument(
+        "--length-retry-attempts", type=int, default=0,
+        help="number of bounded retries permitted only for finish_reason='length'",
+    )
     parser.add_argument("--concurrency", type=int, default=1)
     # Public/on-demand Vertex capacity can briefly return HTTP 429 even for a
     # single in-flight request.  ``0`` is deliberate: retry transient
@@ -122,6 +130,11 @@ def main() -> None:
     args = parser.parse_args()
     if args.max_tokens <= 0:
         raise ValueError("--max-tokens must be positive")
+    if args.length_retry_attempts < 0:
+        raise ValueError("--length-retry-attempts must be non-negative")
+    if args.length_retry_attempts:
+        if args.length_retry_max_tokens is None or args.length_retry_max_tokens <= args.max_tokens:
+            raise ValueError("--length-retry-max-tokens must exceed --max-tokens when retries are enabled")
     if args.concurrency <= 0:
         raise ValueError("--concurrency must be positive")
     if args.max_retries < 0:
@@ -179,6 +192,8 @@ def main() -> None:
         else computed_llm_fingerprint
     )
     llm["max_tokens"] = args.max_tokens
+    llm["length_retry_attempts"] = args.length_retry_attempts
+    llm["length_retry_max_tokens"] = args.length_retry_max_tokens if args.length_retry_attempts else None
     llm["concurrency"] = args.concurrency
     llm["max_retries"] = args.max_retries
     llm["retry_backoff_base_s"] = args.retry_backoff_base_s

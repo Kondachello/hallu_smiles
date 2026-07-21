@@ -48,8 +48,10 @@ Before submission all of these must be true:
 1. The source commit has been pushed to the selected GitHub branch. DataSphere clones
    that immutable commit, not the local worktree.
 2. CI has built the CPU runtime image for that same commit. The updated image includes
-   `openai`, the local MiniLM snapshot, and a pinned HHEM snapshot at
-   `0e7edb3689e710c52ba120086e8f91ea3ee87f23`; runtime networking to Hugging Face is
+   `openai`, the local MiniLM snapshot, a pinned HHEM snapshot at
+   `0e7edb3689e710c52ba120086e8f91ea3ee87f23`, and the HHEM custom model's required
+   pinned `google/flan-t5-base` config/tokenizer cache at
+   `d224e0d50f2fe7d975c973cf46d933e4dfaf2a3e`; runtime networking to Hugging Face is
    disabled.
 3. The Project disk contains the approved read-only RAGTruth files at
    `$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth/source_info.jsonl` and
@@ -86,6 +88,7 @@ The downloaded `ragtruth-one-instance-live-<RUN_ID>.tar.gz` contains at least:
 ```text
 live.stdout.log / live.stderr.log
 cpu-runtime.json
+hhem-offline-smoke.json
 gateway-manifest.json
 runtime_config.yaml                 # redacted: env-var name, never secret value
 runtime-config-identity.json
@@ -106,6 +109,18 @@ gateway-manifest validation, input hashes, detector construction, paired inferen
 statuses, and archive sealing. It records hashes and IDs rather than emitting a
 credential. The input and prediction artifacts can contain RAGTruth text, so handle
 the archive according to the dataset’s data-handling rules.
+
+## Structured-output truncation policy
+
+HalluGraph rejects every completion whose `finish_reason` is not `stop`; truncated
+JSON is never parsed, cached, or treated as a graph. The live runtime starts KGGen
+with `max_tokens=8192`. Only when the strict completion guard reports exactly
+`finish_reason='length'`, it retries that graph extraction once with `max_tokens=12288`.
+Other schema/parse failures still fail immediately, and transient network failures keep
+their existing bounded transport retry policy. Each length retry writes the attempt,
+current/next token budget, cache key, and outcome to
+`audit/hallugraph_extraction_attempts.jsonl`; the runtime config and token policy are
+also recorded in the paired archive audit trail.
 
 ## What local tests prove
 
