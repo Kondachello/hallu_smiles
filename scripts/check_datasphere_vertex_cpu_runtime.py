@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--python", required=True)
     parser.add_argument("--runtime-manifest", required=True)
     parser.add_argument("--embedding-path", required=True)
+    parser.add_argument("--hhem-path", required=False)
     parser.add_argument("--expected-source-commit", required=True)
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
@@ -35,6 +36,12 @@ def main() -> None:
         raise RuntimeError("CPU runtime image was built from another source commit")
     if manifest.get("embedding_path") != args.embedding_path:
         raise RuntimeError("CPU runtime embedding path mismatch")
+    if args.hhem_path is not None:
+        if manifest.get("hhem_path") != args.hhem_path:
+            raise RuntimeError("CPU runtime HHEM path mismatch")
+        hhem_path = Path(args.hhem_path)
+        if not (hhem_path / "config.json").is_file() or not (hhem_path / "model.safetensors").is_file():
+            raise RuntimeError("CPU runtime HHEM snapshot is incomplete")
     program = (
         "import json,torch; from importlib import metadata; "
         f"names={list(EXPECTED)!r}; print(json.dumps({{'versions':{{n:metadata.version(n) for n in names}},'torch_cuda':torch.version.cuda}},sort_keys=True))"

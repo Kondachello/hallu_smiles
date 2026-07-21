@@ -1,0 +1,64 @@
+# Render with scripts/render_datasphere_ragtruth_one_instance_live_probe_job.py.
+# This is the only live paired probe template: one response id, real gateway,
+# KGGen, local embeddings and local pinned HHEM. The Project injects the secret.
+name: ragtruth-one-instance-live-__RUN_ID__
+desc: One explicit RAGTruth response through real HalluGraph and GraphEval with a sealed audit archive.
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export RUN_ROOT="$PWD/ragtruth-one-instance-live-artifacts/__RUN_ID__";
+  mkdir -p "$RUN_ROOT";
+  git init source;
+  git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
+  git -C source fetch --depth 1 origin __GIT_COMMIT__;
+  git -C source checkout --detach FETCH_HEAD;
+  actual_commit="$(git -C source rev-parse HEAD)";
+  test "$actual_commit" = "__GIT_COMMIT__";
+  export EXPECTED_SOURCE_COMMIT="__GIT_COMMIT__";
+  export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
+  export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
+  export HALLU_GATEWAY_URL="__GATEWAY_URL__";
+  export RESPONSE_ID_B64="__RESPONSE_ID_B64__";
+  export RESPONSE_ID="$(printf %s "$RESPONSE_ID_B64" | base64 -d)";
+  export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  printf "[artifact] output=%s\n" "$ARCHIVE_PATH";
+  archive_ready=0;
+  archive_artifacts() {
+    if test "$archive_ready" = 1; then return 0; fi;
+    tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")";
+    tar -tzf "$ARCHIVE_PATH" >/dev/null;
+    test -s "$ARCHIVE_PATH";
+    chmod a+r "$ARCHIVE_PATH";
+    archive_ready=1;
+  };
+  archive_on_exit() {
+    status=$?;
+    trap - EXIT;
+    if ! archive_artifacts; then
+      echo "failed to create a readable live-probe artifact" >&2;
+      if test "$status" -eq 0; then status=1; fi;
+    fi;
+    if test -f "$RUN_ROOT/live.stdout.log"; then echo "[diagnostics] live stdout tail"; tail -n 320 "$RUN_ROOT/live.stdout.log" || true; fi;
+    if test -f "$RUN_ROOT/live.stderr.log"; then echo "[diagnostics] live stderr tail"; tail -n 320 "$RUN_ROOT/live.stderr.log" || true; fi;
+    exit "$status";
+  };
+  trap archive_on_exit EXIT;
+  set +e;
+  timeout --signal=TERM --kill-after=60s 3600 bash source/scripts/run_datasphere_ragtruth_one_instance_live_probe.sh >"$RUN_ROOT/live.stdout.log" 2>"$RUN_ROOT/live.stderr.log";
+  status=$?;
+  set -e;
+  if ! archive_artifacts; then status=1; fi;
+  exit "$status"'
+env:
+__DOCKER_ENV_BLOCK__
+outputs:
+  - ragtruth-one-instance-live-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+flags:
+  - attach-project-disk
+cloud-instance-types:
+  - c1.4
+working-storage:
+  type: SSD
+  size: 100Gb
+graceful-shutdown:
+  signal: SIGTERM
+  timeout: 60s

@@ -37,6 +37,11 @@ class GatewayExtractor:
         from openai import OpenAI  # lazy, optional dependency
 
         base_url = os.environ[self.config.api_base_env].rstrip("/")
+        # DataSphere exposes HALLU_GATEWAY_URL as a Cloud Run *origin*.  OpenAI's
+        # client needs the OpenAI-compatible API root.  Accept an already-complete
+        # endpoint as well so local explicit configs remain backward compatible.
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
         return OpenAI(base_url=base_url, api_key=os.environ[self.config.api_key_env])
 
     def _call_kwargs(self) -> dict:

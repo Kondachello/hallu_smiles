@@ -24,11 +24,16 @@ def main() -> None:
     parser.add_argument("--client-python", required=True)
     parser.add_argument("--embedding-path", required=True)
     parser.add_argument("--embedding-revision", required=True)
+    parser.add_argument("--hhem-path", required=True)
+    parser.add_argument("--hhem-revision", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     embedding = Path(args.embedding_path)
     if not (embedding / "config.json").is_file():
         raise SystemExit(f"incomplete embedding snapshot: {embedding}")
+    hhem = Path(args.hhem_path)
+    if not (hhem / "config.json").is_file() or not (hhem / "model.safetensors").is_file():
+        raise SystemExit(f"incomplete HHEM snapshot: {hhem}")
     program = (
         "import json,platform,torch; from importlib import metadata; "
         "print(json.dumps({'python':platform.python_version(),'torch':torch.__version__,"
@@ -47,6 +52,9 @@ def main() -> None:
         "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
         "embedding_revision": args.embedding_revision,
         "embedding_path": str(embedding),
+        "hhem_model": "vectara/hallucination_evaluation_model",
+        "hhem_revision": args.hhem_revision,
+        "hhem_path": str(hhem),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["runtime_fingerprint"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

@@ -5,6 +5,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG SOURCE_COMMIT=__GIT_COMMIT__
 ARG SOURCE_ROOT=https://raw.githubusercontent.com/Kondachello/hallu_smiles
 ARG EMBEDDING_REVISION=1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+ARG HHEM_REVISION=0e7edb3689e710c52ba120086e8f91ea3ee87f23
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git bash coreutils tar gzip gcc \
@@ -22,6 +23,7 @@ RUN python -m venv /opt/hallu/client \
     && /opt/hallu/client/bin/python -c "import torch; assert torch.__version__ == '2.6.0+cpu'; assert torch.version.cuda is None"
 
 RUN /opt/hallu/client/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='sentence-transformers/all-MiniLM-L6-v2', revision='$EMBEDDING_REVISION', local_dir='/opt/hallu/models/all-MiniLM-L6-v2', allow_patterns=['config.json','config_sentence_transformers.json','modules.json','sentence_bert_config.json','model.safetensors','tokenizer.json','tokenizer_config.json','special_tokens_map.json','vocab.txt','1_Pooling/*'])" \
+    && /opt/hallu/client/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='vectara/hallucination_evaluation_model', revision='$HHEM_REVISION', local_dir='/opt/hallu/models/hhem-2.1-open')" \
     && /opt/hallu/client/bin/python -m pip freeze --all | LC_ALL=C sort > /opt/hallu/manifests/client.freeze.txt \
     && /opt/hallu/client/bin/python /opt/hallu/build/write_cpu_vertex_runtime_manifest.py \
        --source-commit "$SOURCE_COMMIT" \
@@ -29,6 +31,8 @@ RUN /opt/hallu/client/bin/python -c "from huggingface_hub import snapshot_downlo
        --client-python /opt/hallu/client/bin/python \
        --embedding-path /opt/hallu/models/all-MiniLM-L6-v2 \
        --embedding-revision "$EMBEDDING_REVISION" \
+       --hhem-path /opt/hallu/models/hhem-2.1-open \
+       --hhem-revision "$HHEM_REVISION" \
        --output /opt/hallu/runtime-manifest.json \
     && chmod -R a+rX /opt/hallu
 
