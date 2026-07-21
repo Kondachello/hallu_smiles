@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never, wait_exponential
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .dspy_adapter import (
@@ -33,6 +33,7 @@ from .dspy_adapter import (
     is_retryable_llm_exception,
     structured_output_settings,
 )
+from .retry import WaitRetryAfterOrExponentialJitter
 
 
 # --------------------------------------------------------------------------------------
@@ -103,6 +104,10 @@ class UsageLogger:
         self.cost = 0.0
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        self.retries = 0
+        self.retry_reasons: dict[str, int] = {}
+        self._emitted_prompt_tokens = 0
+        self._emitted_completion_tokens = 0
         self._litellm_hooked = False
         self._lock = threading.Lock()
         if self.path:
@@ -146,6 +151,10 @@ class UsageLogger:
             self.total_requests += 1
             self.cache_hits += int(cached)
             self.calls += 0 if cached else 1
+            prompt_tokens = self.prompt_tokens - self._emitted_prompt_tokens
+            completion_tokens = self.completion_tokens - self._emitted_completion_tokens
+            self._emitted_prompt_tokens = self.prompt_tokens
+            self._emitted_completion_tokens = self.completion_tokens
             if not self.path:
                 return
             with open(self.path, "a", encoding="utf-8") as f:
@@ -153,6 +162,31 @@ class UsageLogger:
                     "kind": kind, "cache_key": cache_key, "seconds": round(seconds, 4),
                     "cached": cached, "cum_calls": self.calls,
                     "cum_requests": self.total_requests, "cum_cache_hits": self.cache_hits,
+                    "cum_retries": self.retries,
+                    "cum_cost_usd": round(self.cost, 6),
+                    "cum_prompt_tokens": self.prompt_tokens,
+                    "cum_completion_tokens": self.completion_tokens,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                }) + "\n")
+
+    def record_retry(self, kind: str, exc: BaseException) -> None:
+        """Persist an aggregate-safe retry event without prompts or responses."""
+        status = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        if status is None and response is not None:
+            status = getattr(response, "status_code", None)
+        reason = f"http_{status}" if status is not None else type(exc).__name__
+        with self._lock:
+            self.retries += 1
+            self.retry_reasons[reason] = self.retry_reasons.get(reason, 0) + 1
+            if not self.path:
+                return
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "kind": kind, "event": "retry", "retry_reason": reason,
+                    "cum_calls": self.calls, "cum_requests": self.total_requests,
+                    "cum_cache_hits": self.cache_hits, "cum_retries": self.retries,
                     "cum_cost_usd": round(self.cost, 6),
                     "cum_prompt_tokens": self.prompt_tokens,
                     "cum_completion_tokens": self.completion_tokens,
@@ -165,6 +199,8 @@ class UsageLogger:
             "cache_hits": self.cache_hits,
             "cache_hit_rate": round(self.cache_hits / self.total_requests, 6)
             if self.total_requests else 0.0,
+            "retries": self.retries,
+            "retry_reasons": dict(sorted(self.retry_reasons.items())),
             "estimated_cost_usd": round(self.cost, 6),
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
@@ -842,12 +878,13 @@ class KGExtractor:
             # DataSphere wall-time limit.  Completed graph calls are flushed
             # atomically, so an interrupted Job resumes from cache.
             stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
-            # Vertex's public on-demand pool can return 429 for several
-            # minutes.  Cap the exponential wait so a large retry budget
-            # keeps polling capacity rather than sleeping past the enclosing
-            # DataSphere Job deadline.
-            wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
+            # Honour gateway Retry-After where supplied and otherwise use
+            # bounded full-jitter exponential backoff to avoid a quota herd.
+            wait=WaitRetryAfterOrExponentialJitter(self.backoff_base, self.backoff_max),
             retry=retry_if_exception(is_retryable_llm_exception),
+            before_sleep=lambda state: self.usage.record_retry(
+                kind, state.outcome.exception()
+            ),
             reraise=True,
         ):
             with attempt:

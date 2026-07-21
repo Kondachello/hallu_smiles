@@ -33,7 +33,13 @@ def main() -> None:
     parser.add_argument("--qa-test-fraction", default="0.2")
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--concurrency", type=int, default=1)
-    parser.add_argument("--timeout-seconds", type=int, default=43200)
+    parser.add_argument(
+        "--timeout-seconds", type=int, default=0,
+        help=(
+            "optional in-container wall-time ceiling; 0 lets DataSphere own the deadline "
+            "so persistent caches can resume after platform interruption"
+        ),
+    )
     image = parser.add_mutually_exclusive_group(required=True)
     image.add_argument("--docker-image-id")
     image.add_argument("--docker-image")
@@ -52,8 +58,8 @@ def main() -> None:
         raise SystemExit("--cv-folds must be between 2 and the selected train source count")
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be positive")
-    if args.timeout_seconds < 60:
-        raise SystemExit("--timeout-seconds must be at least 60")
+    if args.timeout_seconds < 0 or 0 < args.timeout_seconds < 60:
+        raise SystemExit("--timeout-seconds must be 0 or at least 60")
     try:
         gateway_url = _gateway_url(args.gateway_url)
         runtime_image = args.docker_image_id or args.docker_image
@@ -61,6 +67,14 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     docker_block = f"  docker: {runtime_image}" if args.docker_image_id else f"  docker:\n    image: {runtime_image}"
+    run_command = (
+        "bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh"
+        if args.timeout_seconds == 0
+        else (
+            "timeout --signal=TERM --kill-after=60s "
+            f"{args.timeout_seconds} bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh"
+        )
+    )
     rendered = TEMPLATE.read_text(encoding="utf-8")
     rendered = (rendered.replace("__GIT_COMMIT__", args.commit).replace("__RUN_ID__", args.run_id)
         .replace("__GATEWAY_URL__", gateway_url).replace("__DOCKER_IMAGE_ID__", runtime_image)
@@ -69,7 +83,7 @@ def main() -> None:
         .replace("__QA_TEST_FRACTION__", str(args.qa_test_fraction))
         .replace("__QA_CV_FOLDS__", str(args.cv_folds))
         .replace("__LLM_CONCURRENCY__", str(args.concurrency))
-        .replace("__JOB_TIMEOUT_SECONDS__", str(args.timeout_seconds))
+        .replace("__JOB_RUN_COMMAND__", run_command)
         .replace("__DOCKER_ENV_BLOCK__", docker_block))
     if "__" in rendered:
         raise RuntimeError("unresolved Job template placeholder")

@@ -27,6 +27,14 @@ def main() -> None:
     parser.add_argument("--sample-seed", type=int, default=42)
     parser.add_argument("--manifest-output", required=True)
     parser.add_argument("--report", required=True)
+    parser.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help=(
+            "record cold graph keys without failing; use only before the initial "
+            "read-through cache-fill run, never for a cache-only replay"
+        ),
+    )
     args = parser.parse_args()
 
     train_sources, test_sources = qa_sample_quotas(
@@ -67,7 +75,7 @@ def main() -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, sort_keys=True))
-    if report["status"] != "ready":
+    if report["status"] != "ready" and not args.allow_missing:
         raise SystemExit(
             "historical KG cache preflight failed: "
             f"{report['missing_count']} required graph entries are unavailable"

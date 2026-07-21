@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never, wait_exponential
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .config import resolve_api_key
@@ -30,6 +30,7 @@ from .dspy_adapter import (
     validate_json_document,
 )
 from .matching import normalize
+from .retry import WaitRetryAfterOrExponentialJitter
 
 
 VERDICTS = frozenset({"entailed", "contradicted", "unknown"})
@@ -185,6 +186,8 @@ class RelationVerifier:
         self.prompt_version = str(verifier_cfg.prompt_version)
         self.stopwords = set(getattr(cfg.matching, "stopwords", []) or [])
         self.cache_dir = Path(verifier_cfg.cache_dir)
+        raw_read_dirs = config_value(verifier_cfg, "cache_read_dirs", []) or []
+        self.cache_read_dirs = [Path(str(path)) for path in raw_read_dirs]
         self.cache_only = bool(cache_only)
         if not self.cache_only:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -223,8 +226,13 @@ class RelationVerifier:
                 # ``0`` delegates the final deadline to the enclosing Job and
                 # keeps polling Vertex after transient 429/5xx responses.
                 stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
-                wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
+                wait=WaitRetryAfterOrExponentialJitter(self.backoff_base, self.backoff_max),
                 retry=retry_if_exception(is_retryable_llm_exception),
+                before_sleep=(
+                    (lambda state: self.usage.record_retry(
+                        "relation_verifier", state.outcome.exception()
+                    )) if self.usage is not None else (lambda state: None)
+                ),
                 reraise=True,
             ):
                 with attempt:
@@ -330,13 +338,18 @@ class RelationVerifier:
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
     def _load_cache(self, key: str) -> str | None:
-        path = self.cache_dir / f"{key}.json"
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            verdict = payload.get("verdict")
-            return verdict if verdict in VERDICTS else None
-        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
-            return None
+        # Historical support-verdict namespaces are immutable read-through
+        # inputs.  A malformed primary entry must not hide a compatible,
+        # validated verdict in a later root.
+        for root in [self.cache_dir, *self.cache_read_dirs]:
+            try:
+                payload = json.loads((root / f"{key}.json").read_text(encoding="utf-8"))
+                verdict = payload.get("verdict")
+                if verdict in VERDICTS:
+                    return verdict
+            except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+                continue
+        return None
 
     def _save_cache(self, key: str, verdict: str) -> None:
         dest = self.cache_dir / f"{key}.json"

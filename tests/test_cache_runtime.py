@@ -343,6 +343,31 @@ def test_verifier_cache_only_replays_and_runtime_change_is_a_miss(tmp_path):
         )
 
 
+def test_verifier_reads_historical_verdict_after_corrupt_primary(tmp_path):
+    cfg = _cfg(tmp_path)
+
+    class StubVerifier(RelationVerifier):
+        def _call_llm(self, triple, evidence):  # noqa: ARG002
+            return "entailed"
+
+    triple = ("France", "has capital", "Paris")
+    context = "France has capital Paris."
+    historical = tmp_path / "historical-verdicts"
+    writer_cfg = copy.deepcopy(cfg)
+    writer_cfg.relation_verifier.cache_dir = str(historical)
+    StubVerifier(writer_cfg).verify(triple, context, None, matching_params={"tau_e": 0.9})
+
+    reader_cfg = copy.deepcopy(cfg)
+    reader_cfg.relation_verifier.cache_read_dirs = [str(historical)]
+    # Use the real cached key rather than trusting a primary file to exist.
+    cached_path = next(historical.glob("*.json"))
+    (tmp_path / "verdicts").mkdir(exist_ok=True)
+    (tmp_path / "verdicts" / cached_path.name).write_text("{not-json", encoding="utf-8")
+    replay = RelationVerifier(reader_cfg, cache_only=True)
+    result = replay.verify(triple, context, None, matching_params={"tau_e": 0.9})
+    assert result.verdict == "entailed" and result.cache_hit is True
+
+
 def test_sbert_uses_staged_path_on_cpu_without_hub_access(monkeypatch):
     captured = {}
 

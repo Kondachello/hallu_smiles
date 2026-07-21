@@ -44,7 +44,9 @@ cmd: >-
   };
   trap archive_on_exit EXIT;
   set +e;
-  timeout --signal=TERM --kill-after=60s __JOB_TIMEOUT_SECONDS__ bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh >"$RUN_ROOT/qa.stdout.log" 2>"$RUN_ROOT/qa.stderr.log";
+  # No arbitrary in-container watchdog: DataSphere controls any platform deadline,
+  # while each completed content-addressed entry is persisted for a safe resume.
+  __JOB_RUN_COMMAND__ >"$RUN_ROOT/qa.stdout.log" 2>"$RUN_ROOT/qa.stderr.log";
   status=$?;
   set -e;
   if ! archive_artifacts; then status=1; fi;

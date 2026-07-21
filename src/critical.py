@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence, TypeVar
 
 import numpy as np
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never, wait_exponential
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .config import resolve_api_key
@@ -33,6 +33,7 @@ from .dspy_adapter import (
     validate_json_document,
 )
 from .matching import Embedder, normalize
+from .retry import WaitRetryAfterOrExponentialJitter
 from .verifier import EvidenceSpan, _sentences
 
 
@@ -518,8 +519,13 @@ class _CachedComponent:
             # until the outer DataSphere wall-time deadline. Each completed
             # artifact is atomically cached before the next claim begins.
             stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
-            wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
+            wait=WaitRetryAfterOrExponentialJitter(self.backoff_base, self.backoff_max),
             retry=retry_if_exception(should_retry),
+            before_sleep=(
+                (lambda state: self.usage.record_retry(
+                    self.component, state.outcome.exception()
+                )) if self.usage is not None else (lambda state: None)
+            ),
             reraise=True,
         ):
             with attempt:

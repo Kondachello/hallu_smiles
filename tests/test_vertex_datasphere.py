@@ -72,11 +72,15 @@ def test_vertex_runtime_config_keeps_historical_kg_reads_separate_from_writes(tm
         "--gateway-url", "https://gateway.example.run.app", "--datasphere-runtime-manifest", str(runtime),
         "--output", str(output), "--data-dir", "/read-only/ragtruth", "--work-dir", str(tmp_path / "work"),
         "--cache-root", str(tmp_path / "new-cache"), "--kg-cache-read-dir", str(historical),
+        "--relation-cache-read-dir", str(tmp_path / "historical-verdicts"),
         "--critical-cache-read-root", str(critical_historical),
     ], check=True)
     cfg = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert cfg["cache_dir"] == str(tmp_path / "new-cache" / "kg")
     assert cfg["cache_read_dirs"] == [str(historical)]
+    assert cfg["relation_verifier"]["cache_read_dirs"] == [
+        str(tmp_path / "historical-verdicts")
+    ]
     for namespace in ("critical_claims", "critical_coverage", "critical_verdicts"):
         section = {
             "critical_claims": "claim_extractor",
@@ -244,6 +248,7 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     subprocess.run([sys.executable, str(SCRIPTS / "validate_datasphere_job.py"), "--job", str(rendered), "--repo-root", str(ROOT)], check=True)
     runner = (SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh").read_text(encoding="utf-8")
     assert "preflight_datasphere_kg_cache.py" in runner
+    assert "--allow-missing" in runner
     assert "historical_kg_cache_lineages.json" in runner
     assert "--llm-runtime-fingerprint-override \"$HISTORICAL_LLM_RUNTIME_FINGERPRINT\"" in runner
     assert "--qa-manifest \"$QA_MANIFEST\"" in runner
@@ -258,16 +263,37 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "--cache-root \"$BASELINE_CACHE_ROOT\"" in runner
     assert "--cache-root \"$CRITICAL_CACHE_ROOT\"" in runner
     assert "--kg-cache-read-dir \"$BASELINE_CACHE_ROOT/kg\"" in runner
+    assert "--kg-cache-read-dir \"$HISTORICAL_BASELINE_CACHE_ROOT/kg\"" in runner
+    assert "--relation-cache-read-dir \"$HISTORICAL_BASELINE_CACHE_ROOT/verdicts\"" in runner
     assert "--critical-cache-read-root" in runner
     assert "support-critical-v1-${GATEWAY_MANIFEST_SHA256}" in runner
     assert "check_support_critical_gateway_probe.py" in runner
     assert "preflight_support_critical_resilience.py" in runner
     assert 'hallu-vertex-qa-support-critical-checkpoint-v1' in runner
     assert "support-critical-live-usage.jsonl" in runner
-    assert "cmp \"$STRICT_OUT/metrics.csv\" \"$REPLAY_STRICT/metrics.csv\"" in runner
-    assert "cmp \"$CRITICAL_OUT/metrics.csv\" \"$REPLAY_CRITICAL/metrics.csv\"" in runner
+    assert "strict-cache-fill-usage.jsonl" in runner
+    assert "support-cache-fill-usage.jsonl" in runner
+    assert "cache-before-replay.sha256" in runner
+    assert "summary_metrics.csv" in runner
+    assert "scored.jsonl" in runner
     assert "vllm" not in runner.lower()
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh")], check=True)
+
+
+def test_cpu_vertex_qa_job_defaults_to_platform_deadline_for_resumable_long_runs(tmp_path):
+    rendered = tmp_path / "vertex-1000qa.yaml"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_qa_pilot_job.py"),
+        "--commit", "f" * 40, "--run-id", "vertex-1000qa-20260721",
+        "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--docker-image", IMAGE,
+        "--qa-sample-size", "1000", "--qa-test-fraction", "0.2", "--cv-folds", "5",
+        "--concurrency", "1", "--output", str(rendered),
+    ], check=True)
+    command = str(yaml.safe_load(rendered.read_text(encoding="utf-8"))["cmd"])
+    assert 'QA_SAMPLE_SIZE="1000"' in command
+    assert "timeout --signal=TERM" not in command
+    assert "bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh" in command
 
 
 def test_cpu_dockerfile_is_pinned_and_has_no_llama_or_vllm(tmp_path):

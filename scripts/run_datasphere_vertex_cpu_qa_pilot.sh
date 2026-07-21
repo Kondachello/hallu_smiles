@@ -115,26 +115,41 @@ test "$GATEWAY_MANIFEST_SHA256" = "$EXPECTED_GATEWAY_MANIFEST_SHA256" || {
   echo "gateway manifest changed since the successful 3-QA gate" >&2
   exit 2
 }
-CHECKPOINT_BASE="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa/qa-${QA_SAMPLE_SIZE}-test-${QA_TEST_SOURCES}-cv-${QA_CV_FOLDS}"
-# Historical 100-QA caches predate this source commit. They are read-only input
-# artifacts. A runtime-image rebuild must not accidentally turn an otherwise
-# identical model/gateway/extraction cache into a miss, so resolve an explicit
-# recorded lineage and prove every C/Q/A key before the main pipeline starts.
-test -d "$CHECKPOINT_BASE" || {
-  echo "Historical QA checkpoint base is absent: $CHECKPOINT_BASE" >&2
-  exit 2
-}
+# Every sample gets a writable primary cache namespace.  Compatible historical
+# namespaces are read-only inputs, so an initial larger manifest fills only its
+# missing content-addressed entries and a later replay can run fully offline.
+CHECKPOINT_PARENT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa"
+CHECKPOINT_BASE="$CHECKPOINT_PARENT/qa-${QA_SAMPLE_SIZE}-test-${QA_TEST_SOURCES}-cv-${QA_CV_FOLDS}"
+BASELINE_PROTOCOL_NAMESPACE="baseline-v1-${GATEWAY_MANIFEST_SHA256}"
+BASELINE_CACHE_ROOT="$CHECKPOINT_BASE/$BASELINE_PROTOCOL_NAMESPACE"
+mkdir -p "$BASELINE_CACHE_ROOT/kg" "$BASELINE_CACHE_ROOT/verdicts"
+
+# Resolve a historical graph/verdict lineage independently of its manifest
+# size. Cache keys are content-addressed and include the validated gateway and
+# recorded runtime fingerprint, so the 100-QA lineage is safe read-through
+# input for a 1000-QA primary namespace without being modified.
 mapfile -t BASELINE_CANDIDATES < <(
-  find "$CHECKPOINT_BASE" -mindepth 1 -maxdepth 1 -type d -name "*-${GATEWAY_MANIFEST_SHA256}" -print 2>/dev/null | sort
+  find "$CHECKPOINT_PARENT" -mindepth 2 -maxdepth 2 -type d -name "*-${GATEWAY_MANIFEST_SHA256}" -print 2>/dev/null | sort
 )
 VALID_BASELINE_CANDIDATES=()
 for candidate in "${BASELINE_CANDIDATES[@]}"; do
   test -d "$candidate/kg" && test -d "$candidate/verdicts" && test -f "$candidate/checkpoint-identity.json" || continue
+  read -r candidate_total candidate_train candidate_test candidate_folds < <("$CLIENT_PYTHON" - "$candidate/checkpoint-identity.json" <<'PY'
+import json
+import sys
+
+sample = json.load(open(sys.argv[1], encoding='utf-8')).get('qa_sample', {})
+try:
+    print(int(sample['total']), int(sample['train']), int(sample['test']), int(sample['alpha_cv_folds']))
+except (KeyError, TypeError, ValueError):
+    raise SystemExit(2)
+PY
+)
   if "$CLIENT_PYTHON" "$ROOT/scripts/resolve_datasphere_historical_cache_lineage.py" \
     --lineages "$ROOT/datasphere/historical_kg_cache_lineages.json" \
     --checkpoint-identity "$candidate/checkpoint-identity.json" \
     --runtime-manifest "$RUNTIME_MANIFEST" --gateway-manifest-sha256 "$GATEWAY_MANIFEST_SHA256" \
-    --qa-total "$QA_SAMPLE_SIZE" --qa-train "$QA_TRAIN_SOURCES" --qa-test "$QA_TEST_SOURCES" --cv-folds "$QA_CV_FOLDS" \
+    --qa-total "$candidate_total" --qa-train "$candidate_train" --qa-test "$candidate_test" --cv-folds "$candidate_folds" \
     --output "$RUN_ROOT/.candidate-historical-lineage.json" >/dev/null 2>&1; then
     VALID_BASELINE_CANDIDATES+=("$candidate")
   fi
@@ -144,12 +159,20 @@ if (( ${#VALID_BASELINE_CANDIDATES[@]} != 1 )); then
   printf 'candidates checked: %s\\n' "${BASELINE_CANDIDATES[*]:-none}" >&2
   exit 2
 fi
-BASELINE_CACHE_ROOT="${VALID_BASELINE_CANDIDATES[0]}"
+HISTORICAL_BASELINE_CACHE_ROOT="${VALID_BASELINE_CANDIDATES[0]}"
+read -r HISTORICAL_QA_TOTAL HISTORICAL_QA_TRAIN HISTORICAL_QA_TEST HISTORICAL_QA_CV_FOLDS < <("$CLIENT_PYTHON" - "$HISTORICAL_BASELINE_CACHE_ROOT/checkpoint-identity.json" <<'PY'
+import json
+import sys
+
+sample = json.load(open(sys.argv[1], encoding='utf-8'))['qa_sample']
+print(int(sample['total']), int(sample['train']), int(sample['test']), int(sample['alpha_cv_folds']))
+PY
+)
 "$CLIENT_PYTHON" "$ROOT/scripts/resolve_datasphere_historical_cache_lineage.py" \
   --lineages "$ROOT/datasphere/historical_kg_cache_lineages.json" \
-  --checkpoint-identity "$BASELINE_CACHE_ROOT/checkpoint-identity.json" \
+  --checkpoint-identity "$HISTORICAL_BASELINE_CACHE_ROOT/checkpoint-identity.json" \
   --runtime-manifest "$RUNTIME_MANIFEST" --gateway-manifest-sha256 "$GATEWAY_MANIFEST_SHA256" \
-  --qa-total "$QA_SAMPLE_SIZE" --qa-train "$QA_TRAIN_SOURCES" --qa-test "$QA_TEST_SOURCES" --cv-folds "$QA_CV_FOLDS" \
+  --qa-total "$HISTORICAL_QA_TOTAL" --qa-train "$HISTORICAL_QA_TRAIN" --qa-test "$HISTORICAL_QA_TEST" --cv-folds "$HISTORICAL_QA_CV_FOLDS" \
   --output "$HISTORICAL_LINEAGE"
 HISTORICAL_LLM_RUNTIME_FINGERPRINT="$("$CLIENT_PYTHON" - "$HISTORICAL_LINEAGE" <<'PY'
 import json
@@ -171,14 +194,22 @@ if test -d "$CHECKPOINT_BASE/support-critical"; then
     CRITICAL_CACHE_READ_ARGS+=(--critical-cache-read-root "$previous_critical_root")
   done < <(find "$CHECKPOINT_BASE/support-critical" -mindepth 1 -maxdepth 1 -type d -name "*-${GATEWAY_MANIFEST_SHA256}" -print 2>/dev/null | sort)
 fi
+HISTORICAL_SAMPLE_ROOT="$(dirname "$HISTORICAL_BASELINE_CACHE_ROOT")"
+if test -d "$HISTORICAL_SAMPLE_ROOT/support-critical"; then
+  while IFS= read -r previous_critical_root; do
+    CRITICAL_CACHE_READ_ARGS+=(--critical-cache-read-root "$previous_critical_root")
+  done < <(find "$HISTORICAL_SAMPLE_ROOT/support-critical" -mindepth 1 -maxdepth 1 -type d -name "*-${GATEWAY_MANIFEST_SHA256}" -print 2>/dev/null | sort)
+fi
 CHECKPOINT_ROOT="$CRITICAL_CACHE_ROOT"
 mkdir -p "$CRITICAL_CACHE_ROOT/kg" "$CRITICAL_CACHE_ROOT/critical_claims" \
   "$CRITICAL_CACHE_ROOT/critical_coverage" "$CRITICAL_CACHE_ROOT/critical_verdicts"
-"$CLIENT_PYTHON" - "$CRITICAL_CACHE_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" "$BASELINE_CACHE_ROOT" "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" <<'PY'
+"$CLIENT_PYTHON" - "$CRITICAL_CACHE_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" "$HISTORICAL_BASELINE_CACHE_ROOT" "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
-Path(sys.argv[1]).write_text(json.dumps({
+path = Path(sys.argv[1])
+payload = {
     'source_commit': sys.argv[2],
     'gateway_manifest_sha256': sys.argv[3],
     'qa_sample': {
@@ -191,13 +222,24 @@ Path(sys.argv[1]).write_text(json.dumps({
     'historical_llm_runtime_fingerprint': sys.argv[9],
     'critical_protocol_namespace': 'support-critical-v1',
     'protocol': 'hallu-vertex-qa-support-critical-checkpoint-v1',
-}, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+}
+if path.exists():
+    existing = json.loads(path.read_text(encoding='utf-8'))
+    for key in ('gateway_manifest_sha256', 'qa_sample', 'historical_baseline_cache_root', 'historical_llm_runtime_fingerprint', 'critical_protocol_namespace', 'protocol'):
+        if existing.get(key) != payload[key]:
+            raise SystemExit(f'critical checkpoint identity mismatch for {key}')
+else:
+    tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    os.replace(tmp, path)
 PY
 
 "$CLIENT_PYTHON" "$ROOT/scripts/make_datasphere_vertex_config.py" \
   --base-config "$ROOT/config.yaml" --gateway-manifest "$GATEWAY_MANIFEST" \
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$BASELINE_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$BASELINE_CACHE_ROOT" \
+  --kg-cache-read-dir "$HISTORICAL_BASELINE_CACHE_ROOT/kg" \
+  --relation-cache-read-dir "$HISTORICAL_BASELINE_CACHE_ROOT/verdicts" \
   --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
   --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 0 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
@@ -207,19 +249,21 @@ PY
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$CRITICAL_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$CRITICAL_CACHE_ROOT" \
   --kg-cache-read-dir "$BASELINE_CACHE_ROOT/kg" \
+  --kg-cache-read-dir "$HISTORICAL_BASELINE_CACHE_ROOT/kg" \
   --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
   "${CRITICAL_CACHE_READ_ARGS[@]}" \
   --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 0 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/critical-runtime-config-identity.json"
 
-# Generate the same deterministic manifest as the original 100-QA run, then
-# validate every graph lookup serially. A bad lineage now fails here—before
-# threaded extraction, metric tuning, or any new Vertex claim-verifier call.
+# Generate the deterministic manifest before any live inference. The first
+# larger run deliberately allows misses here: historical roots serve the
+# existing content hits and the strict baseline below atomically fills only the
+# remaining KG keys in this run's primary namespace.
 "$CLIENT_PYTHON" "$ROOT/scripts/preflight_datasphere_kg_cache.py" \
   --config "$BASELINE_CONFIG" --data-dir "$DATA_DIR" \
   --qa-sample-size "$QA_SAMPLE_SIZE" --qa-test-fraction "$QA_TEST_FRACTION" \
-  --manifest-output "$QA_MANIFEST" --report "$KG_CACHE_PREFLIGHT"
+  --manifest-output "$QA_MANIFEST" --report "$KG_CACHE_PREFLIGHT" --allow-missing
 
 # Check every selected answer's deterministic segmentation and no-network
 # fallback offsets before asking Vertex anything. This catches code/config
@@ -253,31 +297,29 @@ PY
   }
 }
 
-# The current manifest must resolve exclusively through the historical graph
-# cache.  A cache miss fails immediately rather than silently re-extracting.
-"$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage extract \
-  --relation-mode strict --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$STRICT_OUT" --cache-only
-require_complete_extraction "$STRICT_OUT" "$QA_SAMPLE_SIZE"
-mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-extraction-cache-usage.jsonl"
-
+# Fill the primary KG cache read-through from the validated historical root.
+# Strict has no text-verifier calls, so this stage can make only the required
+# KGGen requests for cold content and preserves the historical root unchanged.
+find "$HISTORICAL_BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-before.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode strict --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$STRICT_OUT" --cache-only
+  --output-dir "$STRICT_OUT"
 require_complete_extraction "$STRICT_OUT" "$QA_SAMPLE_SIZE"
-mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-baseline-cache-usage.jsonl"
+mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-cache-fill-usage.jsonl"
 
-find "$BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-before.sha256"
+# Historical support verdicts are also read-through. New text-verdict entries
+# are written only to the primary 1000-QA namespace.
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode support --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$SUPPORT_OUT" --cache-only
+  --output-dir "$SUPPORT_OUT"
 require_complete_extraction "$SUPPORT_OUT" "$QA_SAMPLE_SIZE"
-mv "$SUPPORT_OUT/usage.jsonl" "$RUN_ROOT/support-baseline-cache-usage.jsonl"
-find "$BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-after-baseline.sha256"
+mv "$SUPPORT_OUT/usage.jsonl" "$RUN_ROOT/support-cache-fill-usage.jsonl"
+find "$HISTORICAL_BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-after-baseline.sha256"
 cmp "$RUN_ROOT/historical-cache-before.sha256" "$RUN_ROOT/historical-cache-after-baseline.sha256"
 
-# Only this stage is allowed to make new Vertex calls: claims, adversarial
-# coverage, and four-way evidence verdicts.  KGGen remains cache-only.
+# KGGen is now fully warm in the primary/read-through baseline cache. This
+# stage permits only the support-critical claim, coverage, and four-way
+# evidence components to make live gateway calls.
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$CRITICAL_CONFIG" --stage all \
   --relation-mode support-critical --qa-manifest "$QA_MANIFEST" \
   --output-dir "$CRITICAL_OUT" --kg-cache-only
@@ -290,7 +332,9 @@ mv "$CRITICAL_OUT/usage.jsonl" "$RUN_ROOT/support-critical-live-usage.jsonl"
   --strict-dir "$STRICT_OUT" --support-dir "$SUPPORT_OUT" \
   --critical-dir "$CRITICAL_OUT" --output "$RUN_ROOT/support-critical-diagnostic.json"
 
-find "$CRITICAL_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/critical-cache-before-replay.sha256"
+# Every mutable namespace must be byte-stable during the mandatory cache-only
+# replay: KG, support-verdicts, and all three critical components.
+find "$BASELINE_CACHE_ROOT" "$CRITICAL_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-before-replay.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode strict --qa-manifest "$QA_MANIFEST" \
   --output-dir "$REPLAY_STRICT" --cache-only
@@ -303,11 +347,16 @@ find "$CRITICAL_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$R
 require_complete_extraction "$REPLAY_STRICT" "$QA_SAMPLE_SIZE"
 require_complete_extraction "$REPLAY_SUPPORT" "$QA_SAMPLE_SIZE"
 require_complete_extraction "$REPLAY_CRITICAL" "$QA_SAMPLE_SIZE"
-cmp "$STRICT_OUT/metrics.csv" "$REPLAY_STRICT/metrics.csv"
-cmp "$SUPPORT_OUT/metrics.csv" "$REPLAY_SUPPORT/metrics.csv"
-cmp "$CRITICAL_OUT/metrics.csv" "$REPLAY_CRITICAL/metrics.csv"
-find "$CRITICAL_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/critical-cache-after-replay.sha256"
-cmp "$RUN_ROOT/critical-cache-before-replay.sha256" "$RUN_ROOT/critical-cache-after-replay.sha256"
+for name in strict support support-critical; do
+  live_dir="$RUN_ROOT/$name"
+  replay_dir="$RUN_ROOT/cache-replay/$name"
+  cmp "$live_dir/metrics.csv" "$replay_dir/metrics.csv"
+  cmp "$live_dir/summary_metrics.csv" "$replay_dir/summary_metrics.csv"
+  cmp "$live_dir/scored.jsonl" "$replay_dir/scored.jsonl"
+  cmp "$live_dir/tuning.json" "$replay_dir/tuning.json"
+done
+find "$BASELINE_CACHE_ROOT" "$CRITICAL_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-after-replay.sha256"
+cmp "$RUN_ROOT/cache-before-replay.sha256" "$RUN_ROOT/cache-after-replay.sha256"
 
 "$CLIENT_PYTHON" - "$USAGE_COUNTS" "$RUN_ROOT" <<'PY'
 import json
@@ -319,26 +368,46 @@ def usage(name):
     path = root / name
     rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
     final = rows[-1] if rows else {}
+    components = {}
+    retry_reasons = {}
+    for row in rows:
+        kind = str(row.get('kind', 'unknown'))
+        if row.get('event') == 'retry':
+            reason = str(row.get('retry_reason', 'unknown'))
+            retry_reasons[reason] = retry_reasons.get(reason, 0) + 1
+            continue
+        item = components.setdefault(kind, {
+            'requests': 0, 'live_calls': 0, 'cache_hits': 0,
+            'seconds': 0.0, 'prompt_tokens': 0, 'completion_tokens': 0,
+        })
+        item['requests'] += 1
+        item['live_calls'] += 0 if bool(row.get('cached')) else 1
+        item['cache_hits'] += int(bool(row.get('cached')))
+        item['seconds'] += float(row.get('seconds', 0.0))
+        item['prompt_tokens'] += int(row.get('prompt_tokens', 0))
+        item['completion_tokens'] += int(row.get('completion_tokens', 0))
     return {
         'usage_file': str(path),
         'api_calls': int(final.get('cum_calls', 0)),
         'requests_total': int(final.get('cum_requests', 0)),
         'cache_hits': int(final.get('cum_cache_hits', 0)),
+        'retries': int(final.get('cum_retries', 0)),
+        'api_attempts': int(final.get('cum_calls', 0)) + int(final.get('cum_retries', 0)),
         'prompt_tokens': int(final.get('cum_prompt_tokens', 0)),
         'completion_tokens': int(final.get('cum_completion_tokens', 0)),
+        'components': components,
+        'retry_reasons': retry_reasons,
     }
 payload = {
     'status': 'ready',
-    'strict_extraction_cache_only': usage('strict-extraction-cache-usage.jsonl'),
-    'strict_baseline_cache_only': usage('strict-baseline-cache-usage.jsonl'),
-    'support_baseline_cache_only': usage('support-baseline-cache-usage.jsonl'),
+    'strict_cache_fill': usage('strict-cache-fill-usage.jsonl'),
+    'support_cache_fill': usage('support-cache-fill-usage.jsonl'),
     'support_critical_live': usage('support-critical-live-usage.jsonl'),
     'strict_replay': usage('cache-replay/strict/usage.jsonl'),
     'support_replay': usage('cache-replay/support/usage.jsonl'),
     'support_critical_replay': usage('cache-replay/support-critical/usage.jsonl'),
 }
-if any(payload[name]['api_calls'] for name in (
-    'strict_extraction_cache_only', 'strict_baseline_cache_only', 'support_baseline_cache_only',
+if any(payload[name]['api_attempts'] for name in (
     'strict_replay', 'support_replay', 'support_critical_replay',
 )):
     raise SystemExit('cache-only metric replay made live inference calls')
@@ -367,6 +436,6 @@ Path(sys.argv[1]).write_text(json.dumps({
         'test': int(sys.argv[7]),
         'alpha_cv_folds': int(sys.argv[8]),
     },
-    'runs': ['strict-baseline-cache-only', 'support-baseline-cache-only', 'support-critical-live', 'cache-only-strict', 'cache-only-support', 'cache-only-support-critical'],
+    'runs': ['strict-cache-fill', 'support-cache-fill', 'support-critical-live', 'cache-only-strict', 'cache-only-support', 'cache-only-support-critical'],
 }, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY

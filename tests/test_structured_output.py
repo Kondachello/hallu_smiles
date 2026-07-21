@@ -21,6 +21,7 @@ from src.dspy_adapter import (
     structured_output_settings,
     validate_json_document,
 )
+from src.retry import retry_after_seconds
 
 
 RELATION_SCHEMA = {
@@ -534,3 +535,10 @@ def test_retry_classifier_retries_only_transient_failures():
     assert is_retryable_llm_exception(RemoteProtocolError("HTTP2 framing error")) is True
     assert is_retryable_llm_exception(BadRequest()) is False
     assert is_retryable_llm_exception(StructuredOutputSchemaError("bad root")) is False
+
+
+def test_retry_after_is_read_from_a_wrapped_gateway_response():
+    response = SimpleNamespace(headers={"Retry-After": "12"})
+    error = RuntimeError("capacity")
+    error.response = response
+    assert retry_after_seconds(error) == 12.0

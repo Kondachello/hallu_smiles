@@ -84,6 +84,12 @@ def main() -> None:
         help="Immutable historical KG cache directory to search after the primary cache (repeatable).",
     )
     parser.add_argument(
+        "--relation-cache-read-dir",
+        action="append",
+        default=[],
+        help="Immutable historical support-verdict cache to search after the primary cache (repeatable).",
+    )
+    parser.add_argument(
         "--critical-cache-read-root",
         action="append",
         default=[],
@@ -195,7 +201,11 @@ def main() -> None:
     config["data"]["dir"] = args.data_dir
     config["cache_dir"] = str(cache_root / "kg")
     config["cache_read_dirs"] = [str(Path(path)) for path in args.kg_cache_read_dir]
-    config.setdefault("relation_verifier", {})["cache_dir"] = str(cache_root / "verdicts")
+    relation_verifier = config.setdefault("relation_verifier", {})
+    relation_verifier["cache_dir"] = str(cache_root / "verdicts")
+    relation_verifier["cache_read_dirs"] = [
+        str(Path(path)) for path in args.relation_cache_read_dir
+    ]
     critical = config.setdefault("support_critical", {})
     for section_name, namespace in (
         ("claim_extractor", "critical_claims"),

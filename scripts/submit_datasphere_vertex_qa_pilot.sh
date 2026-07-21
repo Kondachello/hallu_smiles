@@ -14,7 +14,7 @@ Options:
   --qa-test-fraction F    Held-out test fraction, e.g. 0.2 (default: 0.2)
   --cv-folds N            Train-only stratified CV folds (default: 5)
   --concurrency N         Gateway requests in flight (default: 1)
-  --timeout-seconds N     Job wall-time ceiling (default: 43200)
+  --timeout-seconds N     Optional in-container wall-time ceiling; 0 uses the DataSphere deadline (default: 0)
   --commit SHA            Pushed source commit (default: HEAD)
   --branch NAME           Remote branch containing the commit (default: current)
   --skip-origin-fetch     Verify locally cached origin/BRANCH (only for a transient DNS outage)
@@ -23,7 +23,7 @@ Options:
 EOF
 }
 PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; IMAGE=""; PROFILE="default"; SKIP_ORIGIN_FETCH=0
-QA_SAMPLE_SIZE=100; QA_TEST_FRACTION="0.2"; CV_FOLDS=5; CONCURRENCY=1; TIMEOUT_SECONDS=43200
+QA_SAMPLE_SIZE=100; QA_TEST_FRACTION="0.2"; CV_FOLDS=5; CONCURRENCY=1; TIMEOUT_SECONDS=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-id) PROJECT_ID="$2"; shift 2 ;;
