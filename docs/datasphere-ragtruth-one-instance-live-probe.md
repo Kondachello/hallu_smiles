@@ -53,8 +53,9 @@ Before submission all of these must be true:
    pinned `google/flan-t5-base` config/tokenizer directory at
    `d224e0d50f2fe7d975c973cf46d933e4dfaf2a3e`; runtime networking to Hugging Face is
    disabled.
-   During the image build, HHEM's custom-model config is explicitly bound to that
-   local directory; it never relies on a version-dependent Hugging Face cache layout.
+   During the image build, HHEM's custom-model configuration source and config are
+   explicitly bound to that local directory; it never relies on a
+   version-dependent Hugging Face cache layout.
 3. The Project disk contains the approved read-only RAGTruth files at
    `$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth/source_info.jsonl` and
    `$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth/response.jsonl`.

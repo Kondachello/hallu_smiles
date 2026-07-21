@@ -17,8 +17,13 @@ def test_prepare_hhem_foundation_replaces_remote_reference_with_local_pinned_dir
     hhem_dir.mkdir()
     foundation_dir.mkdir()
     (hhem_dir / "config.json").write_text(
-        json.dumps({"foundation": "google/flan-t5-base", "model_type": "hhem-v2"}),
+        # The upstream HHEM config can omit this field because its custom
+        # configuration class supplies it as a class attribute.
+        json.dumps({"model_type": "hhem-v2"}),
         encoding="utf-8",
+    )
+    (hhem_dir / "configuration_hhem_v2.py").write_text(
+        'class HHEMv2Config:\n    foundation = "google/flan-t5-base"\n', encoding="utf-8"
     )
     for name in (
         "config.json",
@@ -47,3 +52,6 @@ def test_prepare_hhem_foundation_replaces_remote_reference_with_local_pinned_dir
     assert json.loads((hhem_dir / "config.json").read_text(encoding="utf-8"))["foundation"] == str(
         foundation_dir
     )
+    assert json.dumps(str(foundation_dir)) in (
+        hhem_dir / "configuration_hhem_v2.py"
+    ).read_text(encoding="utf-8")

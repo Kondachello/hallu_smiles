@@ -27,6 +27,9 @@ def main() -> None:
     hhem_config = json.loads((model_path / "config.json").read_text(encoding="utf-8"))
     if hhem_config.get("foundation") != str(foundation_path):
         raise RuntimeError("HHEM config is not bound to the expected local FLAN-T5 foundation")
+    hhem_configuration = model_path / "configuration_hhem_v2.py"
+    if not hhem_configuration.is_file() or str(foundation_path) not in hhem_configuration.read_text(encoding="utf-8"):
+        raise RuntimeError("HHEM custom configuration code is not bound to the local FLAN-T5 foundation")
     if not (foundation_path / "config.json").is_file() or not (foundation_path / "spiece.model").is_file():
         raise RuntimeError(f"incomplete local FLAN-T5 foundation: {foundation_path}")
 
