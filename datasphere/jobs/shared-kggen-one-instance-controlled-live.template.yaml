@@ -1,0 +1,31 @@
+# Real controlled shared-KGGen two-pass probe.
+name: shared-kggen-one-instance-controlled-live-__RUN_ID__
+desc: "One explicit RAGTruth response: real shared KGGen/HHEM, then cache-only replay."
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export RUN_ROOT="$PWD/shared-kggen-controlled-live-artifacts/__RUN_ID__";
+  mkdir -p "$RUN_ROOT"; git init source; git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
+  git -C source fetch --depth 1 origin __GIT_COMMIT__; git -C source checkout --detach FETCH_HEAD;
+  test "$(git -C source rev-parse HEAD)" = "__GIT_COMMIT__";
+  export EXPECTED_SOURCE_COMMIT="__GIT_COMMIT__" DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
+  export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
+  export CACHE_ROOT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/shared-kggen-controlled-live/__CACHE_NAMESPACE__";
+  export HALLU_GATEWAY_URL="__GATEWAY_URL__"; export RESPONSE_ID_B64="__RESPONSE_ID_B64__";
+  export RESPONSE_ID="$(printf %s "$RESPONSE_ID_B64" | base64 -d)"; export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
+  trap "status=\$?; archive || status=1; exit \$status" EXIT;
+  timeout --signal=TERM --kill-after=60s 3600 bash source/scripts/run_datasphere_shared_kggen_one_instance_controlled_live.sh >"$RUN_ROOT/live.stdout.log" 2>"$RUN_ROOT/live.stderr.log"'
+env:
+__DOCKER_ENV_BLOCK__
+outputs:
+  - shared-kggen-one-instance-controlled-live-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+flags:
+  - attach-project-disk
+cloud-instance-types:
+  - c1.4
+working-storage:
+  type: SSD
+  size: 100Gb
+graceful-shutdown:
+  signal: SIGTERM
+  timeout: 60s

@@ -1,0 +1,18 @@
+# Controlled live track: graph is injected by the experiment framework, never extracted by GraphEval.
+extractor:
+  backend: shared_kggen
+  model: openai/gemini-2.5-flash
+  output_mode: structured_json
+nli:
+  backend: hhem
+  model: /opt/hallu/models/hhem-2.1-open
+  revision: 0e7edb3689e710c52ba120086e8f91ea3ee87f23
+  model_label: hhem-2.1-open
+  device: cpu
+  dtype: float32
+  batch_size: 8
+  evidence_policy: full_context_native
+  aggregation: max_unsupported
+  paper_threshold: 0.5
+cache_dir: .cache/graph_eval
+cache_only: false

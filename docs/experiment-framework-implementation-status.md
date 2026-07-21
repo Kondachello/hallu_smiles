@@ -29,6 +29,11 @@ no-gold coverage audit. Details: `docs/shared-kggen-controlled-track.md` and
 first offline pass materializes common graphs and its second proves `cache_only` replay
 from the same configurable `cache_root`; both use FakeKGGen/FakeNLI and seal archives.
 
+The former DataSphere shared-KGGen mock job has been replaced by the separately named
+`shared-kggen-one-instance-controlled-live` path. It uses real controlled KGGen/HHEM,
+requires the Project secret at runtime, and has dependency-injected offline tests only;
+no new live Job has been submitted.
+
 ### 1. Общий framework-facing контракт
 
 `experiments/contracts.py` использует уже проверенные `DetectionInput` и
