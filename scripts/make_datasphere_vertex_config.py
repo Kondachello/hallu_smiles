@@ -124,6 +124,10 @@ def main() -> None:
     parser.add_argument("--retry-backoff-base-s", type=float, default=5.0)
     parser.add_argument("--retry-backoff-max-s", type=float, default=60.0)
     parser.add_argument(
+        "--retry-backoff-jitter-s", type=float, default=5.0,
+        help="uniform additive jitter for transient-request backoff",
+    )
+    parser.add_argument(
         "--cv-folds", type=int, default=5,
         help="stratified folds used only for train-only alpha/tau selection",
     )
@@ -145,6 +149,8 @@ def main() -> None:
         raise ValueError("--retry-backoff-max-s must be positive")
     if args.retry_backoff_max_s < args.retry_backoff_base_s:
         raise ValueError("--retry-backoff-max-s must be at least --retry-backoff-base-s")
+    if args.retry_backoff_jitter_s < 0:
+        raise ValueError("--retry-backoff-jitter-s must be non-negative")
     if args.cv_folds < 2:
         raise ValueError("--cv-folds must be at least 2")
     if args.llm_runtime_fingerprint_override is not None:
@@ -198,6 +204,7 @@ def main() -> None:
     llm["max_retries"] = args.max_retries
     llm["retry_backoff_base_s"] = args.retry_backoff_base_s
     llm["retry_backoff_max_s"] = args.retry_backoff_max_s
+    llm["retry_backoff_jitter_s"] = args.retry_backoff_jitter_s
     llm["structured_output_transport"] = "response_format"
     llm["structured_output_backend"] = "vertex"
     llm["structured_output_request_backend"] = None

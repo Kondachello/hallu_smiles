@@ -453,6 +453,52 @@ def test_extractor_fails_fast_on_schema_error_but_retries_timeout(tmp_path):
     assert graph.relations == {("Swiss chard", "similar to", "spinach")}
 
 
+def test_extractor_audits_redacted_unbounded_429_retry_decisions(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.extraction.cluster = False
+    cfg.llm.max_retries = 0
+    usage_path = tmp_path / "transport-retry.jsonl"
+
+    class RateLimitError(Exception):
+        status_code = 429
+
+    class Backend:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, **kwargs):  # noqa: ARG002
+            self.calls += 1
+            if self.calls < 3:
+                raise RateLimitError("provider detail must not enter audit")
+            return SimpleNamespace(
+                entities={"Swiss chard", "spinach"},
+                relations={("Swiss chard", "similar to", "spinach")},
+            )
+
+    backend = Backend()
+    graph = KGExtractor(cfg, backend=backend, usage=UsageLogger(usage_path)).extract("Swiss chard")
+    assert graph.relations == {("Swiss chard", "similar to", "spinach")}
+    assert backend.calls == 3
+    events = [json.loads(line) for line in usage_path.read_text(encoding="utf-8").splitlines()]
+    retries = [event for event in events if event.get("event") == "transport_retry"]
+    assert [{key: event[key] for key in (
+        "kind", "attempt", "next_attempt", "retry_policy", "max_attempts",
+        "exception_type", "http_status", "scheduled_sleep_s",
+    )} for event in retries] == [
+        {
+            "kind": "graph", "attempt": 1, "next_attempt": 2,
+            "retry_policy": "until_job_wall_time", "max_attempts": None,
+            "exception_type": "RateLimitError", "http_status": 429, "scheduled_sleep_s": 0.0,
+        },
+        {
+            "kind": "graph", "attempt": 2, "next_attempt": 3,
+            "retry_policy": "until_job_wall_time", "max_attempts": None,
+            "exception_type": "RateLimitError", "http_status": 429, "scheduled_sleep_s": 0.0,
+        },
+    ]
+    assert all("provider detail" not in json.dumps(event) for event in events)
+
+
 def test_extractor_retries_only_length_truncation_with_one_larger_audited_budget(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.extraction.cluster = False

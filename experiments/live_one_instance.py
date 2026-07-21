@@ -205,6 +205,13 @@ def run_ragtruth_one_instance_live_probe(
             length_retry_max_tokens=hallu_llm.get("length_retry_max_tokens"),
         )
         audit.event(
+            "hallugraph_transport_retry_policy", "ok",
+            max_retries=hallu_llm.get("max_retries"),
+            retry_backoff_base_s=hallu_llm.get("retry_backoff_base_s"),
+            retry_backoff_max_s=hallu_llm.get("retry_backoff_max_s"),
+            retry_backoff_jitter_s=hallu_llm.get("retry_backoff_jitter_s", 0),
+        )
+        audit.event(
             "input_materialization", "ok", response_id=record["response_id"], source_id=record["source_id"],
             source_record_sha256=record["source_record_sha256"], response_record_sha256=record["response_record_sha256"],
             context_sha256=record["context_hash"], query_sha256=record["query_hash"], response_sha256=record["response_hash"],

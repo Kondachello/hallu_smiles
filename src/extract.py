@@ -25,7 +25,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never, wait_exponential
+from tenacity import (
+    Retrying,
+    retry_if_exception,
+    stop_after_attempt,
+    stop_never,
+    wait_exponential,
+    wait_random,
+)
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .dspy_adapter import (
@@ -283,6 +290,13 @@ class KGExtractor:
         )
         if self.backoff_max < float(self.backoff_base):
             raise ValueError("llm.retry_backoff_max_s must be at least retry_backoff_base_s")
+        self.backoff_jitter = float(
+            cfg.llm.get("retry_backoff_jitter_s", 0)
+            if hasattr(cfg.llm, "get")
+            else getattr(cfg.llm, "retry_backoff_jitter_s", 0)
+        )
+        if self.backoff_jitter < 0:
+            raise ValueError("llm.retry_backoff_jitter_s must be non-negative")
         self.request_timeout_s = float(
             cfg.llm.get("request_timeout_s", 90)
             if hasattr(cfg.llm, "get")
@@ -849,12 +863,43 @@ class KGExtractor:
         self, text: str, *, cache_key: str, kind: str
     ) -> Graph:
         graph: Graph | None = None
+
+        def before_sleep(retry_state) -> None:
+            """Record a redacted transport retry decision before the wait."""
+            outcome = retry_state.outcome
+            exc = outcome.exception() if outcome is not None else None
+            status = getattr(exc, "status_code", None)
+            response = getattr(exc, "response", None)
+            if status is None and response is not None:
+                status = getattr(response, "status_code", None)
+            try:
+                status = int(status) if status is not None else None
+            except (TypeError, ValueError):
+                status = None
+            sleep_s = getattr(retry_state.next_action, "sleep", None)
+            self.usage.record_event(
+                "transport_retry",
+                kind=kind,
+                attempt=retry_state.attempt_number,
+                next_attempt=retry_state.attempt_number + 1,
+                retry_policy=("until_job_wall_time" if self.max_retries == 0 else "bounded_attempts"),
+                max_attempts=(None if self.max_retries == 0 else self.max_retries),
+                exception_type=(type(exc).__name__ if exc is not None else None),
+                http_status=status,
+                scheduled_sleep_s=(round(float(sleep_s), 6) if sleep_s is not None else None),
+                cache_key=cache_key,
+            )
+
+        wait = wait_exponential(multiplier=self.backoff_base, max=self.backoff_max)
+        if self.backoff_jitter:
+            wait = wait + wait_random(min=0, max=self.backoff_jitter)
         for attempt in Retrying(
             # ``0`` means retry transient provider failures until the outer
             # DataSphere wall-time limit. Completed graph calls are flushed atomically.
             stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
-            wait=wait_exponential(multiplier=self.backoff_base, max=self.backoff_max),
+            wait=wait,
             retry=retry_if_exception(is_retryable_llm_exception),
+            before_sleep=before_sleep,
             reraise=True,
         ):
             with attempt:

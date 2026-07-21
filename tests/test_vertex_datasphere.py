@@ -49,6 +49,7 @@ def test_vertex_runtime_config_derives_identity_from_authenticated_manifest(tmp_
     assert cfg["llm"]["max_retries"] == 7
     assert cfg["llm"]["retry_backoff_base_s"] == 5.0
     assert cfg["llm"]["retry_backoff_max_s"] == 60.0
+    assert cfg["llm"]["retry_backoff_jitter_s"] == 5.0
     assert cfg["eval"]["alpha_cv_folds"] == 5
     assert cfg["extraction"]["serial_chunking"] is False
     assert cfg["cache_dir"] == str(tmp_path / "work" / "cache" / "kg")
@@ -123,6 +124,14 @@ def test_vertex_runtime_config_allows_unbounded_transient_retry_until_job_timeou
         "--max-retries", "0",
     ], check=True)
     assert yaml.safe_load(output.read_text(encoding="utf-8"))["llm"]["max_retries"] == 0
+
+
+def test_live_one_instance_wrapper_retries_transient_failures_until_its_job_deadline():
+    wrapper = (SCRIPTS / "run_datasphere_ragtruth_one_instance_live_probe.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--concurrency 1 --max-retries 0" in wrapper
+    assert "--retry-backoff-jitter-s 5" in wrapper
 
 
 def test_historical_cache_lineage_requires_exact_checkpoint_gateway_and_client_runtime(tmp_path):

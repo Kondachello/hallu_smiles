@@ -119,9 +119,11 @@ HalluGraph rejects every completion whose `finish_reason` is not `stop`; truncat
 JSON is never parsed, cached, or treated as a graph. The live runtime starts KGGen
 with `max_tokens=8192`. Only when the strict completion guard reports exactly
 `finish_reason='length'`, it retries that graph extraction once with `max_tokens=12288`.
-Other schema/parse failures still fail immediately, and transient network failures keep
-their existing bounded transport retry policy. Each length retry writes the attempt,
-current/next token budget, cache key, and outcome to
+Other schema/parse failures still fail immediately. Transient 429/5xx/network failures
+retry until the one-instance Job's 3600-second wall-time limit, with exponential waits
+of 5, 10, 20, 40, then 60 seconds plus 0--5 seconds of jitter. Each transport retry
+writes a redacted exception class/status, attempt number and planned delay; each length
+retry writes the current/next token budget and outcome to
 `audit/hallugraph_extraction_attempts.jsonl`; the runtime config and token policy are
 also recorded in the paired archive audit trail.
 

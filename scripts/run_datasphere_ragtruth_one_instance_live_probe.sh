@@ -62,7 +62,8 @@ echo "[live-one-instance] stage=runtime-config"
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$RUNTIME_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" \
   --max-tokens 8192 --length-retry-max-tokens 12288 --length-retry-attempts 1 \
-  --concurrency 1 --max-retries 7 --retry-backoff-base-s 5 \
+  --concurrency 1 --max-retries 0 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
+  --retry-backoff-jitter-s 5 \
   > "$RUN_ROOT/runtime-config-identity.json"
 
 echo "[live-one-instance] stage=paired-inference response_id=$RESPONSE_ID"

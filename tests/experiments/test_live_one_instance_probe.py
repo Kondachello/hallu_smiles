@@ -65,7 +65,7 @@ def test_live_probe_contract_reads_environment_and_redacts_secret_without_live_c
     assert report["detector_statuses"] == {"grapheval": "ok", "hallugraph": "ok"}
     events = archive.read_jsonl("audit/live_one_instance_events.jsonl")
     assert [event["stage"] for event in events] == [
-        "environment", "gateway_manifest", "hallugraph_token_policy", "input_materialization", "detector_construction", "paired_inference", "archive_seal",
+        "environment", "gateway_manifest", "hallugraph_token_policy", "hallugraph_transport_retry_policy", "input_materialization", "detector_construction", "paired_inference", "archive_seal",
     ]
     for path in archive.path.rglob("*"):
         if path.is_file():
