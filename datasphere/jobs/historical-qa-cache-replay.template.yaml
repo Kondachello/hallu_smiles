@@ -1,6 +1,6 @@
-# One QA record from the immutable 100-QA graph cache; no KGGen or LLM calls.
+# Reproducibly selected QA records from the immutable 100-QA graph cache; no KGGen or LLM calls.
 name: historical-qa-cache-replay-__RUN_ID__
-desc: "Controlled HalluGraph and GraphEval replay from historical 100-QA graphs; no LLM calls."
+desc: "Controlled HalluGraph and GraphEval cache-only replay from historical 100-QA graphs; no LLM calls."
 cmd: >-
   bash -lc 'set -Eeuo pipefail;
   export RUN_ROOT="$PWD/historical-qa-cache-replay-artifacts/__RUN_ID__";
@@ -11,10 +11,10 @@ cmd: >-
   export EXPECTED_SOURCE_COMMIT="__GIT_COMMIT__" DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
   export HISTORICAL_CHECKPOINT_BASE="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa/qa-100-test-20-cv-5";
-  export RECORDED_GATEWAY_URL="__GATEWAY_URL__"; export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  export RECORDED_GATEWAY_URL="__GATEWAY_URL__" REPLAY_COUNT="__REPLAY_COUNT__" REPLAY_SELECTION_SEED="__REPLAY_SELECTION_SEED__"; export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
   archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
   trap "status=\$?; archive || status=1; exit \$status" EXIT;
-  timeout --signal=TERM --kill-after=60s 1800 bash source/scripts/run_datasphere_historical_qa_cache_replay.sh >"$RUN_ROOT/replay.stdout.log" 2>"$RUN_ROOT/replay.stderr.log"'
+  timeout --signal=TERM --kill-after=60s 1800 bash source/scripts/run_datasphere_historical_qa_cache_replay.sh 2>&1 | tee "$RUN_ROOT/replay.console.log"'
 env:
 __DOCKER_ENV_BLOCK__
 outputs:

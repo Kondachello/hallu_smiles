@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Command-line entrypoint for one no-LLM historical QA cache replay."""
+"""Command-line entrypoint for a no-LLM historical QA cache replay."""
 from __future__ import annotations
 
 import argparse
@@ -21,6 +21,8 @@ parser.add_argument("--run-id", required=True)
 parser.add_argument("--qa-sample-size", type=int, default=100)
 parser.add_argument("--qa-test-fraction", default="0.2")
 parser.add_argument("--sample-seed", type=int, default=42)
+parser.add_argument("--replay-count", type=int, default=1)
+parser.add_argument("--replay-selection-seed", type=int, default=20260722)
 args = parser.parse_args()
 
 archive, report = run_historical_qa_cache_controlled_replay(
@@ -34,6 +36,8 @@ archive, report = run_historical_qa_cache_controlled_replay(
     qa_sample_size=args.qa_sample_size,
     qa_test_fraction=args.qa_test_fraction,
     sample_seed=args.sample_seed,
+    replay_count=args.replay_count,
+    replay_selection_seed=args.replay_selection_seed,
 )
 print(render_historical_qa_cache_replay_summary(report))
 print(archive.path)

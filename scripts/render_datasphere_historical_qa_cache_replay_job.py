@@ -17,6 +17,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--commit", required=True); parser.add_argument("--run-id", required=True)
     parser.add_argument("--gateway-url", required=True); parser.add_argument("--docker-image", required=True)
+    parser.add_argument("--replay-count", type=int, default=1)
+    parser.add_argument("--replay-selection-seed", type=int, default=20260722)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", args.run_id):
@@ -25,9 +27,12 @@ def main() -> None:
     if gateway.scheme != "https" or not gateway.netloc or gateway.path.rstrip("/") or gateway.query or gateway.fragment:
         raise SystemExit("--gateway-url must be an HTTPS origin")
     image = require_runtime_image(args.docker_image, registry=True)
+    if not 1 <= args.replay_count <= 100:
+        raise SystemExit("--replay-count must be between 1 and 100")
     rendered = TEMPLATE.read_text(encoding="utf-8")
     rendered = (rendered.replace("__GIT_COMMIT__", args.commit).replace("__RUN_ID__", args.run_id)
         .replace("__GATEWAY_URL__", f"https://{gateway.netloc}").replace("__DOCKER_IMAGE__", image)
+        .replace("__REPLAY_COUNT__", str(args.replay_count)).replace("__REPLAY_SELECTION_SEED__", str(args.replay_selection_seed))
         .replace("__DOCKER_ENV_BLOCK__", f"  docker:\n    image: {image}"))
     if "__" in rendered:
         raise RuntimeError("unresolved Job template placeholder")

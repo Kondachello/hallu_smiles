@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from .artifacts import RunArchive, read_jsonl, utc_now
 from .contracts import DetectionResult, DetectorProtocol, STATUS_FAILED, assert_no_gold, make_detection_input, result_record
@@ -44,6 +44,7 @@ def run_paired(
     detectors: Mapping[str, DetectorProtocol],
     resume: bool = False,
     shared_graph_provider: Any | None = None,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run each adapter on immutable no-gold records.
 
@@ -61,9 +62,15 @@ def run_paired(
     stages = archive.read_jsonl("stages/stage_calls.jsonl") if resume else []
 
     archive.update_status("running_predictions", started_at_utc=utc_now(), gold_access_state="hidden")
-    for record in instances:
+    total_instances = len(instances)
+    for index, record in enumerate(instances, start=1):
         item = make_detection_input(record)
         response_id = str(record["response_id"])
+        if progress_callback is not None:
+            progress_callback({
+                "event": "record_started", "index": index, "total": total_instances,
+                "response_id": response_id, "source_id": item.source_id,
+            })
         pending = [
             (method_key, detector, getattr(detector, "method_name", method_key), getattr(detector, "variant_name", method_key))
             for method_key, detector in detectors.items()
@@ -99,6 +106,12 @@ def run_paired(
                     "gold_access_state": "hidden",
                 }
             )
+            if progress_callback is not None:
+                progress_callback({
+                    "event": "shared_graph_ready", "index": index, "total": total_instances,
+                    "response_id": response_id, "status": shared_status, "cached": shared_cached,
+                    "wall_time_ms": stages[-1]["wall_time_ms"],
+                })
         for method_key, detector, method, variant in pending:
             started = time.perf_counter()
             if shared_failure is not None:
@@ -139,6 +152,17 @@ def run_paired(
                     "gold_access_state": "hidden",
                 }
             )
+            if progress_callback is not None:
+                progress_callback({
+                    "event": "detector_finished", "index": index, "total": total_instances,
+                        "response_id": response_id, "method": method, "status": result.status,
+                        "score": result.raw_score, "wall_time_ms": elapsed_ms,
+                })
+        if progress_callback is not None:
+            progress_callback({
+                "event": "record_finished", "index": index, "total": total_instances,
+                "response_id": response_id,
+            })
 
     predictions.sort(key=lambda row: (row["method"], row["response_id"]))
     stages.sort(key=lambda row: (row["method_run_id"], row["response_id"]))

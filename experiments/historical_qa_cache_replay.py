@@ -1,11 +1,12 @@
-"""Run both detectors on one fully compatible historical 100-QA graph set."""
+"""Run both detectors on reproducibly selected historical 100-QA graph sets."""
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from .artifacts import RunArchive, atomic_write_json, atomic_write_jsonl
+from .artifacts import RunArchive, atomic_write_json, atomic_write_jsonl, utc_now
 from .datasets.historical_qa import materialize_historical_qa_no_gold
 from .detectors import build_controlled_shared_kggen_detectors
 from .live_one_instance import _load_yaml_mapping
@@ -14,22 +15,36 @@ from .runner import run_paired, seal_run
 from .shared_graphs import GraphCacheSource
 from src.extract import CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY
 
-PROBE_VERSION = "historical-qa-cache-controlled-replay-v2"
+PROBE_VERSION = "historical-qa-cache-controlled-replay-v3"
 
 
 def _statuses(archive: RunArchive) -> dict[str, str]:
     return {str(row["method"]): str(row["status"]) for row in archive.read_jsonl("predictions/raw_predictions.jsonl")}
 
 
-def _first_fully_cached(records: list[dict[str, Any]], coverage: Mapping[str, Any]) -> dict[str, Any]:
+def _fully_cached(records: list[dict[str, Any]], coverage: Mapping[str, Any]) -> list[dict[str, Any]]:
     by_id: dict[str, set[str]] = {}
     for row in coverage.get("rows", []):
         if row.get("status") == "compatible_hit":
             by_id.setdefault(str(row.get("response_id")), set()).add(str(row.get("role")))
-    for record in records:
-        if by_id.get(str(record["response_id"]), set()) == {"response", "context", "query"}:
-            return record
-    raise RuntimeError("historical cache has no selected QA record with response, context, and query graphs")
+    return [
+        record for record in records
+        if by_id.get(str(record["response_id"]), set()) == {"response", "context", "query"}
+    ]
+
+
+def _select_replay_records(
+    records: list[dict[str, Any]], coverage: Mapping[str, Any], *, replay_count: int, replay_selection_seed: int,
+) -> list[dict[str, Any]]:
+    if replay_count < 1:
+        raise ValueError("replay_count must be positive")
+    compatible = _fully_cached(records, coverage)
+    if len(compatible) < replay_count:
+        raise RuntimeError(
+            "historical cache has no selected QA record with response, context, and query graphs: "
+            f"requested={replay_count}, available={len(compatible)}"
+        )
+    return random.Random(replay_selection_seed).sample(compatible, replay_count)
 
 
 def run_historical_qa_cache_controlled_replay(
@@ -44,9 +59,11 @@ def run_historical_qa_cache_controlled_replay(
     qa_sample_size: int = 100,
     qa_test_fraction: str = "0.2",
     sample_seed: int = 42,
+    replay_count: int = 1,
+    replay_selection_seed: int = 20260722,
     detector_factory: Callable[..., Any] | None = None,
 ) -> tuple[RunArchive, dict[str, Any]]:
-    """Select the first fully warm historical QA input and run cache-only.
+    """Select complete historical QA inputs and run a strict cache-only replay.
 
     This function never reads an API key and passes ``cache_only`` to the controlled
     factory.  A cache miss fails before a KGGen backend can be constructed.
@@ -101,29 +118,63 @@ def run_historical_qa_cache_controlled_replay(
             "historical_llm_runtime_fingerprint": lineage["llm_runtime_fingerprint"],
             "selected_response_id": None,
             "selected_source_id": None,
+            "selected_response_ids": [],
+            "replay_count": replay_count,
+            "replay_selection_seed": replay_selection_seed,
             "gold_passed_to_detectors": False,
             "llm_gateway_calls_permitted": 0,
         },
     )
     atomic_write_json(archive.path / "reports/historical_cache_coverage.json", coverage)
     try:
-        record = _first_fully_cached(records, coverage)
+        selected_records = _select_replay_records(
+            records, coverage, replay_count=replay_count, replay_selection_seed=replay_selection_seed,
+        )
     except RuntimeError as exc:
         archive.update_status("cache_preflight_failed", failure=str(exc))
         raise
+    selected_ids = [str(record["response_id"]) for record in selected_records]
+    progress_path = archive.path / "reports/progress.jsonl"
+
+    def progress(event: Mapping[str, Any]) -> None:
+        payload = {
+            "event_index": len(progress_path.read_text(encoding="utf-8").splitlines()) + 1 if progress_path.exists() else 1,
+            "at_utc": utc_now(),
+            **dict(event),
+        }
+        with progress_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+            handle.flush()
+        print("HISTORICAL_REPLAY_PROGRESS " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+    progress({
+        "event": "selection_complete", "requested_count": replay_count,
+        "available_complete_count": len(_fully_cached(records, coverage)),
+        "selection_seed": replay_selection_seed, "response_ids": selected_ids,
+    })
     archive.update_status(
         "cache_record_selected",
-        selected_response_id=record["response_id"],
-        selected_source_id=record["source_id"],
+        selected_response_id=selected_records[0]["response_id"],
+        selected_source_id=selected_records[0]["source_id"],
+        selected_response_ids=selected_ids,
     )
     instances = archive.path / "instances.no_gold.jsonl"
-    atomic_write_jsonl(instances, [record])
-    summary = run_paired(archive, instances_path=instances, detectors=detectors, shared_graph_provider=provider)
+    atomic_write_jsonl(instances, selected_records)
+    summary = run_paired(
+        archive, instances_path=instances, detectors=detectors, shared_graph_provider=provider,
+        progress_callback=progress,
+    )
     seal = seal_run(archive, instances)
     validation = archive.validate()
-    statuses = _statuses(archive)
-    usage = provider.extractor.usage.summary()
     prediction_rows = archive.read_jsonl("predictions/raw_predictions.jsonl")
+    per_response_statuses: dict[str, dict[str, str]] = {}
+    for row in prediction_rows:
+        per_response_statuses.setdefault(str(row["response_id"]), {})[str(row["method"])] = str(row["status"])
+    statuses = {
+        method: "ok" if all(per_response_statuses.get(response_id, {}).get(method) == "ok" for response_id in selected_ids) else "failed"
+        for method in ("hallugraph", "grapheval")
+    }
+    usage = provider.extractor.usage.summary()
     graph_eval_extractor_calls = sum(
         int((row.get("usage") or {}).get("extractor_calls", 0))
         for row in prediction_rows
@@ -132,12 +183,16 @@ def run_historical_qa_cache_controlled_replay(
     sources = {row.get("shared_graph_source") for row in provider.artifact_records()}
     report = {
         "probe_version": PROBE_VERSION,
-        "selected_response_id": record["response_id"],
-        "selected_source_id": record["source_id"],
+        "selected_response_id": selected_records[0]["response_id"],
+        "selected_source_id": selected_records[0]["source_id"],
+        "selected_response_ids": selected_ids,
+        "replay_count": replay_count,
+        "replay_selection_seed": replay_selection_seed,
         "historical_cache_root": str(source.root),
         "historical_lineage_id": lineage.get("lineage_id"),
         "cache_preflight": coverage,
         "detector_statuses": statuses,
+        "per_response_statuses": per_response_statuses,
         "summary": summary,
         "seal": seal,
         "validation": validation,
@@ -163,7 +218,7 @@ def run_historical_qa_cache_controlled_replay(
 def render_historical_qa_cache_replay_summary(report: Mapping[str, Any]) -> str:
     return "\n".join((
         "HISTORICAL 100-QA CACHE REPLAY (NO LLM CALLS)",
-        f"  response_id       : {report['selected_response_id']}",
+        f"  response_ids      : {', '.join(report['selected_response_ids'])}",
         f"  HalluGraph        : {report['detector_statuses'].get('hallugraph')}",
         f"  GraphEval         : {report['detector_statuses'].get('grapheval')}",
         f"  KGGen API calls   : {report['kggen_api_calls']}",

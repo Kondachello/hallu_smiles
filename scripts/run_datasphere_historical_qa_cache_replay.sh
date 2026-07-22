@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Replay one fully warm historical QA graph set. The only network request is the
+# Replay reproducibly selected fully warm historical QA graph sets. The only network request is the
 # authenticated gateway manifest: its pinned identity reconstructs the old cache key.
 # No request is ever made to a language model.
 set -Eeuo pipefail
@@ -9,6 +9,8 @@ CLIENT_PYTHON="${CLIENT_PYTHON:-/opt/hallu/client/bin/python}"
 RUNTIME_MANIFEST="${RUNTIME_MANIFEST:-/opt/hallu/runtime-manifest.json}"
 : "${RUN_ROOT:?}" "${DATA_DIR:?}" "${HISTORICAL_CHECKPOINT_BASE:?}" "${RECORDED_GATEWAY_URL:?}" "${EXPECTED_SOURCE_COMMIT:?}"
 : "${HALLU_GATEWAY_API_KEY:?Create DataSphere Project secret HALLU_GATEWAY_API_KEY}"
+REPLAY_COUNT="${REPLAY_COUNT:-1}"
+REPLAY_SELECTION_SEED="${REPLAY_SELECTION_SEED:-20260722}"
 export PYTHONHASHSEED=42 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$RUN_ROOT/current-cache"
@@ -73,4 +75,5 @@ PY
   --hallugraph-config "$RUN_ROOT/historical-cache-runtime.yaml" \
   --grapheval-config "$ROOT/graph_eval/config.datasphere.one-instance.shared-kggen.live.yaml" \
   --historical-cache-root "$HISTORICAL_CACHE_ROOT" --lineage "$RUN_ROOT/historical-lineage.json" \
-  --run-id historical-cache-replay | tee "$RUN_ROOT/historical-cache-replay-summary.log"
+  --run-id historical-cache-replay --replay-count "$REPLAY_COUNT" \
+  --replay-selection-seed "$REPLAY_SELECTION_SEED" | tee "$RUN_ROOT/historical-cache-replay-summary.log"

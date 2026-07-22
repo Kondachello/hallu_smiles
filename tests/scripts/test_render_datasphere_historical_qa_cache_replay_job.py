@@ -20,6 +20,8 @@ def test_rendered_historical_cache_replay_is_cpu_only_and_never_injects_a_secret
             "--run-id", "historical-cache-test",
             "--gateway-url", "https://gateway.example.test",
             "--docker-image", IMAGE,
+            "--replay-count", "10",
+            "--replay-selection-seed", "917",
             "--output", str(output),
         ],
         check=True,
@@ -32,4 +34,7 @@ def test_rendered_historical_cache_replay_is_cpu_only_and_never_injects_a_secret
     assert "g1.1" not in text and "huggingface-cli" not in text.lower()
     assert "HISTORICAL_CHECKPOINT_BASE" in text
     assert "timeout --signal=TERM" in text
+    assert 'REPLAY_COUNT="10"' in text
+    assert 'REPLAY_SELECTION_SEED="917"' in text
+    assert "replay.console.log" in text
     assert yaml.safe_load(text)["name"] == "historical-qa-cache-replay-historical-cache-test"

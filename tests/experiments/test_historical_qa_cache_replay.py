@@ -8,7 +8,10 @@ import pytest
 
 from experiments.artifacts import RunArchive
 from experiments.detectors import build_controlled_shared_kggen_fake
-from experiments.historical_qa_cache_replay import run_historical_qa_cache_controlled_replay
+from experiments.historical_qa_cache_replay import (
+    _select_replay_records,
+    run_historical_qa_cache_controlled_replay,
+)
 from src.config import load_config
 from src.extract import CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY, FakeKGGen, KGExtractor, UsageLogger
 
@@ -161,3 +164,18 @@ def test_historical_replay_preserves_coverage_when_no_triplet_is_available(tmp_p
     manifest = json.loads((archive.path / "run_manifest.json").read_text(encoding="utf-8"))
     assert coverage["misses"] == 3
     assert manifest["run_status"] == "cache_preflight_failed"
+
+
+def test_historical_replay_selects_reproducible_random_complete_subset() -> None:
+    records = [{"response_id": str(index), "source_id": f"source-{index}"} for index in range(12)]
+    coverage = {
+        "rows": [
+            {"response_id": str(index), "role": role, "status": "compatible_hit"}
+            for index in range(12)
+            for role in ("response", "context", "query")
+        ]
+    }
+    first = _select_replay_records(records, coverage, replay_count=10, replay_selection_seed=917)
+    second = _select_replay_records(records, coverage, replay_count=10, replay_selection_seed=917)
+    assert [row["response_id"] for row in first] == [row["response_id"] for row in second]
+    assert len({row["response_id"] for row in first}) == 10
