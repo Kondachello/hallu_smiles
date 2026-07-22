@@ -71,6 +71,10 @@ inventory mode only for this selection step; actual graph materialization remain
 strict and fails on a miss. Its registered historical source additionally declares the
 pre-length-retry key schema, so a hit is recorded with both the requested current key
 and the resolved historical key schema in the coverage and graph-resolution reports.
+Before lookup, the Job obtains and validates the gateway **manifest** (a metadata record,
+not a model request) against the recorded historical hash. This reconstructs the old
+model revision and structured-output identity used in the cache key. A mismatch fails
+closed; the Job never sends extraction text to the gateway.
 
 ## Auditable output
 

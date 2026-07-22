@@ -30,8 +30,10 @@
 ## Гарантии стоимости и изоляции
 
 - Только CPU `c1.4`; GPU в YAML отсутствует.
-- Job не читает `HALLU_GATEWAY_API_KEY`, не передаёт его в окружение и не делает
-  HTTP-запросов к gateway.
+- Job получает Project secret `HALLU_GATEWAY_API_KEY` только для одного
+  аутентифицированного HTTP-запроса к `/v1/hallu/manifest`. Это метаданные о версии
+  gateway, а не запрос к LLM: текст RAGTruth не передаётся, извлечение не вызывается.
+  Хэш manifest обязан совпасть с исторической линией; иначе Job завершается до lookup.
 - В режиме `cache_only` KGGen backend не может быть сконструирован. Отчёт требует
   `kggen_api_calls = 0` и `grapheval_extractor_calls = 0`.
 - HHEM — закреплённая локальная CPU модель GraphEval, не LLM и не сетевой вызов.

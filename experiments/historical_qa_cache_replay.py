@@ -14,7 +14,7 @@ from .runner import run_paired, seal_run
 from .shared_graphs import GraphCacheSource
 from src.extract import CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY
 
-PROBE_VERSION = "historical-qa-cache-controlled-replay-v1"
+PROBE_VERSION = "historical-qa-cache-controlled-replay-v2"
 
 
 def _statuses(archive: RunArchive) -> dict[str, str]:

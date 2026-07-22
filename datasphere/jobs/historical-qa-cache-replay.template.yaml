@@ -1,6 +1,6 @@
-# One QA record from the immutable 100-QA graph cache; no KGGen/gateway calls.
+# One QA record from the immutable 100-QA graph cache; no KGGen or LLM calls.
 name: historical-qa-cache-replay-__RUN_ID__
-desc: "Controlled HalluGraph and GraphEval replay from historical 100-QA graphs without LLM calls."
+desc: "Controlled HalluGraph and GraphEval replay from historical 100-QA graphs; no LLM calls."
 cmd: >-
   bash -lc 'set -Eeuo pipefail;
   export RUN_ROOT="$PWD/historical-qa-cache-replay-artifacts/__RUN_ID__";
