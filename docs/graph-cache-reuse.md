@@ -54,6 +54,16 @@ Before live reuse of the historical ~100 graphs, run `experiments.cli cache insp
 the mounted source and selected `instances.no_gold.jsonl`; only a compatible report permits
 `cache_only` reuse.
 
+## Historical 100-QA replay Job
+
+`docs/datasphere-historical-qa-cache-replay.md` describes the DataSphere proof run.
+It resolves the recorded lineage from Project storage, reconstructs the historical
+selection, then chooses the first record with compatible context/query/response
+graphs. It runs both detectors in `cache_only` and records zero KGGen and GraphEval
+extractor calls. The `cache_only` preflight supports an explicitly non-strict
+inventory mode only for this selection step; actual graph materialization remains
+strict and fails on a miss.
+
 ## Auditable output
 
 A controlled run records `cache/cache_inventory.json`, `cache/cache_resolution.jsonl` and

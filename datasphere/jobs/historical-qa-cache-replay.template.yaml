@@ -1,0 +1,31 @@
+# One QA record from the immutable 100-QA graph cache; no KGGen/gateway calls.
+name: historical-qa-cache-replay-__RUN_ID__
+desc: "Controlled HalluGraph and GraphEval replay from historical 100-QA graphs without LLM calls."
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export RUN_ROOT="$PWD/historical-qa-cache-replay-artifacts/__RUN_ID__";
+  mkdir -p "$RUN_ROOT";
+  git init source; git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
+  git -C source fetch --depth 1 origin __GIT_COMMIT__; git -C source checkout --detach FETCH_HEAD;
+  test "$(git -C source rev-parse HEAD)" = "__GIT_COMMIT__";
+  export EXPECTED_SOURCE_COMMIT="__GIT_COMMIT__" DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
+  export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
+  export HISTORICAL_CHECKPOINT_BASE="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa/qa-100-test-20-cv-5";
+  export RECORDED_GATEWAY_URL="__GATEWAY_URL__"; export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
+  trap "status=\$?; archive || status=1; exit \$status" EXIT;
+  timeout --signal=TERM --kill-after=60s 1800 bash source/scripts/run_datasphere_historical_qa_cache_replay.sh >"$RUN_ROOT/replay.stdout.log" 2>"$RUN_ROOT/replay.stderr.log"'
+env:
+__DOCKER_ENV_BLOCK__
+outputs:
+  - historical-qa-cache-replay-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+flags:
+  - attach-project-disk
+cloud-instance-types:
+  - c1.4
+working-storage:
+  type: SSD
+  size: 100Gb
+graceful-shutdown:
+  signal: SIGTERM
+  timeout: 60s

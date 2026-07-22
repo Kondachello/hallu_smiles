@@ -256,7 +256,13 @@ class SharedKGGraphProvider:
     def resolution_records(self) -> list[dict[str, Any]]:
         return list(self._resolutions)
 
-    def preflight(self, records: Iterable[Mapping[str, Any]], *, roles: tuple[str, ...] = ("response",)) -> dict[str, Any]:
+    def preflight(
+        self,
+        records: Iterable[Mapping[str, Any]],
+        *,
+        roles: tuple[str, ...] = ("response",),
+        require_complete: bool | None = None,
+    ) -> dict[str, Any]:
         """Report coverage without constructing a model backend or modifying cache."""
         rows: list[dict[str, Any]] = []
         for record in records:
@@ -270,7 +276,12 @@ class SharedKGGraphProvider:
                 except CacheIntegrityError as exc:
                     rows.append({"response_id": str(record.get("response_id")), "role": role, "cache_key": key, "status": "corrupt", "error": str(exc)})
         report = {"cache_mode": self.cache_mode, "rows": rows, "hits": sum(row["status"] == "compatible_hit" for row in rows), "misses": sum(row["status"] == "miss" for row in rows), "valid": not any(row["status"] == "corrupt" for row in rows)}
-        if self.cache_mode == "cache_only" and (report["misses"] or not report["valid"]):
+        # A caller selecting one replayable record from a larger historical cache
+        # deliberately asks for a coverage report before it chooses that record.
+        # Keep the default strict for cache_only callers, but let that inspection be
+        # explicitly non-fatal.  Materialization remains strictly cache_only.
+        strict = self.cache_mode == "cache_only" if require_complete is None else require_complete
+        if strict and (report["misses"] or not report["valid"]):
             raise CachePreflightError("cache_only preflight requires a valid graph for every expected role")
         return report
 
