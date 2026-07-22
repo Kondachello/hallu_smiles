@@ -18,6 +18,7 @@ def build_grapheval_fake() -> DetectorProtocol:
     detector = GraphEvalDetector(FakeExtractor(), FakeNLI())
     detector.method_name = "grapheval"  # type: ignore[attr-defined]
     detector.variant_name = "fake_offline_v1"  # type: ignore[attr-defined]
+    detector.variant_id = "grapheval_fake_offline_v1"  # type: ignore[attr-defined]
     return detector
 
 
@@ -43,6 +44,7 @@ def build_hallugraph_fake(config_path: str | Path = "config.yaml") -> DetectorPr
     )
     adapter.method_name = "hallugraph"  # type: ignore[attr-defined]
     adapter.variant_name = "fake_offline_v1"  # type: ignore[attr-defined]
+    adapter.variant_id = "hallugraph_fake_offline_v1"  # type: ignore[attr-defined]
     return adapter
 
 
@@ -74,13 +76,101 @@ def build_controlled_shared_kggen_fake(
     hallu = HalluGraphAdapter(cfg, proxy, run.get_embedder(cfg, fake=True), alpha=0.7, relation_mode="strict")
     hallu.method_name = "hallugraph"  # type: ignore[attr-defined]
     hallu.variant_name = "shared_kggen_fake_offline_v1"  # type: ignore[attr-defined]
+    hallu.variant_id = "hallugraph_shared_kggen_fake_offline_v1"  # type: ignore[attr-defined]
     hallu.shared_graph_ref = proxy.response_reference  # type: ignore[attr-defined]
     graph_extractor = SharedKGGenGraphEvalExtractor(provider)
     graph = GraphEvalDetector(graph_extractor, FakeNLI())
     graph.method_name = "grapheval"  # type: ignore[attr-defined]
     graph.variant_name = "shared_kggen_fake_offline_v1"  # type: ignore[attr-defined]
+    graph.variant_id = "grapheval_shared_kggen_fake_offline_v1"  # type: ignore[attr-defined]
     graph.shared_graph_ref = graph_extractor.response_reference  # type: ignore[attr-defined]
     return {"hallugraph": hallu, "grapheval": graph}, provider
+
+
+def build_three_way_shared_kggen_fake(
+    config_path: str | Path = "config.yaml", *, cache_mode: str = "read_write",
+    cache_root: str | Path | None = None, cache_sources: Iterable[Any] = (),
+) -> tuple[dict[str, DetectorProtocol], Any]:
+    """Build the three planned variants on one immutable KGGen graph bundle.
+
+    The third arm deliberately uses ``UnknownTypeProvider``.  Its score-preserving
+    invariant is the offline proof that the future typing layer does not alter
+    extraction or baseline HalluGraph behaviour before it is implemented.
+    """
+    from detector_adapters.typed_hallugraph import TypedHalluGraphAdapter
+
+    from .dynamic_typing import UnknownTypeProvider
+
+    two_way, provider = build_controlled_shared_kggen_fake(
+        config_path,
+        cache_mode=cache_mode,
+        cache_root=cache_root,
+        cache_sources=cache_sources,
+    )
+    untyped = two_way["hallugraph"]
+    untyped.variant_name = "untyped_shared_kggen_fake_v1"  # type: ignore[attr-defined]
+    untyped.variant_id = "hallugraph_untyped_shared_kggen_fake_v1"  # type: ignore[attr-defined]
+    grapheval = two_way["grapheval"]
+    grapheval.variant_name = "kggen_shared_answer_fake_v1"  # type: ignore[attr-defined]
+    grapheval.variant_id = "grapheval_kggen_shared_answer_fake_v1"  # type: ignore[attr-defined]
+    typed = TypedHalluGraphAdapter(
+        untyped,
+        typing_provider=UnknownTypeProvider(),
+        shared_graph_provider=provider,
+        variant_name="dynamic_types_unknown_stub_v1",
+        variant_id="hallugraph_dynamic_types_unknown_stub_v1",
+    )
+    return {
+        "grapheval_kggen": grapheval,
+        "hallugraph_untyped": untyped,
+        "hallugraph_dynamic_types": typed,
+    }, provider
+
+
+def build_three_way_shared_kggen_detectors(
+    *,
+    hallugraph_config: str | Path,
+    grapheval_config: dict,
+    gateway_manifest_sha256: str | None,
+    typing_provider: Any,
+    cache_sources: Iterable[Any] = (),
+    cache_mode: str = "read_through",
+    hallugraph_usage_path: str | Path | None = None,
+) -> tuple[dict[str, DetectorProtocol], Any]:
+    """Build GraphEval, B0 HalluGraph and B1 typed HalluGraph over one graph bundle.
+
+    ``typing_provider`` is intentionally injected.  A future task supplies the
+    model-backed implementation of ``DynamicTypingProvider``; this factory must not
+    know its prompts, credentials or category policy.
+    """
+    from detector_adapters.typed_hallugraph import TypedHalluGraphAdapter
+
+    two_way, provider = build_controlled_shared_kggen_detectors(
+        hallugraph_config=hallugraph_config,
+        grapheval_config=grapheval_config,
+        gateway_manifest_sha256=gateway_manifest_sha256,
+        cache_sources=cache_sources,
+        cache_mode=cache_mode,
+        hallugraph_usage_path=hallugraph_usage_path,
+    )
+    untyped = two_way["hallugraph"]
+    untyped.variant_name = "untyped_shared_kggen_strict_v1"  # type: ignore[attr-defined]
+    untyped.variant_id = "hallugraph_untyped_shared_kggen_strict_v1"  # type: ignore[attr-defined]
+    grapheval = two_way["grapheval"]
+    grapheval.variant_name = "kggen_shared_answer_hhem_v1"  # type: ignore[attr-defined]
+    grapheval.variant_id = "grapheval_kggen_shared_answer_hhem_v1"  # type: ignore[attr-defined]
+    typed = TypedHalluGraphAdapter(
+        untyped,
+        typing_provider=typing_provider,
+        shared_graph_provider=provider,
+        variant_name="dynamic_types_v1",
+        variant_id="hallugraph_dynamic_types_v1",
+    )
+    return {
+        "grapheval_kggen": grapheval,
+        "hallugraph_untyped": untyped,
+        "hallugraph_dynamic_types": typed,
+    }, provider
 
 
 def build_real_detectors(
@@ -113,6 +203,7 @@ def build_real_detectors(
     )
     graph_detector.method_name = "grapheval"  # type: ignore[attr-defined]
     graph_detector.variant_name = "configured_live_v1"  # type: ignore[attr-defined]
+    graph_detector.variant_id = "grapheval_configured_live_v1"  # type: ignore[attr-defined]
 
     hallu_cfg = load_config(hallugraph_config)
     usage = UsageLogger(hallugraph_usage_path)
@@ -125,6 +216,7 @@ def build_real_detectors(
     )
     hallu_detector.method_name = "hallugraph"  # type: ignore[attr-defined]
     hallu_detector.variant_name = "configured_live_v1"  # type: ignore[attr-defined]
+    hallu_detector.variant_id = "hallugraph_configured_live_v1"  # type: ignore[attr-defined]
     return {"hallugraph": hallu_detector, "grapheval": graph_detector}
 
 
@@ -180,6 +272,7 @@ def build_controlled_shared_kggen_detectors(
     )
     hallu_detector.method_name = "hallugraph"  # type: ignore[attr-defined]
     hallu_detector.variant_name = "shared_kggen_strict_v1"  # type: ignore[attr-defined]
+    hallu_detector.variant_id = "hallugraph_shared_kggen_strict_v1"  # type: ignore[attr-defined]
     hallu_detector.shared_graph_ref = shared_proxy.response_reference  # type: ignore[attr-defined]
 
     graph_cfg = from_dict(grapheval_config)
@@ -191,5 +284,6 @@ def build_controlled_shared_kggen_detectors(
     )
     graph_detector.method_name = "grapheval"  # type: ignore[attr-defined]
     graph_detector.variant_name = "shared_kggen_hhem_v1"  # type: ignore[attr-defined]
+    graph_detector.variant_id = "grapheval_shared_kggen_hhem_v1"  # type: ignore[attr-defined]
     graph_detector.shared_graph_ref = shared_extractor.response_reference  # type: ignore[attr-defined]
     return {"hallugraph": hallu_detector, "grapheval": graph_detector}, provider

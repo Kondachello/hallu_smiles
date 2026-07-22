@@ -97,8 +97,8 @@ Framework должен понимать следующие `comparison_track`:
 | `kggen_untyped_adaptation` | Текущий HalluGraph-KGGen против текущего GraphEval | Первый исполнимый primary track |
 | `faithful_replication` | Авторские extractor/verifier каждого метода | Нельзя заявлять готовым без spaCy+SLM HalluGraph и parity evidence |
 | `controlled_shared_answer_graph` | Один answer graph, разные verifier-механизмы | Реализован как `controlled_shared_kggen_response_v1`; см. `shared-kggen-controlled-track.md` |
-| `controlled_shared_all_graphs` | Общие answer/context/query extraction artifacts | Отдельный controlled этап |
-| `typed_graph_ablation` | B0–B4 абляции типов | Расширение после baseline |
+| `controlled_shared_all_graphs` | Общие answer/context/query extraction artifacts | Инфраструктура реализована как `controlled_shared_all_graphs_three_way_stub_v1`; общий набор и его контрольные суммы уже архивируются |
+| `typed_graph_ablation` | B0–B4 абляции типов | Контракт и all-`unknown` заглушка реализованы; агент типизации и изменение scoring — отдельное расширение |
 | `selective_nli_hybrid` | Structural method + selective NLI | Не primary для первого сравнения |
 | `exploratory` | Явно исследовательский запуск | Никогда не смешивать с confirmatory |
 
@@ -840,6 +840,13 @@ IR хранит raw и normalized значения, но не навязывае
 В `controlled_shared_all_graphs` общий extractor/config применяется к answer/context/query.
 GraphEval по-прежнему не должен передавать context в answer extractor; context используется
 только NLI verifier. Track проверяет механизм, а не faithful package performance.
+
+Текущая реализация создаёт один `SharedGraphBundle` до вызова всех трёх вариантов:
+GraphEval, нетипизированного HalluGraph B0 и контрактного typed-HalluGraph B1. B1 пока
+получает только отдельный слой all-`unknown` аннотаций, поэтому обязан совпадать с B0 по
+score и локализации. Модельный агент, его инструкции, типовые категории и изменение
+метрики намеренно не входят в этот этап. См.
+`docs/dynamic-typing-experiment-infrastructure.md`.
 
 ## 16. Artifact subsystem
 

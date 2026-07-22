@@ -87,7 +87,7 @@ class RunArchive:
         if archive.path.exists():
             raise FileExistsError(f"run archive already exists: {archive.path}")
         for relative in (
-            "gold", "stages", "graphs", "shared_graphs", "cache", "grapheval", "hallugraph", "predictions",
+            "gold", "stages", "graphs", "shared_graphs", "typing", "cache", "grapheval", "hallugraph", "predictions",
             "evaluation", "audit", "payloads/sha256", "reports/tables", "reports/plots",
         ):
             (archive.path / relative).mkdir(parents=True, exist_ok=True)
@@ -137,20 +137,30 @@ class RunArchive:
         expected = set(map(str, expected_response_ids))
         actual = {str(row["response_id"]) for row in predictions}
         methods = sorted({str(row["method"]) for row in predictions})
-        duplicates = len(predictions) != len({(row["method"], row["response_id"]) for row in predictions})
-        missing_by_method = {
-            method: sorted(expected - {str(row["response_id"]) for row in predictions if row["method"] == method})
-            for method in methods
+        variants = sorted({str(row.get("variant") or row["method"]) for row in predictions})
+        duplicates = len(predictions) != len({(row.get("variant") or row["method"], row["response_id"]) for row in predictions})
+        missing_by_variant = {
+            variant: sorted(
+                expected - {
+                    str(row["response_id"])
+                    for row in predictions
+                    if str(row.get("variant") or row["method"]) == variant
+                }
+            )
+            for variant in variants
         }
-        if duplicates or any(missing_by_method.values()):
-            raise ValueError(f"cannot seal incomplete predictions: duplicates={duplicates}, missing={missing_by_method}")
+        if duplicates or any(missing_by_variant.values()):
+            raise ValueError(f"cannot seal incomplete predictions: duplicates={duplicates}, missing={missing_by_variant}")
         tracked = [
             self.path / "predictions/raw_predictions.jsonl",
             self.path / "predictions/paired_predictions.jsonl",
             self.path / "stages/stage_calls.jsonl",
             self.path / "shared_graphs/graph_index.jsonl",
+            self.path / "shared_graphs/bundles.jsonl",
             self.path / "cache/cache_resolution.jsonl",
             self.path / "cache/cache_inventory.json",
+            self.path / "typing/type_registries.jsonl",
+            self.path / "typing/type_annotation_bundles.jsonl",
         ]
         checksums = {str(path.relative_to(self.path)): sha256_file(path) for path in tracked if path.exists()}
         seal = {
@@ -158,6 +168,7 @@ class RunArchive:
             "sealed_at_utc": utc_now(),
             "expected_response_count": len(expected),
             "methods": methods,
+            "variants": variants,
             "prediction_count": len(predictions),
             "file_sha256": checksums,
             "gold_access_state": "hidden",

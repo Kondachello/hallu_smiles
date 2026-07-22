@@ -33,7 +33,7 @@ def join_gold(archive: RunArchive, *, response_gold_path: str) -> list[dict[str,
                 "gold_access_state": "joined_for_evaluation",
             }
         )
-    joined.sort(key=lambda row: (row["method"], row["response_id"]))
+    joined.sort(key=lambda row: (str(row.get("variant") or row["method"]), row["response_id"]))
     archive.write_jsonl("evaluation/predictions_with_gold.jsonl", joined)
     archive.update_status("gold_joined", gold_joined_at_utc=utc_now(), gold_access_state="joined_for_evaluation")
     return joined
@@ -117,27 +117,34 @@ def metrics_at_threshold(rows: Iterable[Mapping[str, Any]], *, threshold: float)
 
 
 def evaluate_joined_predictions(archive: RunArchive, *, thresholds: Mapping[str, float]) -> list[dict[str, Any]]:
-    """Write one provenance-carrying metric row per method from already joined predictions."""
+    """Write one metric row per immutable variant from already joined predictions.
+
+    ``thresholds`` is keyed by ``variant``.  The method-family fallback preserves
+    compatibility with the existing two-method callers while variants are adopted.
+    """
     rows = archive.read_jsonl("evaluation/predictions_with_gold.jsonl")
-    by_method: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_variant: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        by_method[str(row["method"])].append(row)
+        by_variant[str(row.get("variant") or row["method"])].append(row)
     metrics: list[dict[str, Any]] = []
-    for method, method_rows in sorted(by_method.items()):
-        if method not in thresholds:
-            raise ValueError(f"no frozen/explicit threshold supplied for method={method!r}")
+    for variant, variant_rows in sorted(by_variant.items()):
+        method = str(variant_rows[0]["method"])
+        threshold = thresholds.get(variant, thresholds.get(method))
+        if threshold is None:
+            raise ValueError(f"no frozen/explicit threshold supplied for variant={variant!r}")
         metrics.append(
             {
-                "metric_id": f"{archive.run_id}:{method}:overall",
+                "metric_id": f"{archive.run_id}:{variant}:overall",
                 "run_id": archive.run_id,
                 "method": method,
+                "variant": variant,
                 "split": "unknown_from_prediction_archive",
                 "slice_definition": "overall",
                 "gold_policy": "primary_all_labels",
                 "failure_policy": "complete_case_with_coverage",
                 "bootstrap_unit": "source_id",
                 "gold_access_state": "joined_for_evaluation",
-                **metrics_at_threshold(method_rows, threshold=float(thresholds[method])),
+                **metrics_at_threshold(variant_rows, threshold=float(threshold)),
             }
         )
     archive.write_jsonl("evaluation/metrics.jsonl", metrics)

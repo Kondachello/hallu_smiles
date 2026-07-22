@@ -77,6 +77,50 @@ class SharedGraphArtifact:
         }
 
 
+@dataclass(frozen=True)
+class SharedGraphBundle:
+    """One immutable `(G_context, G_query, G_answer)` input for all method variants.
+
+    The bundle is framework-owned rather than detector-owned: the three methods may
+    consume different roles, but their prediction rows cite the same bundle identity.
+    See ``docs/dynamic-typing-experiment-infrastructure.md``.
+    """
+
+    bundle_id: str
+    bundle_sha256: str
+    source_id: str
+    response_id: str
+    context: SharedGraphArtifact
+    query: SharedGraphArtifact
+    response: SharedGraphArtifact
+
+    def reference(self) -> dict[str, str]:
+        return {
+            "shared_graph_bundle_id": self.bundle_id,
+            "shared_graph_bundle_sha256": self.bundle_sha256,
+            "shared_context_graph_id": self.context.graph_id,
+            "shared_context_graph_sha256": self.context.graph_sha256,
+            "shared_query_graph_id": self.query.graph_id,
+            "shared_query_graph_sha256": self.query.graph_sha256,
+            "shared_answer_graph_id": self.response.graph_id,
+            "shared_answer_graph_sha256": self.response.graph_sha256,
+            # Compatibility aliases retained for the pre-existing response-only track.
+            **self.response.reference(),
+        }
+
+    def record(self) -> dict[str, Any]:
+        return {
+            **self.reference(),
+            "source_id": self.source_id,
+            "response_id": self.response_id,
+            "graph_roles": {
+                "context": self.context.record(),
+                "query": self.query.record(),
+                "response": self.response.record(),
+            },
+        }
+
+
 def _graph_from_envelope(path: Path, *, expected_key: str | None = None) -> tuple[str, Graph, str]:
     """Validate one exact ``hallu-kg-cache-v2`` envelope without silent fallback."""
     try:
@@ -169,6 +213,7 @@ class SharedKGGraphProvider:
         self.cache_mode = cache_mode
         self.writable_source_id = writable_source_id
         self._artifacts: dict[str, SharedGraphArtifact] = {}
+        self._bundles: dict[str, SharedGraphBundle] = {}
         self._resolutions: list[dict[str, Any]] = []
 
     def inspection(self) -> dict[str, Any]:
@@ -176,7 +221,7 @@ class SharedKGGraphProvider:
 
     def _identity(self) -> dict[str, Any]:
         return {
-            "extractor_protocol": "kggen-0.4-shared-response-v1",
+            "extractor_protocol": "kggen-0.4-shared-graph-bundle-v1",
             "cache_key_version": 11,
             "llm": getattr(self.extractor, "model", None),
             "runtime_fingerprint": getattr(getattr(self.extractor, "cfg", None).llm, "runtime_fingerprint", None)
@@ -278,12 +323,56 @@ class SharedKGGraphProvider:
     def prepare_response(self, item: Any) -> SharedGraphArtifact:
         return self.materialize(item.response, role="response")
 
+    def prepare_instance(self, item: Any) -> SharedGraphBundle:
+        """Materialize all three graph roles before any detector is invoked.
+
+        A method order must not decide which detector paid for or produced a graph.
+        The runner calls this once per no-gold RAGTruth response, and adapters only
+        retrieve the already memoized role artifacts afterwards.
+        """
+        source_id = str(item.source_id)
+        response_id = str(item.response_id)
+        memo_key = f"{source_id}:{response_id}"
+        cached = self._bundles.get(memo_key)
+        if cached is not None:
+            return cached
+        context = self.materialize(item.context, role="context")
+        query = self.materialize(item.query or "", role="query")
+        response = self.materialize(item.response, role="response")
+        payload = {
+            "protocol": "shared-kggen-graph-bundle-v1",
+            "source_id": source_id,
+            "response_id": response_id,
+            "context_graph_id": context.graph_id,
+            "query_graph_id": query.graph_id,
+            "response_graph_id": response.graph_id,
+            "context_graph_sha256": context.graph_sha256,
+            "query_graph_sha256": query.graph_sha256,
+            "response_graph_sha256": response.graph_sha256,
+            "extraction_identity": context.extraction_identity,
+        }
+        bundle_sha256 = sha256_bytes(canonical_json(payload).encode("utf-8"))
+        bundle = SharedGraphBundle(
+            bundle_id=f"bundle:{bundle_sha256}",
+            bundle_sha256=bundle_sha256,
+            source_id=source_id,
+            response_id=response_id,
+            context=context,
+            query=query,
+            response=response,
+        )
+        self._bundles[memo_key] = bundle
+        return bundle
+
     def response_reference(self, item: Any) -> dict[str, str]:
         artifact = self.prepare_response(item)
         return artifact.reference()
 
     def artifact_records(self) -> list[dict[str, Any]]:
         return [artifact.record() for _, artifact in sorted(self._artifacts.items())]
+
+    def bundle_records(self) -> list[dict[str, Any]]:
+        return [bundle.record() for _, bundle in sorted(self._bundles.items())]
 
     def resolution_records(self) -> list[dict[str, Any]]:
         return list(self._resolutions)
@@ -346,8 +435,11 @@ class SharedKGExtractorProxy:
     def response_reference(self, item: Any) -> dict[str, str]:
         return self.provider.response_reference(item)
 
+    def bundle_reference(self, item: Any) -> dict[str, str]:
+        return self.provider.prepare_instance(item).reference()
+
 
 __all__ = [
     "CACHE_PROTOCOL", "CacheIntegrityError", "CachePreflightError", "GraphCacheSource",
-    "SharedGraphArtifact", "SharedKGExtractorProxy", "SharedKGGraphProvider", "inspect_cache_sources",
+    "SharedGraphArtifact", "SharedGraphBundle", "SharedKGExtractorProxy", "SharedKGGraphProvider", "inspect_cache_sources",
 ]

@@ -85,6 +85,24 @@ llm:
 python run.py --config config.yaml --stage all
 ```
 
+## Экспериментальная инфраструктура: три варианта на общих графах KGGen
+
+Фреймворк эксперимента умеет запускать GraphEval, базовый HalluGraph и будущий
+HalluGraph с динамической типизацией на одном неизменяемом наборе
+`(G_context, G_query, G_answer)`. Сейчас для третьего варианта есть только строгий
+контракт входа/выхода и заглушка, которая присваивает всем сущностям `unknown` и не
+изменяет оценку базового метода. Агент типизации, его инструкции и правила выбора
+категорий будут добавлены отдельно.
+
+Полная схема, артефакты, кэш исторических графов и требования к будущему агенту:
+[docs/dynamic-typing-experiment-infrastructure.md](docs/dynamic-typing-experiment-infrastructure.md).
+
+Проверка инфраструктуры без сети, ключей и DataSphere:
+
+```bash
+python -m pytest -c pytest.framework.ini -q tests/experiments/test_three_way_dynamic_typing.py
+```
+
 Stages (each resumable; artifacts persisted under `results/`):
 
 | stage | does | writes |

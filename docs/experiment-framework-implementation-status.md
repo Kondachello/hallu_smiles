@@ -12,12 +12,22 @@ runner и записывает проверяемый prediction archive. Он �
 
 ## Что реализовано
 
-### Controlled shared-KGGen track and reusable graph caches
+### Controlled shared-KGGen track, reusable graph caches and three-way typing scaffold
 
-`controlled_shared_kggen_response_v1` is now an explicit additional track. It
-materializes the response graph once, passes the immutable result to HalluGraph and
-GraphEval, and records shared graph IDs/hashes in both predictions. The existing
-`kggen_untyped_adaptation` construction is unchanged.
+`controlled_shared_kggen_response_v1` remains an explicit additional track. Its
+scientific comparison shares the answer graph between HalluGraph and GraphEval; the
+current runner additionally seals the complete `(G_context, G_query, G_answer)` bundle
+before either detector so that all KGGen provenance is fixed. GraphEval consumes its
+common answer graph and raw context, whereas HalluGraph consumes all three graphs. The
+existing `kggen_untyped_adaptation` construction is unchanged.
+
+`controlled_shared_all_graphs_three_way_stub_v1` adds the planned three-way
+comparison without altering KGGen: the framework materializes one immutable
+`(G_context, G_query, G_answer)` bundle before all detector calls, then records its
+identity on GraphEval, untyped HalluGraph and typed-HalluGraph rows. The typed variant
+currently uses an all-`unknown`, score-preserving placeholder. It defines and archives
+the input/output contract, but contains no model, prompt or policy for type induction.
+See `docs/dynamic-typing-experiment-infrastructure.md`.
 
 `experiments/shared_graphs.py` validates historical `hallu-kg-cache-v2` sources,
 detects corrupt/conflicting entries and supports cache-only/read-through policies.
@@ -77,6 +87,10 @@ instances.no_gold.jsonl
 stages/stage_calls.jsonl
 predictions/raw_predictions.jsonl
 predictions/paired_predictions.jsonl
+shared_graphs/graph_index.jsonl
+shared_graphs/bundles.jsonl
+typing/type_registries.jsonl
+typing/type_annotation_bundles.jsonl
 prediction_seal.json
 payloads/sha256/
 reports/
@@ -93,7 +107,7 @@ prediction/stage файлов. Archive validator проверяет их при 
 - подаёт один и тот же `DetectionInput` всем выбранным detectors;
 - изолирует per-item exception как `failed`, не превращая его в score;
 - пишет stage calls, raw predictions и paired table;
-- поддерживает безопасный resume по `(method, response_id)`;
+- поддерживает безопасный resume по `(variant, response_id)`;
 - разрешает seal только при полном покрытии ожидаемых IDs.
 
 ### 5. Offline mock demonstration
@@ -174,7 +188,9 @@ barrier до согласованного DataSphere preflight.
 3. train-only grouped tuning, threshold manifests и policy replay;
 4. gold join, metrics, source-cluster bootstrap, calibration, localization и reports;
 5. blind audit workflow, cost/stability analysis, router/hybrid tables;
-6. shared graph IR/controlled tracks/type ablations;
+6. модельный агент динамической типизации, его промпт, версия политики, богатые
+   node IDs и собственно изменение метрики HalluGraph; контракт и score-preserving
+   трёхсторонняя заглушка уже реализованы;
 7. DataSphere execution backend, gateway manifest gate и cache-only live replay;
 8. Parquet/zstd large-artifact compaction and public redacted export.
 
@@ -183,6 +199,10 @@ barrier до согласованного DataSphere preflight.
 Offline tests расположены в `tests/experiments/` и не требуют RAGTruth, OpenAI, gateway,
 torch или secrets. Они проверяют gold isolation, deterministic sampling, archive sealing,
 checksums и resume.
+
+Отдельный mock-тест `tests/experiments/test_three_way_dynamic_typing.py` проверяет
+общий набор из трёх KGGen-графов, матрицу из трёх вариантов, архивные строки
+типизации и cache-only replay с нулём вызовов KGGen.
 
 В этой рабочей среде pytest может обнаружить внешний пользовательский `.git` выше корня
 репозитория. Поэтому framework tests запускаются с локальным config:
