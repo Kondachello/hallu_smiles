@@ -11,9 +11,15 @@ instead of hard-coding a DataSphere mount path.
 ## Source contract and modes
 
 Each `GraphCacheSource` identifies an immutable directory of `hallu-kg-cache-v2` envelopes,
-an optional lineage manifest and priority. Every envelope is validated for protocol,
+an optional lineage manifest, priority and (when needed) an explicit compatibility key schema.
+Every envelope is validated for protocol,
 filename/key agreement, canonical graph SHA-256 and graph round-trip. Two sources that
 return distinct graph hashes for the same key cause a hard conflict.
+
+The only currently supported historical schema is `kggen-v11-pre-length-retry`: it is
+available exclusively to a declared read-only source and recomputes the former v11 key
+without `length_retry_attempts` and `length_retry_max_tokens`. New cache writes continue
+to use `kggen-v11-current`; no generic fallback or change to current keys is allowed.
 
 | Mode | Behaviour |
 |---|---|
@@ -62,7 +68,9 @@ selection, then chooses the first record with compatible context/query/response
 graphs. It runs both detectors in `cache_only` and records zero KGGen and GraphEval
 extractor calls. The `cache_only` preflight supports an explicitly non-strict
 inventory mode only for this selection step; actual graph materialization remains
-strict and fails on a miss.
+strict and fails on a miss. Its registered historical source additionally declares the
+pre-length-retry key schema, so a hit is recorded with both the requested current key
+and the resolved historical key schema in the coverage and graph-resolution reports.
 
 ## Auditable output
 

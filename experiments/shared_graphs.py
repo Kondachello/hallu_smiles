@@ -12,7 +12,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from src.extract import Graph
+from src.extract import (
+    CACHE_KEY_SCHEMA_CURRENT,
+    CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY,
+    Graph,
+)
 
 from .artifacts import canonical_json, sha256_bytes
 
@@ -36,6 +40,7 @@ class GraphCacheSource:
     read_only: bool = True
     lineage_manifest: Path | None = None
     priority: int = 0
+    cache_key_compatibility: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,7 @@ class SharedGraphArtifact:
     graph_id: str
     role: str
     cache_key: str | None
+    cache_key_schema: str | None
     graph_sha256: str
     input_sha256: str
     graph: Graph
@@ -55,6 +61,7 @@ class SharedGraphArtifact:
             "shared_graph_id": self.graph_id,
             "shared_graph_sha256": self.graph_sha256,
             "shared_graph_cache_key": self.cache_key or "",
+            "shared_graph_cache_key_schema": self.cache_key_schema or "",
             "shared_graph_source": self.source_id,
         }
 
@@ -118,6 +125,7 @@ def inspect_cache_sources(sources: Iterable[GraphCacheSource]) -> dict[str, Any]
                 "root": str(root),
                 "read_only": source.read_only,
                 "lineage_manifest": str(source.lineage_manifest) if source.lineage_manifest else None,
+                "cache_key_compatibility": list(source.cache_key_compatibility),
                 "entries_valid": count,
                 "exists": root.exists(),
             }
@@ -152,6 +160,12 @@ class SharedKGGraphProvider:
             raise ValueError(f"unsupported shared graph cache mode: {cache_mode!r}")
         self.extractor = extractor
         self.sources = tuple(sorted(sources, key=lambda item: (-item.priority, item.source_id)))
+        for source in self.sources:
+            if not source.read_only and source.cache_key_compatibility:
+                raise ValueError("legacy cache-key compatibility requires a read-only source")
+            unsupported = set(source.cache_key_compatibility) - {CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY}
+            if unsupported:
+                raise ValueError(f"unsupported source cache-key compatibility: {sorted(unsupported)!r}")
         self.cache_mode = cache_mode
         self.writable_source_id = writable_source_id
         self._artifacts: dict[str, SharedGraphArtifact] = {}
@@ -172,21 +186,36 @@ class SharedKGGraphProvider:
             "cluster": getattr(self.extractor, "cluster", None),
         }
 
-    def _cached_source(self, key: str) -> tuple[str, Graph, str] | None:
-        roots = [(self.writable_source_id, Path(self.extractor.cache_dir))]
+    def _source_key_candidates(
+        self, source: GraphCacheSource, text: str, current_key: str
+    ) -> Iterable[tuple[str, str]]:
+        yield CACHE_KEY_SCHEMA_CURRENT, current_key
+        for schema in source.cache_key_compatibility:
+            legacy_key = self.extractor.cache_key_for_schema(text, schema=schema)
+            if legacy_key != current_key:
+                yield schema, legacy_key
+
+    def _cached_source(
+        self, text: str, current_key: str
+    ) -> tuple[str, str, str, Graph, str] | None:
+        """Resolve a graph by current key, then source-declared legacy keys only."""
+        roots: list[tuple[GraphCacheSource, Path]] = [
+            (GraphCacheSource(self.writable_source_id, Path(self.extractor.cache_dir)), Path(self.extractor.cache_dir))
+        ]
         if self.cache_mode != "live_fresh":
-            roots.extend((source.source_id, source.root) for source in self.sources)
-        for source_id, root in roots:
-            path = root / f"{key}.json"
-            if not path.exists():
-                continue
-            try:
-                _, graph, digest = _graph_from_envelope(path, expected_key=key)
-            except CacheIntegrityError:
-                # KGExtractor itself treats invalid entries as misses.  Here it is a
-                # preflight/audit failure rather than an opportunity for silent reuse.
-                raise
-            return source_id, graph, digest
+            roots.extend((source, source.root) for source in self.sources)
+        for source, root in roots:
+            for schema, key in self._source_key_candidates(source, text, current_key):
+                path = root / f"{key}.json"
+                if not path.exists():
+                    continue
+                try:
+                    _, graph, digest = _graph_from_envelope(path, expected_key=key)
+                except CacheIntegrityError:
+                    # KGExtractor itself treats invalid entries as misses.  Here it is a
+                    # preflight/audit failure rather than an opportunity for silent reuse.
+                    raise
+                return source.source_id, key, schema, graph, digest
         return None
 
     def materialize(self, text: str, *, role: str) -> SharedGraphArtifact:
@@ -197,7 +226,7 @@ class SharedKGGraphProvider:
         if memo_key in self._artifacts:
             return self._artifacts[memo_key]
 
-        cached = self._cached_source(key) if key else None
+        cached = self._cached_source(normalized, key) if key else None
         was_cached = cached is not None
         if self.cache_mode == "inspect_only":
             raise RuntimeError("inspect_only cache mode does not materialize graphs")
@@ -210,28 +239,31 @@ class SharedKGGraphProvider:
             # Do not delegate an external read-through hit back to KGExtractor:
             # it only knows its own configured roots, while this provider owns
             # ordered immutable sources and has already validated the envelope.
-            _source_id, graph, _digest = cached
+            _source_id, resolved_key, _key_schema, graph, _digest = cached
             if key is not None:
-                self.extractor.usage.record_call(role, key, 0.0, cached=True)
+                self.extractor.usage.record_call(role, resolved_key, 0.0, cached=True)
         else:
             graph = self.extractor.extract(normalized, kind=role)
             if key:
-                cached = self._cached_source(key)
+                cached = self._cached_source(normalized, key)
         if cached is None:
             # Empty text is intentionally represented as an empty graph and has no cache key.
             graph_payload = graph.to_dict()
             graph_sha = sha256_bytes(canonical_json(graph_payload).encode("utf-8"))
-            source_id, cache_hit = "empty_input", True
+            source_id, resolved_key, key_schema, cache_hit = "empty_input", None, None, True
         else:
-            source_id, cached_graph, graph_sha = cached
+            source_id, resolved_key, key_schema, cached_graph, graph_sha = cached
             if cached_graph.to_dict() != graph.to_dict():
-                raise CacheIntegrityError(f"extractor/cache disagreement for key={key}")
+                raise CacheIntegrityError(
+                    f"extractor/cache disagreement for requested={key}, resolved={resolved_key}"
+                )
             cache_hit = was_cached
-        graph_id = sha256_bytes(canonical_json({"cache_key": key, "graph_sha256": graph_sha}).encode("utf-8"))
+        graph_id = sha256_bytes(canonical_json({"cache_key": resolved_key, "graph_sha256": graph_sha}).encode("utf-8"))
         artifact = SharedGraphArtifact(
             graph_id=graph_id,
             role=role,
-            cache_key=key,
+            cache_key=resolved_key,
+            cache_key_schema=key_schema,
             graph_sha256=graph_sha,
             input_sha256=input_sha,
             graph=graph,
@@ -271,10 +303,20 @@ class SharedKGGraphProvider:
                 normalized = str(texts[role] or "").strip()
                 key = None if not normalized else self.extractor._cache_key(normalized)
                 try:
-                    found = self._cached_source(key) if key else ("empty_input", Graph.empty(), sha256_bytes(canonical_json(Graph.empty().to_dict()).encode("utf-8")))
-                    rows.append({"response_id": str(record.get("response_id")), "role": role, "cache_key": key, "status": "compatible_hit" if found else "miss", "source_id": found[0] if found else None})
+                    found = self._cached_source(normalized, key) if key else (
+                        "empty_input", None, None, Graph.empty(),
+                        sha256_bytes(canonical_json(Graph.empty().to_dict()).encode("utf-8")),
+                    )
+                    rows.append({
+                        "response_id": str(record.get("response_id")), "role": role,
+                        "requested_cache_key": key,
+                        "cache_key": found[1] if found else key,
+                        "cache_key_schema": found[2] if found else CACHE_KEY_SCHEMA_CURRENT,
+                        "status": "compatible_hit" if found else "miss",
+                        "source_id": found[0] if found else None,
+                    })
                 except CacheIntegrityError as exc:
-                    rows.append({"response_id": str(record.get("response_id")), "role": role, "cache_key": key, "status": "corrupt", "error": str(exc)})
+                    rows.append({"response_id": str(record.get("response_id")), "role": role, "requested_cache_key": key, "cache_key": key, "status": "corrupt", "error": str(exc)})
         report = {"cache_mode": self.cache_mode, "rows": rows, "hits": sum(row["status"] == "compatible_hit" for row in rows), "misses": sum(row["status"] == "miss" for row in rows), "valid": not any(row["status"] == "corrupt" for row in rows)}
         # A caller selecting one replayable record from a larger historical cache
         # deliberately asks for a coverage report before it chooses that record.

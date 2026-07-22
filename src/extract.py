@@ -83,6 +83,12 @@ class ClusteringCollapseError(ExtractionError):
 
 CLUSTER_CONTEXT_PROTOCOL = "kggen-native-strict-equivalence-v2"
 
+# Cache keys are an extraction contract, not merely filenames.  The historical
+# 100-QA lineage was written before length-retry settings were introduced.  It
+# may be read only through the explicitly named compatibility schema below.
+CACHE_KEY_SCHEMA_CURRENT = "kggen-v11-current"
+CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY = "kggen-v11-pre-length-retry"
+
 CLUSTER_EQUIVALENCE_POLICY = """
 
 Strict clustering contract:
@@ -356,8 +362,8 @@ class KGExtractor:
         return self._backend
 
     # -- cache ----------------------------------------------------------------
-    def _cache_key(self, text: str) -> str:
-        params = {
+    def _cache_key_params(self) -> dict[str, Any]:
+        return {
             "v": 11,
             "extractor_protocol": "kggen-0.4-strict-cache-v5-vertex-runtime-contracts",
             "backend": self.backend_fingerprint,
@@ -377,8 +383,25 @@ class KGExtractor:
             "explicit_clustering": self.explicit_clustering,
             "vllm_guided_json": self.vllm_guided_json,
         }
+
+    def cache_key_for_schema(self, text: str, *, schema: str) -> str:
+        """Return a cache key for one supported, auditable key schema.
+
+        ``kggen-v11-pre-length-retry`` exists solely for the immutable
+        historical 100-QA source.  New extractions always use the current
+        schema through :meth:`_cache_key`.
+        """
+        params = self._cache_key_params()
+        if schema == CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY:
+            params.pop("length_retry_attempts")
+            params.pop("length_retry_max_tokens")
+        elif schema != CACHE_KEY_SCHEMA_CURRENT:
+            raise ValueError(f"unsupported KGGen cache-key schema: {schema!r}")
         payload = json.dumps(params, sort_keys=True) + "\x00" + text
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _cache_key(self, text: str) -> str:
+        return self.cache_key_for_schema(text, schema=CACHE_KEY_SCHEMA_CURRENT)
 
     def _cache_path(self, key: str) -> Path:
         return self.cache_dir / f"{key}.json"

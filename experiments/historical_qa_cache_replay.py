@@ -12,6 +12,7 @@ from .live_one_instance import _load_yaml_mapping
 from .one_instance import _validated_run_id
 from .runner import run_paired, seal_run
 from .shared_graphs import GraphCacheSource
+from src.extract import CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY
 
 PROBE_VERSION = "historical-qa-cache-controlled-replay-v1"
 
@@ -65,7 +66,12 @@ def run_historical_qa_cache_controlled_replay(
     records = materialize_historical_qa_no_gold(
         data_dir, qa_sample_size=qa_sample_size, qa_test_fraction=qa_test_fraction, sample_seed=sample_seed,
     )
-    source = GraphCacheSource("historical_100qa", Path(historical_cache_root), read_only=True)
+    source = GraphCacheSource(
+        "historical_100qa",
+        Path(historical_cache_root),
+        read_only=True,
+        cache_key_compatibility=(CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY,),
+    )
     factory = detector_factory or build_controlled_shared_kggen_detectors
     detectors, provider = factory(
         hallugraph_config=hallugraph_config,
@@ -82,7 +88,6 @@ def run_historical_qa_cache_controlled_replay(
         roles=("response", "context", "query"),
         require_complete=False,
     )
-    record = _first_fully_cached(records, coverage)
     archive = RunArchive.create(
         output_root,
         run_id=selected_id,
@@ -94,15 +99,25 @@ def run_historical_qa_cache_controlled_replay(
             "historical_cache_root": str(source.root),
             "historical_lineage_id": lineage.get("lineage_id"),
             "historical_llm_runtime_fingerprint": lineage["llm_runtime_fingerprint"],
-            "selected_response_id": record["response_id"],
-            "selected_source_id": record["source_id"],
+            "selected_response_id": None,
+            "selected_source_id": None,
             "gold_passed_to_detectors": False,
             "llm_gateway_calls_permitted": 0,
         },
     )
+    atomic_write_json(archive.path / "reports/historical_cache_coverage.json", coverage)
+    try:
+        record = _first_fully_cached(records, coverage)
+    except RuntimeError as exc:
+        archive.update_status("cache_preflight_failed", failure=str(exc))
+        raise
+    archive.update_status(
+        "cache_record_selected",
+        selected_response_id=record["response_id"],
+        selected_source_id=record["source_id"],
+    )
     instances = archive.path / "instances.no_gold.jsonl"
     atomic_write_jsonl(instances, [record])
-    atomic_write_json(archive.path / "reports/historical_cache_coverage.json", coverage)
     summary = run_paired(archive, instances_path=instances, detectors=detectors, shared_graph_provider=provider)
     seal = seal_run(archive, instances)
     validation = archive.validate()

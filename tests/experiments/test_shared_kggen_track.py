@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from argparse import Namespace
 
@@ -12,7 +13,12 @@ from experiments.detectors import build_controlled_shared_kggen_fake
 from experiments.runner import run_paired, seal_run
 from experiments.shared_graphs import CachePreflightError, GraphCacheSource, SharedKGGraphProvider, inspect_cache_sources
 from src.config import load_config
-from src.extract import FakeKGGen, KGExtractor, UsageLogger
+from src.extract import (
+    CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY,
+    FakeKGGen,
+    KGExtractor,
+    UsageLogger,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -91,6 +97,48 @@ def test_cache_only_reads_a_declared_external_source(tmp_path) -> None:
     )
     artifact = provider.materialize("External cache graph", role="response")
     assert artifact.graph.to_dict() == expected.to_dict()
+    assert artifact.source_id == "historical"
+    assert replay.usage.summary()["api_calls"] == 0
+
+
+def test_cache_only_reads_declared_pre_length_retry_historical_key(tmp_path) -> None:
+    """The historical source is read through its declared key schema only."""
+    source_cfg = load_config(ROOT / "config.yaml")
+    source_cfg._data["cache_dir"] = str(tmp_path / "historical")
+    source_cfg.cache_dir = source_cfg._data["cache_dir"]
+    source_extractor = KGExtractor(source_cfg, backend=FakeKGGen(), usage=UsageLogger(None))
+    text = "Historical graph written before the length-retry settings existed."
+    expected = source_extractor.extract(text, kind="response")
+    current_key = source_extractor._cache_key(text)
+    historical_key = source_extractor.cache_key_for_schema(
+        text, schema=CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY
+    )
+    assert historical_key != current_key
+
+    current_path = tmp_path / "historical" / f"{current_key}.json"
+    envelope = json.loads(current_path.read_text(encoding="utf-8"))
+    envelope["cache_key"] = historical_key
+    historical_path = tmp_path / "historical" / f"{historical_key}.json"
+    historical_path.write_text(json.dumps(envelope), encoding="utf-8")
+    current_path.unlink()
+
+    replay_cfg = load_config(ROOT / "config.yaml")
+    replay_cfg._data["cache_dir"] = str(tmp_path / "current")
+    replay_cfg.cache_dir = replay_cfg._data["cache_dir"]
+    replay = KGExtractor(replay_cfg, backend=FakeKGGen(), usage=UsageLogger(None), cache_only=True)
+    provider = SharedKGGraphProvider(
+        replay,
+        sources=[GraphCacheSource(
+            "historical", tmp_path / "historical",
+            cache_key_compatibility=(CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY,),
+        )],
+        cache_mode="cache_only",
+    )
+
+    artifact = provider.materialize(text, role="response")
+    assert artifact.graph.to_dict() == expected.to_dict()
+    assert artifact.cache_key == historical_key
+    assert artifact.cache_key_schema == CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY
     assert artifact.source_id == "historical"
     assert replay.usage.summary()["api_calls"] == 0
 
