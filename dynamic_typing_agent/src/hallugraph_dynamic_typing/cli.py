@@ -13,6 +13,7 @@ from .models import AnswerInput, SourceInput
 from .persistence import ArtifactWriter
 from .prompt_registry import PromptRegistry
 from .kggen_pipeline import ragtruth_records, run_pipeline, text_records
+from .test_framework import run_test_suite
 
 
 def _rows(path: Path) -> list[dict]:
@@ -99,6 +100,37 @@ def run_kggen_pipeline(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def run_unified_test(args: argparse.Namespace) -> int:
+    """Run text or graph fixtures into the same artifact and viewer layout."""
+    agent = _agent(args)
+    manifest = run_test_suite(
+        agent=agent,
+        input_path=args.input,
+        output=args.run_output,
+        limit=args.limit,
+        input_mode=args.input_mode,
+        kggen_mode=args.kggen,
+        kggen_config=args.kggen_config,
+        kggen_cache_root=args.kggen_cache_root,
+        case_ids=args.case_id,
+        render_viewer=not args.no_viewer,
+    )
+    failed = int(manifest["status_counts"].get("failed", 0))
+    print(
+        json.dumps(
+            {
+                "run_id": manifest["run_id"],
+                "cases": manifest["case_count"],
+                "failed": failed,
+                "output": str(args.run_output),
+                "viewer": manifest.get("viewer"),
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hallugraph-type-agent")
     parser.add_argument("--config", help="YAML runtime configuration; live secrets are read only from environment")
@@ -106,6 +138,50 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache-root")
     parser.add_argument("--output")
     commands = parser.add_subparsers(dest="command", required=True)
+    unified = commands.add_parser(
+        "test",
+        help="run raw text, supplied graphs or a mixed no-gold JSONL into one browsable suite",
+    )
+    unified.add_argument("--input", required=True, help="no-gold JSONL test cases")
+    unified.add_argument(
+        "--input-mode",
+        choices=("auto", "graphs", "text"),
+        default="auto",
+        help="auto detects a graphs object per case; text forces KGGen",
+    )
+    unified.add_argument(
+        "--kggen",
+        choices=("fake", "live"),
+        default="fake",
+        help="KGGen backend for text cases; ignored for supplied graphs",
+    )
+    unified.add_argument(
+        "--kggen-config",
+        help="HalluGraph KGGen YAML configuration; required for --kggen live",
+    )
+    unified.add_argument(
+        "--kggen-cache-root",
+        default=".cache/kggen-graphs",
+        help="persistent immutable KGGen graph cache",
+    )
+    unified.add_argument("--limit", type=int, default=20)
+    unified.add_argument(
+        "--case-id",
+        action="append",
+        help="run only this case_id; repeat to select several immutable input rows",
+    )
+    unified.add_argument(
+        "--output",
+        dest="run_output",
+        required=True,
+        help="single output root for artifacts and the local viewer",
+    )
+    unified.add_argument(
+        "--no-viewer",
+        action="store_true",
+        help="skip HTML generation while retaining the same artifact contract",
+    )
+    unified.set_defaults(handler=run_unified_test)
     run = commands.add_parser("run-fixture", help="run no-gold JSONL using the selected fake or live configuration")
     run.add_argument("--input", required=True)
     run.add_argument("--limit", type=int, default=20)

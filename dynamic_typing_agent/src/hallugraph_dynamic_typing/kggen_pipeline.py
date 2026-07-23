@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import types
 from pathlib import Path
@@ -38,6 +39,23 @@ def _kggen_modules() -> tuple[Any, Any, Any, Any]:
 
 def graph_dict(graph: Any) -> dict[str, Any]:
     return {"entities": sorted(str(x) for x in graph.entities), "relations": sorted([list(map(str, edge)) for edge in graph.relations])}
+
+
+def _unicode_fake_graph(text: str, graph_type: Any) -> Any:
+    """Create a deterministic non-empty graph for non-Latin offline smoke inputs.
+
+    HalluGraph's bundled FakeKGGen intentionally tokenizes only ASCII words. The
+    standalone package uses this fallback only when that toy backend produces no
+    entity for non-empty text; it is never presented as KGGen output or a semantic
+    extraction result.
+    """
+    tokens = re.findall(r"[^\W\d_][\w-]{2,}", text.casefold(), flags=re.UNICODE)
+    entities = list(dict.fromkeys(token for token in tokens if len(token) >= 4))[:12]
+    relations = {
+        (left, "co_occurs_with", right)
+        for left, right in zip(entities, entities[1:])
+    }
+    return graph_type(entities=set(entities), relations=relations)
 
 
 def _install_strict_cluster_adapter(extractor: Any) -> None:
@@ -137,6 +155,20 @@ def _install_strict_cluster_adapter(extractor: Any) -> None:
     backend._hallugraph_strict_cluster_adapter = True
 
 
+def _set_config_value(config: Any, name: str, value: Any) -> None:
+    """Update both views exposed by HalluGraph's attribute-backed Config.
+
+    ``src.config.Config.get`` reads its original ``_data`` mapping, while
+    ordinary consumers read attributes.  A runtime-only override therefore
+    has to update both views or different parts of KGExtractor observe
+    different configurations.
+    """
+    setattr(config, name, value)
+    data = getattr(config, "_data", None)
+    if isinstance(data, dict):
+        data[name] = value
+
+
 def make_extractor(*, kggen_config: str | None, fake: bool, cache_root: str | None = None) -> tuple[Any, str]:
     load_config, FakeKGGen, KGExtractor, Graph = _kggen_modules()
     if fake:
@@ -145,7 +177,12 @@ def make_extractor(*, kggen_config: str | None, fake: bool, cache_root: str | No
         class FakeExtractor:
             def extract(self, text: str, kind: str) -> Any:
                 generated = backend.generate(text, cluster=True)
-                return Graph(entities=set(generated.entities), relations=set(generated.relations))
+                if generated.entities or not text.strip():
+                    return Graph(
+                        entities=set(generated.entities),
+                        relations=set(generated.relations),
+                    )
+                return _unicode_fake_graph(text, Graph)
         return FakeExtractor(), "fake-kggen-v1"
     if not kggen_config:
         raise ValueError("real KGGen requires --kggen-config; use --fake-kggen only for offline plumbing")
@@ -157,9 +194,13 @@ def make_extractor(*, kggen_config: str | None, fake: bool, cache_root: str | No
         gateway = os.environ.get("HALLU_GATEWAY_URL", "").rstrip("/")
         if not gateway:
             raise ValueError("KGGen config has no llm.api_base and HALLU_GATEWAY_URL is unset")
-        cfg.llm.api_base = gateway if gateway.endswith("/v1") else f"{gateway}/v1"
+        _set_config_value(
+            cfg.llm,
+            "api_base",
+            gateway if gateway.endswith("/v1") else f"{gateway}/v1",
+        )
     if os.environ.get("HALLU_TYPING_MODEL"):
-        cfg.llm.model = os.environ["HALLU_TYPING_MODEL"]
+        _set_config_value(cfg.llm, "model", os.environ["HALLU_TYPING_MODEL"])
     # The standalone gateway accepts structured responses only through the
     # OpenAI-compatible ``json_schema`` transport.  KGGen/DSPy's default JSON
     # adapter falls back to ``json_object`` after a parse failure, which this
@@ -168,20 +209,27 @@ def make_extractor(*, kggen_config: str | None, fake: bool, cache_root: str | No
     # complete schema.  The two provenance fields are deliberately overridable
     # from the environment for a pinned deployed gateway; the local markers
     # identify an unpinned developer-machine run in the cache contract.
-    cfg.llm.structured_output_transport = "response_format"
-    cfg.llm.structured_output_backend = "vertex"
-    cfg.llm.structured_output_request_backend = None
-    cfg.llm.model_revision = os.environ.get(
-        "HALLU_KGGEN_MODEL_REVISION", f"standalone:{cfg.llm.model}"
+    _set_config_value(cfg.llm, "structured_output_transport", "response_format")
+    _set_config_value(cfg.llm, "structured_output_backend", "vertex")
+    _set_config_value(cfg.llm, "structured_output_request_backend", None)
+    _set_config_value(
+        cfg.llm,
+        "model_revision",
+        os.environ.get("HALLU_KGGEN_MODEL_REVISION", f"standalone:{cfg.llm.model}"),
     )
-    cfg.llm.runtime_fingerprint = os.environ.get(
-        "HALLU_KGGEN_RUNTIME_FINGERPRINT", "standalone-live-gateway-unpinned"
+    _set_config_value(
+        cfg.llm,
+        "runtime_fingerprint",
+        os.environ.get(
+            "HALLU_KGGEN_RUNTIME_FINGERPRINT",
+            "standalone-live-gateway-unpinned",
+        ),
     )
     if cache_root:
-        cfg.cache_dir = str(cache_root)
+        _set_config_value(cfg, "cache_dir", str(cache_root))
     extractor = KGExtractor(cfg)
     _install_strict_cluster_adapter(extractor)
-    return extractor, "hallu-smiles-kggen-v13-strict-cluster-schema-retries"
+    return extractor, "hallu-smiles-kggen-v14-synchronized-strict-schema"
 
 
 def text_records(path: str | Path) -> list[dict[str, Any]]:

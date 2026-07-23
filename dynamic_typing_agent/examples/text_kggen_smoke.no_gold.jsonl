@@ -1,0 +1,1 @@
+{"case_id":"text-kggen-bank-smoke","source_id":"text-kggen-bank-source","language":"en","context":"North Bank is a commercial bank. It issued a loan to Delta Ltd. Delta Ltd is a manufacturing company.","query":"Which organization issued the loan?","response":"North Bank issued the loan to Delta Ltd."}

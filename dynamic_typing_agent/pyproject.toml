@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hallugraph-dynamic-typing-agent"
-version = "0.2.0"
+version = "0.3.0"
 description = "Standalone evidence-constrained dynamic entity typing agent for HalluGraph"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -36,7 +36,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-hallugraph_dynamic_typing = ["py.typed"]
+hallugraph_dynamic_typing = ["py.typed", "viewer_assets/*.html", "viewer_assets/*.css", "viewer_assets/*.js"]
 
 [tool.setuptools.data-files]
 "share/hallugraph-dynamic-typing-agent/prompts/v1" = [
@@ -45,6 +45,12 @@ hallugraph_dynamic_typing = ["py.typed"]
   "prompts/v1/*.md",
 ]
 "share/hallugraph-dynamic-typing-agent/prompts/v1/schemas" = ["prompts/v1/schemas/*.json"]
+"share/hallugraph-dynamic-typing-agent/prompts/v2" = [
+  "prompts/v2/*.json",
+  "prompts/v2/*.j2",
+  "prompts/v2/*.md",
+]
+"share/hallugraph-dynamic-typing-agent/prompts/v2/schemas" = ["prompts/v2/schemas/*.json"]
 "share/hallugraph-dynamic-typing-agent/config" = ["config/*.yaml"]
 
 [tool.pytest.ini_options]

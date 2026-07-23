@@ -1,6 +1,6 @@
-contract_version: dynamic-typing-agent-contract-v2-draft
+contract_version: dynamic-typing-agent-contract-v3
 prompt_set:
-  version: v1
+  version: v2
   root: null
 
 seed_schema:
@@ -11,10 +11,11 @@ source:
   dominant_label_language: source
   chunk_chars: 12000
   chunk_overlap_chars: 500
-  entity_batch_size: 16
+  entity_batch_size: 1
   max_candidate_types_per_entity: 8
   max_close_pairs_per_type: 8
   max_repair_attempts: 2
+  max_entity_attempts: 2
 
 model:
   backend: fake
@@ -35,7 +36,8 @@ nli:
   timeout_seconds: 90
   max_attempts: 5
   concurrency: 1
-  route_only_ambiguous: true
+  verify_every_semantic_assignment: true
+  verify_hierarchy_and_merge: true
   confidence_threshold: 0.8
 
 persistence:
@@ -53,10 +55,11 @@ policy:
   definition_only_can_confirm_alias: false
   neutral_is_contradiction: false
   type_can_prove_identity: false
+  frozen_registry_requires_full_coverage: true
+  frozen_registry_final_types_only: true
 
 observability:
   log_level: INFO
   log_raw_text: false
   log_secrets: false
   record_token_usage: true
-

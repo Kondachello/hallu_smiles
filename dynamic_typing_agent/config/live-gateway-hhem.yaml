@@ -1,8 +1,12 @@
 # No secret is stored here. All endpoint/key/model-path values come from environment.
-contract_version: dynamic-typing-agent-contract-v2-draft
+contract_version: dynamic-typing-agent-contract-v3
 prompt_set:
-  version: v1
+  version: v2
   root: null
+
+source:
+  entity_batch_size: 1
+  max_entity_attempts: 2
 
 model:
   backend: live
@@ -30,6 +34,8 @@ nli:
   revision: 0e7edb3689e710c52ba120086e8f91ea3ee87f23
   entailment_threshold: 0.80
   contradiction_threshold: 0.20
+  verify_every_semantic_assignment: true
+  verify_hierarchy_and_merge: true
 
 persistence:
   cache_root: .cache/dynamic-typing-agent-live

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:answer-typing:v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "entity_id", "selected_type_ids", "hypotheses", "reason"],
+  "properties": {
+    "schema_version": {"const": "answer-typing-v2"},
+    "entity_id": {"type": "string", "minLength": 1},
+    "selected_type_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+    "hypotheses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target_type_id", "text", "evidence_span_ids"],
+        "properties": {
+          "target_type_id": {"type": "string", "minLength": 1},
+          "text": {"type": "string", "minLength": 1, "maxLength": 500},
+          "evidence_span_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+        }
+      }
+    },
+    "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
+  }
+}

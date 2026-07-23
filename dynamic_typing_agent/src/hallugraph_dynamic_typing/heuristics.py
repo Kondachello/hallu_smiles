@@ -1,7 +1,8 @@
-"""Deterministic, conservative local fallback used by fake mode and tests.
+"""Small deterministic helpers that do not make semantic typing decisions.
 
-These rules are not a scientific type induction method. They make the standalone graph
-executable without a live model while preserving every safety boundary for later model nodes.
+Semantic entity typing belongs to :mod:`quality_workflow` and always passes through the
+model decision and NLI stages. In particular, this module must never interpret a generic
+knowledge-graph relation such as ``is`` as an entity-to-type assertion.
 """
 
 from __future__ import annotations
@@ -10,11 +11,10 @@ import hashlib
 import re
 from collections.abc import Iterable
 
-from .models import EvidenceLevel, EvidenceSpan, GraphInput, TypeAssignment, TypeDefinition, normalize, stable_id
+from .models import EvidenceSpan, normalize
 
 
 SENTENCE = re.compile(r"[^.!?]+[.!?]?", re.UNICODE)
-TYPE_RELATIONS = {"is a", "is", "instance of", "type"}
 
 
 def make_spans(text: str, role: str) -> tuple[EvidenceSpan, ...]:
@@ -38,61 +38,7 @@ def evidence_for(surface: str, spans: Iterable[EvidenceSpan]) -> tuple[str, ...]
     return tuple(ids)
 
 
-def explicit_type_pairs(graph: GraphInput) -> tuple[tuple[str, str], ...]:
-    return tuple((subject, obj) for subject, relation, obj in graph.relations if normalize(relation) in TYPE_RELATIONS)
-
-
-def build_registry_parts(
-    *, context: GraphInput, query: GraphInput, spans: tuple[EvidenceSpan, ...]
-) -> tuple[tuple[TypeDefinition, ...], tuple[TypeAssignment, ...]]:
-    root_id = "T-ENTITY"
-    types: dict[str, TypeDefinition] = {
-        root_id: TypeDefinition(
-            type_id=root_id,
-            label="entity",
-            definition="A local root type for every source entity.",
-            evidence_span_ids=(),
-            evidence_level=EvidenceLevel.SOURCE_ENTAILED,
-            status="confirmed",
-        )
-    }
-    assignments: list[TypeAssignment] = []
-    for graph in (context, query):
-        pairs = explicit_type_pairs(graph)
-        type_by_subject: dict[str, list[str]] = {}
-        for subject, label in pairs:
-            normalized_label = normalize(label)
-            type_id = "T-" + hashlib.sha256(normalized_label.encode("utf-8")).hexdigest()[:12].upper()
-            span_ids = evidence_for(label, spans)
-            if type_id not in types:
-                types[type_id] = TypeDefinition(
-                    type_id=type_id,
-                    label=label,
-                    definition=f"Source-local type explicitly named as '{label}'.",
-                    parent_type_ids=(root_id,),
-                    evidence_span_ids=span_ids,
-                    evidence_level=EvidenceLevel.SOURCE_ENTAILED if span_ids else EvidenceLevel.UNKNOWN,
-                    status="confirmed" if span_ids else "preliminary",
-                )
-            type_by_subject.setdefault(normalize(subject), []).append(type_id)
-        for entity in graph.entities:
-            type_ids = tuple(sorted(set(type_by_subject.get(normalize(entity), []))))
-            assignments.append(
-                TypeAssignment(
-                    node_id=stable_id("node", {"graph": graph.graph_id, "entity": entity}),
-                    surface_text=entity,
-                    graph_role=graph.role,
-                    type_ids=type_ids,
-                    status="assigned" if type_ids else "unknown",
-                    evidence_span_ids=evidence_for(entity, spans),
-                    reason="Explicit source graph type relation." if type_ids else "No explicit source type relation.",
-                )
-            )
-    return tuple(sorted(types.values(), key=lambda item: item.type_id)), tuple(sorted(assignments, key=lambda item: item.node_id))
-
-
 def registry_checksum(payload: dict) -> str:
     from .models import canonical_json
 
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
-

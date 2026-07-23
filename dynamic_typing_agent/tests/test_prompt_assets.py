@@ -11,7 +11,7 @@ from hallugraph_dynamic_typing.graph_spec import NODE_SPECS, NodeKind
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROMPT_ROOT = ROOT / "prompts" / "v1"
+PROMPT_ROOT = ROOT / "prompts" / "v2"
 MANIFEST = PROMPT_ROOT / "manifest.json"
 VARIABLE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
 
@@ -96,20 +96,16 @@ def test_source_prompts_do_not_accept_answer_variables() -> None:
 def test_schema_overview_accepts_localized_internal_ids_without_relaxing_output_shape() -> None:
     schema = json.loads((PROMPT_ROOT / "schemas" / "schema_overview.schema.json").read_text(encoding="utf-8"))
     payload = {
-        "schema_version": "schema-overview-v1",
+        "schema_version": "schema-overview-v2",
         "source_summary": "Русский источник описывает коммерческий банк.",
-        "draft_types": [{
-            "candidate_type_id": "CT-коммерческий-банк",
+        "type_hints": [{
             "label": "коммерческий банк",
             "definition": "Финансовая организация, указанная в источнике.",
-            "parent_candidate_ids": [], "aliases": [], "distinctions": [], "role_signatures": [],
-            "evidence_span_ids": ["context:span:0"], "evidence_level": "source_entailed",
-        }],
-        "contextual_roles": [{
-            "role_id": "CR-заёмщик", "label": "заёмщик", "relation_pattern": "получает кредит",
+            "example_entity_surfaces": ["Банк"],
             "evidence_span_ids": ["context:span:0"],
         }],
-        "open_questions": [],
+        "hierarchy_hints": [],
+        "unsafe_relation_warnings": [],
     }
     Draft202012Validator(schema).validate(payload)
 

@@ -1,131 +1,194 @@
-"""Offline, self-contained HTML explorer for one dynamic-typing run."""
+"""Offline multi-run viewer for dynamic-typing artifacts."""
 
 from __future__ import annotations
 
 import json
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping
 
 
-def load_viewer_payload(case_dir: str | Path, snapshot: Mapping[str, Any]) -> dict[str, Any]:
-    """Combine immutable run artifacts with a no-gold input snapshot."""
+ASSET_PACKAGE = "hallugraph_dynamic_typing.viewer_assets"
+
+
+def _read_json(path: Path, default: Any = None) -> Any:
+    if not path.is_file():
+        return default
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _summary_cases(run_dir: Path) -> list[dict[str, Any]]:
+    manifest = _read_json(run_dir / "run_manifest.json")
+    if isinstance(manifest, dict) and isinstance(manifest.get("cases"), list):
+        return [dict(item) for item in manifest["cases"]]
+    summary = _read_json(run_dir / "summary.json", [])
+    if isinstance(summary, dict):
+        summary = summary.get("cases", [])
+    if not isinstance(summary, list):
+        raise ValueError("run summary must be a list or an object with a cases list")
+    return [dict(item) for item in summary]
+
+
+def _case_dir(run_dir: Path, case: Mapping[str, Any]) -> Path:
+    relative = str(case.get("artifact_dir") or case["case_id"])
+    candidate = Path(relative)
+    if candidate.is_absolute():
+        return candidate
+    return run_dir / candidate
+
+
+def load_viewer_payload(
+    case_dir: str | Path, snapshot: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """Combine one case's immutable artifacts into a browser-oriented payload."""
     root = Path(case_dir)
-    source_run = json.loads((root / "source_registry.json").read_text(encoding="utf-8"))
-    answer_run = json.loads((root / "answer_annotations.json").read_text(encoding="utf-8"))
-    registry = source_run.get("registry")
-    annotations = answer_run.get("annotations")
-    if not isinstance(registry, dict) or not isinstance(annotations, dict):
-        raise ValueError("viewer requires successful source_registry.json and answer_annotations.json artifacts")
-    source = snapshot.get("source")
-    answer = snapshot.get("answer")
-    if not isinstance(source, dict) or not isinstance(answer, dict):
-        raise ValueError("viewer input snapshot must contain source and answer objects")
+    source_run = _read_json(root / "source_registry.json", {})
+    answer_run = _read_json(root / "answer_annotations.json", {})
+    snapshot_data = (
+        dict(snapshot)
+        if snapshot is not None
+        else _read_json(root / "input_snapshot.json", {})
+    )
+    registry = source_run.get("registry") if isinstance(source_run, dict) else None
+    annotations = (
+        answer_run.get("annotations") if isinstance(answer_run, dict) else None
+    )
+    trace = _read_json(
+        root / "execution_trace.json",
+        {
+            "schema_version": "execution-trace-v1",
+            "input_events": [],
+            "source_events": source_run.get("artifacts", [])
+            if isinstance(source_run, dict)
+            else [],
+            "answer_events": answer_run.get("artifacts", [])
+            if isinstance(answer_run, dict)
+            else [],
+        },
+    )
+    failure = _read_json(root / "failure.json")
+    source = snapshot_data.get("source")
+    if registry is not None and not isinstance(source, dict):
+        raise ValueError("viewer input snapshot must contain a source object")
     return {
-        "case_id": str(snapshot.get("case_id", root.name)),
+        "schema_version": "typing-viewer-case-v2",
+        "case_id": str(snapshot_data.get("case_id", root.name)),
+        "input_mode": snapshot_data.get("input_mode", "legacy"),
+        "graph_provenance": snapshot_data.get("graph_provenance", {}),
+        "metadata": snapshot_data.get("metadata", {}),
         "source": source,
-        "answer": answer,
+        "answer": snapshot_data.get("answer"),
         "registry": registry,
         "annotations": annotations,
-        "manifest": json.loads((root / "manifest.json").read_text(encoding="utf-8")),
-        "trace": json.loads((root / "execution_trace.json").read_text(encoding="utf-8")) if (root / "execution_trace.json").is_file() else {"schema_version": "execution-trace-v1", "source_events": source_run.get("artifacts", []), "answer_events": answer_run.get("artifacts", [])},
+        "source_status": source_run.get("status")
+        if isinstance(source_run, dict)
+        else "failed",
+        "answer_status": answer_run.get("status")
+        if isinstance(answer_run, dict)
+        else None,
+        "manifest": _read_json(root / "manifest.json", {}),
+        "trace": trace,
+        "failure": failure,
     }
 
 
+def load_run_payload(run_dir: str | Path) -> dict[str, Any]:
+    """Load the canonical run manifest or adapt an older summary."""
+    root = Path(run_dir)
+    manifest = _read_json(root / "run_manifest.json")
+    cases = _summary_cases(root)
+    if not isinstance(manifest, dict):
+        counts: dict[str, int] = {}
+        for item in cases:
+            status = str(item.get("status", "unknown"))
+            counts[status] = counts.get(status, 0) + 1
+        manifest = {
+            "schema_version": "typing-test-run-legacy",
+            "run_id": root.name,
+            "case_count": len(cases),
+            "status_counts": counts,
+            "input": {"requested_mode": "legacy", "no_gold": True},
+            "cases": cases,
+        }
+    else:
+        manifest = {**manifest, "cases": cases}
+    return manifest
+
+
+def _safe_script_assignment(variable: str, payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    encoded = (
+        encoded.replace("<", "\\u003c")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+    return f"window.{variable}={encoded};\n"
+
+
+def _asset_text(name: str) -> str:
+    return files(ASSET_PACKAGE).joinpath(name).read_text(encoding="utf-8")
+
+
+def write_viewer_site(
+    run_dir: str | Path, destination: str | Path | None = None
+) -> Path:
+    """Generate a file:// compatible dashboard and all successful case pages."""
+    root = Path(run_dir)
+    target = Path(destination) if destination is not None else root / "viewer"
+    assets = target / "assets"
+    cases_root = target / "cases"
+    assets.mkdir(parents=True, exist_ok=True)
+    cases_root.mkdir(parents=True, exist_ok=True)
+
+    for name in ("styles.css", "dashboard.js", "case.js"):
+        assets.joinpath(name).write_text(_asset_text(name), encoding="utf-8")
+    target.joinpath("index.html").write_text(
+        _asset_text("dashboard.html"), encoding="utf-8"
+    )
+
+    run_payload = load_run_payload(root)
+    dashboard_cases: list[dict[str, Any]] = []
+    for case in run_payload["cases"]:
+        case_id = str(case["case_id"])
+        case_target = cases_root / case_id
+        case_target.mkdir(parents=True, exist_ok=True)
+        artifact_dir = _case_dir(root, case)
+        payload = load_viewer_payload(artifact_dir)
+        case_target.joinpath("data.js").write_text(
+            _safe_script_assignment("__TYPING_CASE__", payload), encoding="utf-8"
+        )
+        case_target.joinpath("index.html").write_text(
+            _asset_text("case.html"), encoding="utf-8"
+        )
+        dashboard_cases.append(
+            {
+                **case,
+                "viewer_path": f"cases/{case_id}/index.html",
+            }
+        )
+    run_payload = {**run_payload, "cases": dashboard_cases}
+    target.joinpath("run-data.js").write_text(
+        _safe_script_assignment("__TYPING_RUN__", run_payload), encoding="utf-8"
+    )
+    return target / "index.html"
+
+
 def write_viewer_html(destination: str | Path, payload: Mapping[str, Any]) -> Path:
-    """Write a browser-openable document with no remote assets or requests."""
-    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
-    html = _HTML_TEMPLATE.replace("__PAYLOAD__", encoded)
+    """Compatibility helper: write one fully self-contained case document."""
+    html = _asset_text("case.html")
+    html = html.replace(
+        '<link rel="stylesheet" href="../../assets/styles.css">',
+        f"<style>{_asset_text('styles.css')}</style>",
+    )
+    html = html.replace(
+        '<script src="data.js"></script>',
+        f"<script>{_safe_script_assignment('__TYPING_CASE__', payload)}</script>",
+    )
+    html = html.replace(
+        '<script src="../../assets/case.js"></script>',
+        f"<script>{_asset_text('case.js')}</script>",
+    )
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(html, encoding="utf-8")
     return path
-
-
-_HTML_TEMPLATE = r"""<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Результат динамической типизации</title>
-  <style>
-    :root { color-scheme: light dark; --bg:#f7f7f5; --panel:#ffffff; --ink:#19211d; --muted:#66736b; --line:#d9e0db; --accent:#176b4c; --accent-soft:#e4f3eb; --warning:#9a5b00; --unknown:#6d7280; --shadow:0 10px 30px rgba(25,33,29,.07); }
-    @media (prefers-color-scheme: dark) { :root { --bg:#121715; --panel:#1b221e; --ink:#edf4ef; --muted:#abb8b0; --line:#34423a; --accent:#78d6a5; --accent-soft:#19382a; --warning:#f4bb67; --unknown:#bbc2ce; --shadow:0 10px 30px rgba(0,0,0,.18); } }
-    * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-    main { max-width:1400px; margin:0 auto; padding:28px 24px 44px; } .top { display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:22px; } h1,h2,h3,p { margin:0; } h1 { font-size:24px; letter-spacing:-.02em; } h2 { font-size:14px; letter-spacing:.01em; } h3 { font-size:13px; } .sub { color:var(--muted); margin-top:4px; } .chips { display:flex; flex-wrap:wrap; gap:7px; justify-content:flex-end; } .chip { border:1px solid var(--line); border-radius:999px; padding:4px 9px; color:var(--muted); font-size:12px; white-space:nowrap; } .chip.ok { background:var(--accent-soft); color:var(--accent); border-color:transparent; }
-    .layout { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(300px,.75fr); gap:18px; align-items:start; } .panel { background:var(--panel); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow); } .explorer { overflow:hidden; } .tabs { display:flex; gap:4px; padding:10px 10px 0; border-bottom:1px solid var(--line); } button { font:inherit; } .tab { border:0; background:transparent; color:var(--muted); padding:9px 12px; border-radius:9px 9px 0 0; cursor:pointer; } .tab[aria-selected="true"] { color:var(--ink); background:var(--accent-soft); font-weight:600; } .text-area { padding:18px; min-height:280px; } .sentence { display:block; width:100%; border:0; background:transparent; color:inherit; padding:8px 10px; margin:1px 0; text-align:left; border-radius:9px; cursor:pointer; } .sentence:hover,.sentence.is-active { background:var(--accent-soft); } .sentence small { display:block; color:var(--muted); margin-bottom:2px; font-size:11px; } .mention { display:inline; padding:0 2px; border:0; border-bottom:1px solid var(--accent); color:inherit; background:transparent; cursor:pointer; font-weight:650; } .mention.is-active { color:var(--accent); background:var(--accent-soft); border-radius:3px; }
-    .facts { border-top:1px solid var(--line); padding:14px 18px 18px; } .fact-list { display:flex; flex-wrap:wrap; gap:7px; margin-top:9px; } .fact { border:1px solid var(--line); background:transparent; color:var(--ink); border-radius:8px; padding:5px 7px; cursor:pointer; text-align:left; } .fact:hover { border-color:var(--accent); }
-    aside { display:grid; gap:18px; } .side { padding:16px; } .side-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px; } .count { color:var(--muted); font-size:12px; } .tree { display:grid; gap:3px; } .type { display:flex; align-items:center; gap:7px; width:100%; border:0; border-radius:8px; padding:7px 8px; color:var(--ink); background:transparent; text-align:left; cursor:pointer; } .type:hover,.type.is-active { background:var(--accent-soft); } .dot { width:7px; height:7px; border-radius:50%; background:var(--unknown); flex:0 0 auto; } .dot.confirmed { background:var(--accent); } .type small { color:var(--muted); margin-left:auto; } .assignments { display:grid; gap:5px; } .assignment { width:100%; border:0; border-radius:8px; padding:7px 8px; color:var(--ink); background:transparent; text-align:left; cursor:pointer; } .assignment:hover,.assignment.is-active { background:var(--accent-soft); } .assignment strong { font-weight:600; } .assignment span { display:block; color:var(--muted); font-size:12px; } .status { float:right; color:var(--unknown); font-size:12px; } .status.assigned { color:var(--accent); }
-    .detail { grid-column:1 / -1; padding:16px; } .detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; } .detail p + p { margin-top:7px; } .label { color:var(--muted); font-size:12px; } .evidence { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; } .evidence button { border:1px solid var(--line); border-radius:999px; padding:3px 8px; background:transparent; color:var(--ink); cursor:pointer; font-size:12px; } .evidence button:hover { border-color:var(--accent); } .nli { border-top:1px solid var(--line); margin-top:14px; padding-top:14px; } .verdict { color:var(--accent); font-weight:700; } .verdict.neutral { color:var(--unknown); } .verdict.contradicted { color:var(--warning); } code { font-size:.88em; color:var(--muted); }
-    @media (max-width:820px) { main { padding:18px 14px 30px; } .top { display:block; } .chips { justify-content:flex-start; margin-top:12px; } .layout { grid-template-columns:1fr; } .detail-grid { grid-template-columns:1fr; } }
-  </style>
-</head>
-<body>
-  <main id="typing-run-viewer">
-    <header class="top"><div><h1>Просмотр результата типизации</h1><p class="sub" id="subtitle"></p></div><div class="chips" id="chips"></div></header>
-    <section class="layout" aria-label="Просмотр результата типизации">
-      <article class="panel explorer"><nav class="tabs" aria-label="Исходные тексты" id="tabs"></nav><div class="text-area" id="text-area"></div><div class="facts"><h2>Факты графа</h2><div class="fact-list" id="facts"></div></div></article>
-      <aside><section class="panel side"><div class="side-head"><h2>Иерархия типов</h2><span class="count" id="type-count"></span></div><div class="tree" id="type-tree"></div></section><section class="panel side"><div class="side-head"><h2>Назначения сущностей</h2><span class="count" id="entity-count"></span></div><div class="assignments" id="assignments"></div></section></aside>
-      <section class="panel detail" aria-live="polite"><div class="detail-grid"><div><h2 id="detail-title">Выберите тип, сущность или предложение</h2><div id="detail-body" class="sub" style="margin-top:7px">Здесь появятся связанные доказательства и назначенные типы.</div></div><div><h2>Происхождение результата</h2><p class="sub" id="provenance" style="margin-top:7px"></p></div></div><div class="nli" id="nli"></div></section>
-    </section>
-  </main>
-  <script>
-  const DATA = __PAYLOAD__;
-  const root = document.getElementById('typing-run-viewer');
-  const state = { role: 'context', entity: null, span: null, typeId: null };
-  const registry = DATA.registry, annotations = DATA.annotations;
-  const allAssignments = [...registry.assignments, ...annotations.answer_assignments];
-  const byType = new Map(registry.types.map(t => [t.type_id, t]));
-  const spans = new Map(registry.evidence_spans.map(s => [s.span_id, s]));
-  const roleInfo = {
-    context: { label: 'Контекст', text: DATA.source.context_raw, graph: DATA.source.context_graph },
-    query: { label: 'Запрос', text: DATA.source.query_raw || '—', graph: DATA.source.query_graph },
-    answer: { label: 'Ответ', text: DATA.answer.response_raw, graph: DATA.answer.answer_graph }
-  };
-  const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const assignmentFor = surface => allAssignments.filter(a => a.surface_text.toLocaleLowerCase() === surface.toLocaleLowerCase());
-  const statusText = value => ({confirmed:'подтверждён', preliminary:'предварительный', unknown:'не определён', assigned:'назначен', entailed:'подтверждено', neutral:'нейтрально', contradicted:'противоречие'}[value] || value);
-  const levelText = value => ({source_entailed:'подтверждено источником', example_supported:'подтверждено примером', definition_only:'только определение', unknown:'не определено'}[value] || value);
-  const roleText = value => roleInfo[value]?.label || value;
-  const reasonText = value => ({'No explicit source type relation.':'В источнике нет явной связи с типом.', 'Explicit source graph type relation.':'В графе источника явно указана связь с типом.', 'No frozen-registry type matches this answer entity.':'В замороженном реестре нет подходящего типа для этой сущности ответа.', 'Answer entity surface matches a source assignment.':'Форма сущности ответа совпадает с назначением в источнике.', 'Explicit answer type maps to a frozen registry label.':'Явный тип в ответе сопоставлен с меткой замороженного реестра.'}[value] || value);
-  const nliRationale = value => /^HHEM consistency score=([0-9.]+); thresholds: contradicted<=([0-9.]+), entailed>=([0-9.]+)\.$/.test(value) ? value.replace(/^HHEM consistency score=([0-9.]+); thresholds: contradicted<=([0-9.]+), entailed>=([0-9.]+)\.$/, 'Оценка согласованности HHEM: $1; пороги: противоречие ≤ $2, подтверждение ≥ $3.') : value;
-  const typeNames = ids => ids.length ? ids.map(id => byType.get(id)?.label || id).join(' · ') : 'не определён';
-  const evidenceButtons = ids => ids.length ? `<div class="evidence">${ids.map(id => `<button type="button" data-span="${escape(id)}">${escape(id)}</button>`).join('')}</div>` : '<p class="sub">Нет связанного фрагмента источника.</p>';
-  function sentences(text) { return String(text).match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map(s => s.trim()).filter(Boolean) || [text]; }
-  function entitiesForRole(role) { return allAssignments.filter(a => a.graph_role === role).map(a => a.surface_text).filter((v,i,a) => v && a.indexOf(v) === i).sort((a,b) => b.length-a.length); }
-  function highlighted(text, role) {
-    const needles = entitiesForRole(role), low = text.toLocaleLowerCase(); let at = 0, html = '';
-    while (at < text.length) { let hit = null; for (const n of needles) { if (low.startsWith(n.toLocaleLowerCase(), at)) { hit = n; break; } } if (hit) { const active = state.entity?.toLocaleLowerCase() === hit.toLocaleLowerCase() ? ' is-active' : ''; html += `<button type="button" class="mention${active}" data-entity="${escape(hit)}">${escape(text.slice(at, at + hit.length))}</button>`; at += hit.length; } else { html += escape(text[at]); at++; } }
-    return html;
-  }
-  function renderTabs() { const tabs = document.getElementById('tabs'); tabs.innerHTML = Object.entries(roleInfo).map(([key, value]) => `<button type="button" class="tab" data-role="${key}" aria-selected="${key===state.role}">${value.label}</button>`).join(''); tabs.querySelectorAll('[data-role]').forEach(b => b.addEventListener('click', () => { state.role = b.dataset.role; state.span = null; render(); })); }
-  function renderText() { const info = roleInfo[state.role], box = document.getElementById('text-area'); box.innerHTML = sentences(info.text).map((sentence, index) => { const linked = [...spans.values()].filter(s => s.source_role === state.role && sentence.includes(s.text)).map(s => s.span_id); const active = linked.includes(state.span) ? ' is-active' : ''; return `<button type="button" class="sentence${active}" data-sentence="${index}" data-spans="${escape(linked.join('|'))}"><small>${info.label} · предложение ${index+1}${linked.length ? ' · доказательство' : ''}</small>${highlighted(sentence, state.role)}</button>`; }).join(''); box.querySelectorAll('.mention').forEach(b => b.addEventListener('click', event => { event.stopPropagation(); selectEntity(b.dataset.entity); })); box.querySelectorAll('.sentence').forEach(b => b.addEventListener('click', () => { const id = b.dataset.spans.split('|').filter(Boolean)[0]; if (id) selectSpan(id); else showDetail(`${info.label}: предложение`, `<p>${escape(b.textContent.replace(/^.*?предложение \d+( · доказательство)?/, '').trim())}</p><p class="sub">К этому предложению не привязан фрагмент-доказательство.</p>`); })); }
-  function renderFacts() { const facts = document.getElementById('facts'), relations = roleInfo[state.role].graph?.relations || []; facts.innerHTML = relations.length ? relations.map((r,i) => `<button type="button" class="fact" data-fact="${i}">${escape(r[0])} <span class="sub">— ${escape(r[1])} →</span> ${escape(r[2])}</button>`).join('') : '<span class="sub">В этом входе нет связи графа.</span>'; facts.querySelectorAll('[data-fact]').forEach(b => b.addEventListener('click', () => { const r = relations[Number(b.dataset.fact)]; selectEntity(r[0]); })); }
-  function renderTree() { const children = new Map(); registry.types.forEach(t => { const parents = t.parent_type_ids.length ? t.parent_type_ids : ['__root__']; parents.forEach(p => children.set(p, [...(children.get(p)||[]), t])); }); const seen = new Set(); const walk = (parent, depth) => (children.get(parent)||[]).sort((a,b)=>a.label.localeCompare(b.label)).map(t => { if (seen.has(t.type_id)) return ''; seen.add(t.type_id); const active = state.typeId === t.type_id ? ' is-active' : ''; return `<div><button type="button" class="type${active}" data-type="${escape(t.type_id)}" style="padding-left:${8+depth*16}px"><i class="dot ${escape(t.status)}"></i><span>${escape(t.label)}</span><small>${escape(statusText(t.status))}</small></button>${walk(t.type_id,depth+1)}</div>`; }).join(''); document.getElementById('type-tree').innerHTML = walk('__root__',0); document.querySelectorAll('[data-type]').forEach(b => b.addEventListener('click', () => selectType(b.dataset.type))); document.getElementById('type-count').textContent = `${registry.types.length} типов`; }
-  function renderAssignments() { const selected = allAssignments.filter(a => a.graph_role === state.role); document.getElementById('assignments').innerHTML = selected.length ? selected.map(a => `<button type="button" class="assignment${state.entity?.toLocaleLowerCase()===a.surface_text.toLocaleLowerCase()?' is-active':''}" data-entity="${escape(a.surface_text)}"><strong>${escape(a.surface_text)}</strong><span>${escape(typeNames(a.type_ids))}<em class="status ${escape(a.status)}">${escape(statusText(a.status))}</em></span></button>`).join('') : '<span class="sub">В этом входе нет извлечённой сущности.</span>'; document.querySelectorAll('.assignment[data-entity]').forEach(b => b.addEventListener('click', () => selectEntity(b.dataset.entity))); document.getElementById('entity-count').textContent = `${selected.length} упоминаний`; }
-  function showDetail(title, body) { document.getElementById('detail-title').textContent = title; document.getElementById('detail-body').innerHTML = body; document.querySelectorAll('[data-span]').forEach(b => b.addEventListener('click', () => selectSpan(b.dataset.span))); }
-  function selectType(id) { state.typeId=id; state.entity=null; const t=byType.get(id); const descendants=allAssignments.filter(a=>a.type_ids.includes(id)); showDetail(t.label, `<p>${escape(t.definition)}</p><p class="label">${escape(statusText(t.status))} · ${escape(levelText(t.evidence_level))}</p><p class="label">Родительский тип</p><p>${escape(typeNames(t.parent_type_ids) || 'корневой тип')}</p><p class="label">Назначенные упоминания (${descendants.length})</p><p>${escape(descendants.map(a=>a.surface_text).join(' · ') || 'нет')}</p><p class="label">Доказательства</p>${evidenceButtons(t.evidence_span_ids)}`); render(); }
-  function selectEntity(name) { state.entity=name; state.typeId=null; const found=assignmentFor(name), a=found.find(x=>x.graph_role===state.role)||found[0]; if (!a) return; const ids=a.type_ids; showDetail(a.surface_text, `<p>${escape(reasonText(a.reason))}</p><p class="label">${escape(roleText(a.graph_role))} · <strong>${escape(statusText(a.status))}</strong></p><p class="label">Типы</p><p>${escape(typeNames(ids))}</p><p class="label">Доказательства</p>${evidenceButtons(a.evidence_span_ids)}`); render(); }
-  function selectSpan(id) { state.span=id; state.entity=null; state.typeId=null; const s=spans.get(id); if (!s) return; state.role=s.source_role; const linkedTypes=registry.types.filter(t=>t.evidence_span_ids.includes(id)); showDetail(`${roleInfo[s.source_role].label}: доказательство`, `<p>${escape(s.text)}</p><p class="label">${escape(id)}</p><p class="label">Типы, подтверждаемые здесь</p><p>${escape(linkedTypes.map(t=>t.label).join(' · ') || 'нет')}</p>`); render(); }
-  function renderNli() { const node=document.getElementById('nli'), items=annotations.nli_results||[]; node.innerHTML = `<h2>NLI-проверка</h2>${items.length ? items.map(n=>`<p style="margin-top:7px"><span class="verdict ${escape(n.verdict)}">${escape(statusText(n.verdict))}</span> · ${escape(nliRationale(n.rationale))}</p>${evidenceButtons(n.evidence_span_ids)}`).join('') : '<p class="sub" style="margin-top:7px">Проверка NLI не потребовалась: в ответе нет нового утверждения о типе.</p>'}`; node.querySelectorAll('[data-span]').forEach(b => b.addEventListener('click', () => selectSpan(b.dataset.span))); }
-  function render() { renderTabs(); renderText(); renderFacts(); renderTree(); renderAssignments(); renderNli(); }
-  document.getElementById('subtitle').textContent = `${DATA.case_id} · замороженный реестр источника → разметка ответа`;
-  document.getElementById('chips').innerHTML = `<span class="chip ok">${registry.frozen ? 'реестр заморожен' : 'реестр не заморожен'}</span><span class="chip">${registry.source_id}</span><span class="chip">режим: ${DATA.manifest.backend}</span>`;
-  document.getElementById('provenance').innerHTML = `Манифест промптов <code>${escape(DATA.manifest.prompt_manifest_sha256.slice(0,16))}…</code><br>Реестр <code>${escape(registry.registry_sha256.slice(0,16))}…</code>`;
-  render();
-  const trace = [...(DATA.trace?.source_events || []), ...(DATA.trace?.answer_events || [])];
-  const tracePanel = document.createElement('section'); tracePanel.className = 'panel trace-panel';
-  tracePanel.innerHTML = `<div class="side-head"><h2>Журнал выполнения и граф агента</h2><span class="count">${trace.length} событий</span></div><p class="sub">Нажмите на узел или событие, чтобы увидеть вход, решение и ответ LLM/NLI.</p><div class="trace-layout"><div class="trace-graph" id="trace-graph"></div><div class="trace-list" id="trace-list"></div></div><pre class="trace-detail" id="trace-detail">Выберите событие.</pre>`;
-  root.querySelector('.layout').append(tracePanel);
-  const graph = document.getElementById('trace-graph'), traceList = document.getElementById('trace-list'), traceDetail = document.getElementById('trace-detail');
-  const nodeOrder = ['validate_source','source_cache','segment_source','schema_overview','derive_registry','freeze_registry','validate_answer','annotate_answer','nli_answer','emit_answer'];
-  graph.innerHTML = nodeOrder.map(name => `<button type="button" class="trace-node" data-trace-node="${name}">${name.replace('_',' ')}</button>`).join('');
-  function selectTrace(event) { tracePanel.querySelectorAll('.active').forEach(item=>item.classList.remove('active')); tracePanel.querySelectorAll(`[data-trace-node="${event.node}"]`).forEach(item=>item.classList.add('active')); const row=[...traceList.children].find(item=>item._trace===event); if(row)row.classList.add('active'); traceDetail.textContent=JSON.stringify(event,null,2); }
-  trace.forEach((event,index) => { const row=document.createElement('button'); row.type='button'; row.className='trace-item'; row.innerHTML=`<strong>${event.node}</strong><small>${event.event||'событие'} · №${index+1}</small>`; row._trace=event; row.onclick=()=>selectTrace(event); traceList.append(row); });
-  graph.querySelectorAll('[data-trace-node]').forEach(node=>node.onclick=()=>{const event=trace.find(item=>item.node===node.dataset.traceNode); if(event)selectTrace(event);});
-  </script>
-  <style>
-    :root { color-scheme:light; --bg:#f6f8f7; --panel:#fff; --ink:#17221c; --muted:#607068; --line:#d8e2dc; --accent:#136a49; --accent-soft:#e5f5ed; --warning:#a65300; --unknown:#667085; --shadow:0 8px 24px rgba(25,33,29,.06); }
-    .trace-panel { grid-column:1 / -1; padding:18px; } .trace-layout { display:grid; grid-template-columns:minmax(230px,.6fr) minmax(0,1.4fr); gap:16px; margin-top:12px; } .trace-graph { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; align-content:start; } .trace-node,.trace-item { border:1px solid var(--line); border-radius:9px; background:var(--panel); color:var(--ink); padding:8px; cursor:pointer; text-align:left; } .trace-node:hover,.trace-node.active,.trace-item:hover,.trace-item.active { border-color:var(--accent); background:var(--accent-soft); } .trace-list { display:grid; gap:7px; max-height:300px; overflow:auto; } .trace-item small { display:block; color:var(--muted); } .trace-detail { max-height:430px; overflow:auto; padding:12px; border-radius:10px; background:#122019; color:#e8f5ed; white-space:pre-wrap; font:12px/1.45 ui-monospace,Consolas,monospace; } @media(max-width:820px){.trace-layout{grid-template-columns:1fr}}
-  </style>
-</body>
-</html>"""

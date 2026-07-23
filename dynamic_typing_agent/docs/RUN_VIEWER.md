@@ -1,35 +1,64 @@
 # Interactive run viewer
 
-`scripts/render_run_viewer.py` converts one local, no-gold run into a single
-browser-openable `typing-run-viewer.html`. It is fully self-contained: it does not start a
-server, fetch a resource, call an LLM or contact HHEM.
+The viewer is a local, dependency-free inspection application generated from sealed
+no-gold run artifacts. It does not call an LLM, HHEM, KGGen or a web service. All pages
+work directly through `file://`.
 
-The viewer is designed for inspection rather than aggregate evaluation:
+## Layout
 
-- switches between context, query and answer;
-- highlights extracted entity mentions and lets the reader select a sentence;
-- follows an evidence span into the source text;
-- shows source and answer assignments alongside the frozen type tree;
-- exposes definition, parent type, evidence level and NLI rationale without crowding the
-  initial screen.
+`<run>/viewer/index.html` is the run dashboard. It shows every case, status, input mode,
+graph size, number of types and NLI calls. Search and filters work locally. A case link
+opens `<run>/viewer/cases/<case-id>/index.html`.
 
-Every new `run-fixture` run now writes `input_snapshot.json` beside the existing source
-registry and answer annotations. It contains only the source/answer inputs used by this
-no-gold command, never a gold label or secret. Render a new run with:
+Each case page contains:
+
+- tabs for context, query and answer when an answer exists;
+- sentence-level source text with entity mentions colored by assigned type;
+- a real canvas knowledge graph with labeled directed edges, drag, pan and zoom;
+- the same type color on graph nodes, text mentions, assignments and hierarchy entries;
+- a searchable hierarchical type dictionary and a role-specific entity list;
+- entity details with reasons, evidence spans, types and related NLI results;
+- a chronological source/answer event log;
+- human-readable event descriptions such as “the model proposed a new type”, “the type
+  was assigned”, “the hierarchy change was rejected” or “the types were merged”;
+- explicit “model answered/proposed” and “NLI decision” sections;
+- expandable raw stage input, output and complete event JSON for deep debugging.
+
+Selecting an entity in text, the canvas graph or the entity list updates every related
+surface. Selecting a type highlights all matching graph nodes and assignments. Selecting
+an evidence span moves to its source role.
+
+## Generate or rebuild
+
+The preferred `hallugraph-type-agent test` command generates the viewer automatically.
+To rebuild a viewer from an existing compatible run:
 
 ```powershell
 $env:PYTHONPATH = "src"
-python scripts\render_run_viewer.py --run runs\live-test
+python scripts\render_run_viewer.py --run runs\my-run
 ```
 
-For a run created before input snapshots existed, supply the same no-gold fixture that
-created it:
+The renderer accepts both the canonical `run_manifest.json` and earlier list-shaped
+`summary.json` files, provided each successful case contains `input_snapshot.json`.
 
-```powershell
-python scripts\render_run_viewer.py `
-  --run runs\live-test `
-  --fixture examples\dynamic_typing_20.no_gold.jsonl
+## Offline asset contract
+
+Generated pages use only files under the run's `viewer/` directory:
+
+```text
+viewer/
+  index.html
+  run-data.js
+  assets/
+    styles.css
+    dashboard.js
+    case.js
+  cases/
+    <case-id>/
+      index.html
+      data.js
 ```
 
-The command writes `runs\live-test\<case-id>\typing-run-viewer.html`. Open that file in a
-browser. With several successful cases, also give `--case <case-id>`.
+There are no remote fonts, libraries, `fetch` calls or dynamic file reads. JSON is emitted
+as JavaScript data with `<` and Unicode line separators escaped, so source content cannot
+close or inject a script element.

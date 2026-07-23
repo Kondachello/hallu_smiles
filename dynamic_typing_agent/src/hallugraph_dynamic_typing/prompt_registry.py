@@ -44,9 +44,9 @@ class PromptRegistry:
 
     @staticmethod
     def _default_root() -> Path:
-        source_checkout = Path(__file__).resolve().parents[2] / "prompts" / "v1"
-        package_target = Path(__file__).resolve().parents[2] / "share" / "hallugraph-dynamic-typing-agent" / "prompts" / "v1"
-        environment_target = Path(sys.prefix) / "share" / "hallugraph-dynamic-typing-agent" / "prompts" / "v1"
+        source_checkout = Path(__file__).resolve().parents[2] / "prompts" / "v2"
+        package_target = Path(__file__).resolve().parents[2] / "share" / "hallugraph-dynamic-typing-agent" / "prompts" / "v2"
+        environment_target = Path(sys.prefix) / "share" / "hallugraph-dynamic-typing-agent" / "prompts" / "v2"
         for candidate in (source_checkout, package_target, environment_target):
             if candidate.is_dir():
                 return candidate

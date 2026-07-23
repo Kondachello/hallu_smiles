@@ -67,7 +67,7 @@ class TypeDefinition(StrictModel):
     aliases: tuple[str, ...] = ()
     evidence_span_ids: tuple[str, ...] = ()
     evidence_level: EvidenceLevel = EvidenceLevel.UNKNOWN
-    status: str = Field(pattern="^(confirmed|preliminary|unknown)$")
+    status: str = Field(pattern="^(final|confirmed|preliminary|unknown)$")
 
 
 class TypeAssignment(StrictModel):
@@ -86,6 +86,10 @@ class NliResult(StrictModel):
     evidence_span_ids: tuple[str, ...] = ()
     rationale: str = Field(min_length=1)
     evidence_level: EvidenceLevel = EvidenceLevel.UNKNOWN
+    hypothesis_kind: str | None = None
+    hypothesis: str | None = None
+    subject_id: str | None = None
+    target_type_id: str | None = None
 
 
 class FrozenRegistry(StrictModel):
@@ -96,6 +100,7 @@ class FrozenRegistry(StrictModel):
     types: tuple[TypeDefinition, ...]
     assignments: tuple[TypeAssignment, ...]
     evidence_spans: tuple[EvidenceSpan, ...]
+    nli_results: tuple[NliResult, ...] = ()
     prompt_manifest_sha256: str = Field(min_length=1)
     frozen: bool = True
     registry_sha256: str = Field(min_length=64, max_length=64)
@@ -110,6 +115,29 @@ class FrozenRegistry(StrictModel):
         type_ids = set(ids)
         if any(parent not in type_ids for item in self.types for parent in item.parent_type_ids):
             raise ValueError("registry parent must exist")
+        if any(item.status != "final" for item in self.types):
+            raise ValueError("a frozen registry may contain only final types")
+        if any(item.status != "assigned" or not item.type_ids for item in self.assignments):
+            raise ValueError("every frozen source assignment must contain a final type")
+        if any(type_id not in type_ids for item in self.assignments for type_id in item.type_ids):
+            raise ValueError("source assignment references an unknown type")
+        parents = {item.type_id: set(item.parent_type_ids) for item in self.types}
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(type_id: str) -> None:
+            if type_id in visiting:
+                raise ValueError("registry type hierarchy must be acyclic")
+            if type_id in visited:
+                return
+            visiting.add(type_id)
+            for parent_id in parents.get(type_id, ()):
+                visit(parent_id)
+            visiting.remove(type_id)
+            visited.add(type_id)
+
+        for type_id in parents:
+            visit(type_id)
         return self
 
 
@@ -154,6 +182,12 @@ class AnswerAnnotation(StrictModel):
     answer_assignments: tuple[TypeAssignment, ...]
     nli_results: tuple[NliResult, ...]
 
+    @model_validator(mode="after")
+    def complete_final_assignments(self) -> "AnswerAnnotation":
+        if any(item.status != "assigned" or not item.type_ids for item in self.answer_assignments):
+            raise ValueError("every answer entity must receive at least one frozen-registry type")
+        return self
+
 
 class AnswerRun(StrictModel):
     status: RunStatus
@@ -165,4 +199,3 @@ class AnswerRun(StrictModel):
 class BackendKind(StrEnum):
     FAKE = "fake"
     LIVE = "live"
-

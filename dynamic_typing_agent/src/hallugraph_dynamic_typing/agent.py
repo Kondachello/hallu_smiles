@@ -16,7 +16,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from .errors import DynamicTypingError, InputContractError
-from .heuristics import build_registry_parts, evidence_for, make_spans, registry_checksum
+from .heuristics import make_spans, registry_checksum
 from .models import (
     AnswerAnnotation,
     AnswerInput,
@@ -37,6 +37,7 @@ from .models import (
 )
 from .persistence import ArtifactWriter, JsonFileCache
 from .prompt_registry import PromptRegistry
+from .quality_workflow import ALGORITHM_VERSION, QualityTypingWorkflow
 from .transports import DeterministicNli, FakeStructuredModel, HhemNli, LiteLLMStructuredModel
 
 
@@ -45,7 +46,8 @@ class SourceState(TypedDict, total=False):
     spans: list[dict[str, Any]]
     types: list[dict[str, Any]]
     assignments: list[dict[str, Any]]
-    model_draft_types: list[dict[str, Any]]
+    overview: dict[str, Any]
+    source_nli_results: list[dict[str, Any]]
     registry: dict[str, Any]
     artifacts: list[dict[str, Any]]
     failure: str
@@ -85,6 +87,7 @@ class DynamicTypingAgent:
         retry_jitter_seconds: float = 1.0,
         model_temperature: float = 0.0,
         structured_schema_profile: str = "native",
+        max_entity_attempts: int = 2,
     ):
         self.prompts = PromptRegistry(prompt_root)
         self.cache = JsonFileCache(cache_root)
@@ -122,6 +125,7 @@ class DynamicTypingAgent:
         else:
             raise InputContractError(f"unsupported nli.backend: {nli_backend}")
         self.nli_backend = nli_backend
+        self.max_entity_attempts = max(1, max_entity_attempts)
         self.checkpointer = MemorySaver()
         self.source_graph = self._build_source_graph()
         self.answer_graph = self._build_answer_graph()
@@ -138,6 +142,7 @@ class DynamicTypingAgent:
         model = config.get("model", {})
         nli = config.get("nli", {})
         persistence = config.get("persistence", {})
+        source_config = config.get("source", {})
         backend = model.get("backend", "fake")
         gateway_url = model.get("api_base") or cls._required_environment(model.get("api_base_env"), "model.api_base")
         api_base = cls._openai_api_base(gateway_url) if backend == "live" else gateway_url
@@ -165,6 +170,7 @@ class DynamicTypingAgent:
             retry_jitter_seconds=float(model.get("retry_jitter_seconds", 1)),
             model_temperature=float(model.get("temperature", 0)),
             structured_schema_profile=str(model.get("structured_schema_profile", "native")),
+            max_entity_attempts=int(source_config.get("max_entity_attempts", source_config.get("max_repair_attempts", 2))),
         )
 
     @staticmethod
@@ -183,6 +189,16 @@ class DynamicTypingAgent:
             return None
         base = gateway_url.rstrip("/")
         return base if base.endswith("/v1") else f"{base}/v1"
+
+    def _quality_workflow(self) -> QualityTypingWorkflow:
+        """Build from current injected transports so tests and callers can replace them."""
+        return QualityTypingWorkflow(
+            prompts=self.prompts,
+            model=self.model,
+            invoke_model_nodes=self.invoke_model_nodes,
+            verify_nli=self._verify_nli,
+            max_entity_attempts=self.max_entity_attempts,
+        )
 
     def _build_source_graph(self):
         graph = StateGraph(SourceState)
@@ -253,9 +269,12 @@ class DynamicTypingAgent:
                     "source_id": source.source_id,
                     "context_graph_id": source.context_graph.graph_id,
                     "query_graph_id": source.query_graph.graph_id,
+                    "context_graph": source.context_graph.model_dump(mode="json"),
+                    "query_graph": source.query_graph.model_dump(mode="json"),
                     "context": source.context_raw,
                     "query": source.query_raw,
                     "prompt_manifest": self.prompts.manifest_sha256,
+                    "algorithm_version": ALGORITHM_VERSION,
                 }
             ).encode("utf-8")
         ).hexdigest()
@@ -264,7 +283,24 @@ class DynamicTypingAgent:
         source = SourceInput.model_validate(state["source"])
         key = self._source_cache_key(source)
         cached = self.cache.get("frozen_registry", key)
-        return self._event(state, "source_cache", {"cache_key": key}, {"hit": cached is not None, "route": "cached" if cached else "fresh"}, registry=dict(cached) if cached else {})
+        valid_cached: dict[str, Any] = {}
+        invalid_reason: str | None = None
+        if cached:
+            try:
+                valid_cached = FrozenRegistry.model_validate(cached).model_dump(mode="json")
+            except Exception as exc:
+                invalid_reason = repr(exc)
+        return self._event(
+            state,
+            "source_cache",
+            {"cache_key": key, "algorithm_version": ALGORITHM_VERSION},
+            {
+                "hit": bool(valid_cached),
+                "route": "cached" if valid_cached else "fresh",
+                "invalid_cached_registry": invalid_reason,
+            },
+            registry=valid_cached,
+        )
 
     def _route_source_cache(self, state: SourceState) -> str:
         return "cached" if state.get("registry", {}).get("frozen") else "fresh"
@@ -277,19 +313,37 @@ class DynamicTypingAgent:
 
     def _schema_overview(self, state: SourceState) -> dict[str, Any]:
         if not self.invoke_model_nodes:
-            return self._event(state, "schema_overview", {"mode": "fake"}, {"skipped": True})
+            overview = {
+                "schema_version": "schema-overview-v2",
+                "source_summary": "Offline mode: semantic overview was not generated.",
+                "type_hints": [],
+                "hierarchy_hints": [],
+                "unsafe_relation_warnings": [],
+            }
+            return self._event(
+                state,
+                "schema_overview",
+                {"mode": "fake"},
+                {"response": overview},
+                overview=overview,
+            )
         source = SourceInput.model_validate(state["source"])
         rendered = self.prompts.render(
             "schema_overview",
             {
                 "source_id": source.source_id,
-                "source_language": "unknown",
                 "context_text": source.context_raw,
                 "query_text": source.query_raw,
                 "evidence_spans_json": canonical_json(state["spans"]),
-                "seed_types_json": canonical_json(["entity"]),
                 "graph_summary_json": canonical_json({"context": source.context_graph.model_dump(), "query": source.query_graph.model_dump()}),
-                "policy_json": canonical_json({"source_only": True, "external_knowledge": False}),
+                "policy_json": canonical_json(
+                    {
+                        "source_only": True,
+                        "external_knowledge_is_not_evidence": True,
+                        "overview_does_not_finalize_types": True,
+                        "one_entity_per_followup_call": True,
+                    }
+                ),
             },
         )
         result = self.model.invoke(
@@ -299,35 +353,49 @@ class DynamicTypingAgent:
             idempotency_key=stable_id("request", {"source": source.source_id, "prompt": rendered.manifest_sha256}),
         )
         Draft202012Validator(rendered.output_schema).validate(result)
-        return self._event(state, "schema_overview", {"operation": "schema_overview", "messages": [dict(message) for message in rendered.messages], "output_schema": rendered.output_schema, "idempotency_key": stable_id("request", {"source": source.source_id, "prompt": rendered.manifest_sha256})}, {"response": result, "prompt_manifest_sha256": rendered.manifest_sha256}, model_draft_types=list(result.get("draft_types", [])))
+        return self._event(
+            state,
+            "schema_overview",
+            {
+                "operation": "schema_overview",
+                "messages": [
+                    {"type": getattr(message, "type", message.__class__.__name__), "content": message.content}
+                    for message in rendered.messages
+                ],
+                "output_schema": rendered.output_schema,
+                "idempotency_key": stable_id(
+                    "request", {"source": source.source_id, "prompt": rendered.manifest_sha256}
+                ),
+            },
+            {"response": result, "prompt_manifest_sha256": rendered.manifest_sha256},
+            overview=dict(result),
+        )
 
     def _derive_registry(self, state: SourceState) -> dict[str, Any]:
         source = SourceInput.model_validate(state["source"])
         spans = tuple(EvidenceSpan.model_validate(item) for item in state["spans"])
-        types, assignments = build_registry_parts(context=source.context_graph, query=source.query_graph, spans=spans)
-        by_label = {normalize(item.label): item for item in types}
-        root_id = "T-ENTITY"
-        from .models import TypeDefinition
-
-        for draft in state.get("model_draft_types", []):
-            label = str(draft["label"])
-            key = normalize(label)
-            if key in by_label:
-                continue
-            type_id = "T-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:12].upper()
-            by_label[key] = TypeDefinition(
-                type_id=type_id,
-                label=label,
-                definition=str(draft["definition"]),
-                parent_type_ids=(root_id,),
-                aliases=tuple(str(item) for item in draft.get("aliases", [])),
-                evidence_span_ids=tuple(str(item) for item in draft.get("evidence_span_ids", [])),
-                evidence_level=EvidenceLevel(str(draft.get("evidence_level", "unknown"))),
-                status="preliminary",
-            )
-        type_values = [item.model_dump(mode="json") for item in sorted(by_label.values(), key=lambda item: item.type_id)]
+        types, assignments, nli_results, workflow_events = self._quality_workflow().type_source(
+            source=source,
+            spans=spans,
+            overview=state["overview"],
+        )
+        type_values = [item.model_dump(mode="json") for item in types]
         assignment_values = [item.model_dump(mode="json") for item in assignments]
-        return self._event(state, "derive_registry", {"model_draft_types": state.get("model_draft_types", [])}, {"types": type_values, "assignments": assignment_values}, types=type_values, assignments=assignment_values)
+        nli_values = [item.model_dump(mode="json") for item in nli_results]
+        enriched_state = {**state, "artifacts": [*state.get("artifacts", []), *workflow_events]}
+        return self._event(
+            enriched_state,
+            "derive_registry",
+            {"overview": state["overview"], "algorithm_version": ALGORITHM_VERSION},
+            {
+                "types": type_values,
+                "assignments": assignment_values,
+                "nli_results": nli_values,
+            },
+            types=type_values,
+            assignments=assignment_values,
+            source_nli_results=nli_values,
+        )
 
     def _freeze_registry(self, state: SourceState) -> dict[str, Any]:
         if state.get("registry", {}).get("frozen"):
@@ -341,9 +409,27 @@ class DynamicTypingAgent:
             "types": state["types"],
             "assignments": state["assignments"],
             "evidence_spans": state["spans"],
+            "nli_results": state.get("source_nli_results", []),
             "prompt_manifest_sha256": self.prompts.manifest_sha256,
             "frozen": True,
         }
+        expected = {
+            stable_id("node", {"graph": graph.graph_id, "entity": entity})
+            for graph in (source.context_graph, source.query_graph)
+            for entity in graph.entities
+        }
+        actual = {item["node_id"] for item in state["assignments"]}
+        if actual != expected:
+            raise InputContractError(
+                f"source typing coverage mismatch: expected {len(expected)} graph vertices, got {len(actual)}"
+            )
+        FrozenRegistry.model_validate(
+            {
+                "registry_id": stable_id("registry-validation", bare),
+                **bare,
+                "registry_sha256": "0" * 64,
+            }
+        )
         checksum = registry_checksum(bare)
         registry = {"registry_id": stable_id("registry", bare), **bare, "registry_sha256": checksum}
         key = self._source_cache_key(source)
@@ -359,60 +445,27 @@ class DynamicTypingAgent:
 
     def _annotate_answer(self, state: AnswerState) -> dict[str, Any]:
         answer = AnswerInput.model_validate(state["answer"])
-        registry_by_label = {normalize(item.label): item.type_id for item in answer.registry.types}
-        source_assignments = {normalize(item.surface_text): item.type_ids for item in answer.registry.assignments}
-        explicit = {
-            normalize(subject): obj
-            for subject, relation, obj in answer.answer_graph.relations
-            if _is_type_relation(relation)
-        }
-        assignments: list[TypeAssignment] = []
-        for entity in answer.answer_graph.entities:
-            explicit_label = explicit.get(normalize(entity))
-            type_ids = ()
-            reason = "No frozen-registry type matches this answer entity."
-            if explicit_label and normalize(explicit_label) in registry_by_label:
-                type_ids = (registry_by_label[normalize(explicit_label)],)
-                reason = "Explicit answer type maps to a frozen registry label."
-            elif normalize(entity) in source_assignments and source_assignments[normalize(entity)]:
-                type_ids = tuple(source_assignments[normalize(entity)])
-                reason = "Answer entity surface matches a source assignment."
-            assignments.append(
-                TypeAssignment(
-                    node_id=stable_id("node", {"graph": answer.answer_graph.graph_id, "entity": entity}),
-                    surface_text=entity,
-                    graph_role="answer",
-                    type_ids=type_ids,
-                    status="assigned" if type_ids else "unknown",
-                    evidence_span_ids=(),
-                    reason=reason,
-                )
-            )
+        assignments, nli_results, workflow_events = self._quality_workflow().type_answer(answer=answer)
         values = [item.model_dump(mode="json") for item in assignments]
-        return self._event(state, "annotate_answer", {"entities": list(answer.answer_graph.entities), "relations": list(answer.answer_graph.relations)}, {"assignments": values}, annotations=values)
+        nli_values = [item.model_dump(mode="json") for item in nli_results]
+        enriched_state = {**state, "artifacts": [*state.get("artifacts", []), *workflow_events]}
+        return self._event(
+            enriched_state,
+            "annotate_answer",
+            {"entities": list(answer.answer_graph.entities), "relations": list(answer.answer_graph.relations)},
+            {"assignments": values, "nli_results": nli_values},
+            annotations=values,
+            nli_results=nli_values,
+        )
 
     def _nli_answer(self, state: AnswerState) -> dict[str, Any]:
-        answer = AnswerInput.model_validate(state["answer"])
-        source_text = " ".join(span.text for span in answer.registry.evidence_spans)
-        source_ids = tuple(span.span_id for span in answer.registry.evidence_spans)
-        nli: list[NliResult] = []; requests: list[dict[str, Any]] = []
-        for subject, relation, obj in answer.answer_graph.relations:
-            if not _is_type_relation(relation):
-                continue
-            known = {normalize(item.label) for item in answer.registry.types}
-            if normalize(obj) in known:
-                continue
-            hypothesis = f"{subject} is a {obj}."
-            result = self._verify_nli(
-                hypothesis_kind="answer_type_assertion",
-                premise=source_text,
-                hypothesis=hypothesis,
-                evidence_span_ids=source_ids,
-                request_key=stable_id("nli-request", {"source": answer.source_id, "response": answer.response_id, "hypothesis": hypothesis}),
-            )
-            nli.append(result); requests.append({"hypothesis_kind": "answer_type_assertion", "premise": source_text, "hypothesis": hypothesis, "evidence_span_ids": list(source_ids), "result": result.model_dump(mode="json")})
-        values = [item.model_dump(mode="json") for item in nli]
-        return self._event(state, "nli_answer", {"requests": requests, "backend": self.nli_backend}, {"results": values}, nli_results=values)
+        values = list(state.get("nli_results", []))
+        return self._event(
+            state,
+            "nli_answer",
+            {"backend": self.nli_backend, "policy": "every entity decision was already NLI-audited"},
+            {"results": values, "count": len(values)},
+        )
 
     def _verify_nli(
         self,
@@ -423,7 +476,7 @@ class DynamicTypingAgent:
         evidence_span_ids: tuple[str, ...],
         request_key: str,
     ) -> NliResult:
-        if self.nli_backend == "hhem" or not self.invoke_model_nodes:
+        if self.nli_backend in {"hhem", "fake"}:
             return self.nli.verify(
                 hypothesis_kind=hypothesis_kind,
                 premise=premise,
@@ -438,8 +491,6 @@ class DynamicTypingAgent:
                 "premise": premise,
                 "hypothesis": hypothesis,
                 "evidence_span_ids_json": canonical_json(list(evidence_span_ids)),
-                "evidence_level": "source_entailed",
-                "source_language": "unknown",
                 "policy_json": canonical_json({"closed_world": True, "neutral_is_contradiction": False}),
             },
         )
@@ -456,6 +507,8 @@ class DynamicTypingAgent:
             evidence_span_ids=tuple(result.get("supporting_span_ids", []) or result.get("conflicting_span_ids", [])),
             rationale=result["rationale"],
             evidence_level=result["evidence_level"],
+            hypothesis_kind=hypothesis_kind,
+            hypothesis=hypothesis,
         )
 
     def _emit_answer(self, state: AnswerState) -> dict[str, Any]:
@@ -477,9 +530,9 @@ class DynamicTypingAgent:
         return {**updates, "artifacts": [*state.get("artifacts", []), event]}
 
 
-def _is_type_relation(relation: str) -> bool:
-    """Return whether a graph edge asserts a permanent type in a supported language."""
-    return normalize(relation) in {
+def _legacy_disabled_type_relation(relation: str) -> bool:
+    """Retained only for old imports; graph relations never assign entity types."""
+    return False and normalize(relation) in {
         "is a",
         "is",
         "instance of",

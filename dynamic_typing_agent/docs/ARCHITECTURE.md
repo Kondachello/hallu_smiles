@@ -5,7 +5,9 @@
 The package implements evidence-constrained local type induction as two separate state
 machines. The source machine is allowed to read only context/query and produces an
 immutable registry. The answer machine receives that frozen registry and may only assign
-registered types or abstain. It cannot mutate the registry.
+registered types. It cannot mutate the registry. Both machines require complete vertex
+coverage; unresolved semantic decisions fall back to the structural root type only after
+their proposed semantic types have been NLI-audited.
 
 The package emits annotations and audit artifacts. HalluGraph matching and scoring remain
 outside this boundary.
@@ -62,7 +64,7 @@ Input:
 
 Output:
 
-- answer-node assignments using registry IDs or `unknown`;
+- answer-node assignments using non-empty frozen registry IDs for every answer vertex;
 - explicit answer type assertions and their NLI verdicts;
 - optional edge verdicts for the later B5 integration;
 - audit/provenance records;
@@ -122,20 +124,24 @@ to a type, `neutral` or `unknown`.
 NLI is three-way: `entailed`, `contradicted`, `neutral`. It is not a type generator and
 does not resolve entity identity.
 
-The NLI router invokes the subgraph only for:
+The NLI stage is mandatory for:
 
-- non-explicit entity-to-type assignments;
-- proposed parent/child or alias relations;
-- suspicious cluster membership;
-- explicit answer specializations or conflicts;
-- ambiguous relation, direction or typed-role matches.
+- every semantic source entity-to-type assignment;
+- every proposed parent/child or alias merge relation;
+- every answer entity-to-type assignment, including exact-surface reuse;
+- the structural root fallback decision for complete audit coverage.
 
 Each request has a short hypothesis and premise made from exact source spans. If the
 premise contains only an LLM-authored definition, the evidence level is
 `definition_only`; that result cannot justify alias merge or penalize an answer.
 
 `neutral` means insufficient evidence. `contradicted` requires positive conflicting
-source evidence. The NLI cache includes normalized premise/hypothesis, language, model,
+source evidence. For source entity typing, a neutral broad category may be finalized with
+`definition_only` evidence because finality is a workflow state, not a claim of textual
+entailment. Contradicted assignments are retried and rejected. Parent edges and merges
+still require entailment. For answer typing, neutral semantic assignments fall back to
+the structural root to avoid accepting unsupported answer specialization. The NLI cache
+includes normalized premise/hypothesis, language, model,
 prompt version, thresholds and truncation policy.
 
 ## Registry invariants
@@ -145,12 +151,14 @@ Before freeze, deterministic validation requires:
 - unique stable IDs and canonical labels;
 - parent edges form a directed acyclic graph;
 - alias components do not contain parent/child edges;
-- every confirmed assignment references an existing type;
+- every source graph occurrence has exactly one assignment record with non-empty type IDs;
+- every type in a frozen registry has status `final`;
+- every assignment references an existing final type;
 - every decision references existing source span IDs;
 - roles are distinct from permanent types;
 - merge/split history is append-only;
 - `definition_only` cannot confirm alias merge;
-- unknown assignments have no fabricated type ID;
+- preliminary and unknown assignments cannot cross the freeze boundary;
 - the registry contains no answer graph/input hash;
 - serialization round-trips canonically.
 
@@ -191,3 +199,25 @@ Structured events use stable fields: `run_id`, `node_id`, `attempt`, `cache_stat
 Raw context, answer text and secrets are excluded from ordinary logs. Full evidence text
 belongs only in sealed run artifacts under the experiment data policy.
 
+## Unified test and viewer boundary
+
+The preferred local `test` entry point has two input adapters:
+
+- supplied immutable context/query/answer graphs;
+- raw text routed through either fake or explicitly configured live KGGen.
+
+Adapter choice is per case, so a single JSONL can mix both forms. Both adapters produce
+the same `typing-test-input-v2` snapshot and the same case artifact filenames. The
+`execution-trace-v2` envelope prepends input-mode and per-role graph preparation events
+to the normal source and answer agent events. This makes KGGen/supplied-graph provenance
+visible without mixing it into the type registry.
+
+`run_manifest.json` is the single run-level discovery document. It contains only no-gold
+metadata, relative case directories, statuses and structural counts. The offline viewer
+is a projection of sealed artifacts, never an execution dependency. Its dashboard and
+case pages load local JavaScript data files rather than making network requests. Graph
+layout, selection, filtering and cross-highlighting are presentation state and cannot
+mutate any scientific artifact.
+
+A test output directory is write-once. The runner refuses a non-empty destination, so a
+rerun cannot silently combine stale failures, traces or annotations with a newer attempt.

@@ -1,47 +1,79 @@
 # Prompt catalog
 
-## Storage model
+## Storage and versioning
 
-Prompts are package data under `prompts/v1/`. Each model operation has:
+The active prompt set is immutable package data under `prompts/v2/`. Every model
+operation has:
 
-- `<prompt_id>.system.md` — stable role, invariants and decision policy;
-- `<prompt_id>.user.j2` — Jinja template containing only operation inputs;
-- `schemas/<prompt_id>.schema.json` — strict output schema;
-- one `manifest.json` entry — version, files, required variables and allowed phase.
+- `<prompt_id>.system.md` — stable role, terminology, invariants and decision policy;
+- `<prompt_id>.user.j2` — a Jinja template containing only operation inputs;
+- `schemas/<prompt_id>.schema.json` — a strict structured-output schema;
+- one `manifest.json` entry — version, paths, required variables and phase.
 
-Prompt text is never embedded in graph-node Python code. The loader reads one immutable
-manifest, validates paths and variables, computes SHA-256 for every file and then computes
-a complete manifest hash. That hash is included in checkpoints, cache keys and artifacts.
+Prompt text is not embedded in graph-node Python code. The loader validates all paths
+and required variables, hashes every file and then hashes the complete manifest. The
+manifest hash is included in cache keys and run artifacts. A behavior or output-contract
+change creates a new version directory rather than mutating a prompt set used in an
+earlier scientific run. `prompts/v1/` is retained only to reproduce old artifacts.
 
-New behavior requires a new prompt version directory (`v2`, not an in-place edit after a
-scientific run). Prompt IDs remain stable when intent is unchanged; output schema changes
-also require a contract-version change.
+## Active model operations
 
-## Model nodes
-
-| Graph node | Prompt ID | Purpose |
+| Stage | Prompt ID | Purpose |
 |---|---|---|
-| `schema_overview` | `schema_overview` | Draft local types, distinctions and roles from source only |
-| `schema_reconcile` | `schema_reconcile` | Reconcile chunk drafts without inventing evidence |
-| `entity_type_decision` | `entity_type_decision` | Choose closed-set actions for entity profiles |
-| `registry_consistency_review` | `registry_consistency_review` | Classify relations among nearby type definitions |
-| `cluster_split_review` | `cluster_split_review` | Detect heterogeneous type clusters and propose an auditable split |
-| `registry_repair` | `registry_repair` | Repair only listed deterministic invariant violations |
-| `answer_typing` | `answer_typing` | Assign frozen-registry types or abstain; identify explicit assertions |
-| `edge_candidate_resolution` | `edge_candidate_resolution` | Select among bounded edge matches or abstain |
-| NLI subgraph | `nli_verification` | Return entailed/contradicted/neutral from supplied source evidence |
+| Source overview | `schema_overview` | Produce non-binding category hints from context, query and their graph |
+| One source entity | `entity_type_decision` | Reuse a current type or propose one reusable semantic category |
+| Registry review | `registry_consistency_review` | Propose bounded parent or merge changes after all entities are assigned |
+| One answer entity | `answer_typing` | Select only IDs from the frozen source registry |
+| NLI verification | `nli_verification` | Judge one explicit assignment, hierarchy or merge hypothesis |
 
-## Prompt injection policy
+The overview cannot create final registry entries. The source decision prompt is called
+once per unique entity surface and receives that entity's graph neighbourhood, relevant
+source spans and the registry built so far. The answer prompt is also entity-local and
+cannot extend the frozen registry.
 
-Context, query, answer, graph labels and type labels are untrusted data. User templates
-wrap them in explicit data sections and state that instructions contained inside are not
-instructions to the model. The model has no tools, retrieval or external knowledge input.
-Structured output is enforced by the transport and independently validated.
+## Meaning of “type”
 
-## Language policy
+The system prompts define a type as a reusable semantic category used later to align
+source and answer graphs in HalluGraph. A type is not:
 
-Instructions are English for consistency. Source text may be any language. Type labels
-should follow the dominant source language unless configuration requests a canonical
-language. Evidence quotes remain verbatim. NLI hypotheses use the source language when
-possible to avoid translation becoming hidden evidence.
+- the entity's proper name or textual alias;
+- an arbitrary object reached by a graph relation;
+- a transient event, numeric value, date or relation phrase;
+- a claim copied from the context without category semantics.
 
+The prompts include positive and negative examples. They favor stable categories such
+as `organization`, `person`, `city`, `financial institution` and `scientific method`,
+while rejecting identity mappings such as `North Bank -> North Bank` and mechanical
+edge mappings such as `X --is--> Y`, unless `Y` is independently justified as a reusable
+category.
+
+## NLI and finality
+
+NLI means natural-language inference: checking whether a short hypothesis follows from
+the supplied source evidence. The model proposes a type; it does not certify its own
+proposal. The runtime constructs a canonical hypothesis such as
+`North Bank is an organization.` and records the NLI result.
+
+- `entailed` gives strong source evidence;
+- `neutral` may remain a final but weak source classification because a category can be
+  useful without being stated verbatim;
+- `contradicted` triggers one broader retry and then a structural root fallback;
+- answer-only semantic matches require `entailed`, except exact reuse of a source entity
+  surface, which preserves that entity's already frozen source type;
+- parent links require one entailed hypothesis;
+- merges require entailed hypotheses in both directions.
+
+“Final” is a workflow state, not a claim that the evidence is strong. Every serialized
+source and answer vertex must have at least one final type ID. Evidence strength remains
+explicit in `evidence_level` and in the NLI records.
+
+## Untrusted-input policy
+
+Context, query, answer text, graph labels and type labels are untrusted data. User
+templates delimit them as data and instruct the model not to execute instructions found
+inside. The model has no tools or external retrieval. The transport enforces structured
+output, and the runtime independently validates the returned JSON schema and all IDs.
+
+Instructions are written in English for consistency. Source text may be in any language.
+Type labels follow the dominant source language unless a future configuration explicitly
+requests canonicalization. Evidence remains verbatim.

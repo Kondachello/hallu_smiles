@@ -10,7 +10,8 @@
 - alias/parent incompatibility;
 - merge/split append-only history;
 - evidence-level policy;
-- `unknown` versus `failed` separation;
+- rejection of preliminary types at the freeze boundary;
+- complete non-empty source and answer assignment coverage;
 - answer cannot extend a frozen registry;
 - no forbidden gold keys in accepted input/state.
 
@@ -27,11 +28,12 @@
 ### Node tests with fakes
 
 - success, abstention and protocol-error response for every model node;
-- routing sends only ambiguous/high-impact decisions to NLI;
-- `neutral` maps to unknown/preliminary, never contradiction;
+- every semantic entity decision is routed to NLI;
+- neutral source assignments can finalize with weaker evidence, while contradicted
+  assignments retry and answer-side neutral assignments fall back to the structural root;
 - retries do not duplicate artifacts or decisions;
 - parallel results are deterministically ordered;
-- bounded repair terminates;
+- bounded entity retry terminates;
 - checkpoint resume makes zero calls for completed nodes.
 
 ### Graph tests
@@ -47,6 +49,13 @@
 ### Integration tests
 
 - local JSON run with deterministic fakes;
+- mixed raw-text and supplied-graph cases share one run manifest and case layout;
+- raw text records KGGen provenance and graph-preparation events before source typing;
+- source-only cases omit answer artifacts without synthetic padding;
+- viewer generation produces one dashboard and one page/data bundle per case;
+- viewer assets contain no remote request and safely embed untrusted source text;
+- canvas graph, type-color mapping, entity/type cross-selection and human-readable event
+  details remain present in the generated client;
 - existing three-way experiment receives the same shared graph bundle;
 - unknown-only provider remains score-preserving;
 - model-backed adapter writes richer artifacts without mutating graphs;
@@ -65,4 +74,3 @@ usage accounting and cache replay before any dataset pilot.
 `examples/dynamic_typing_20.expectations.jsonl` contains human review expectations and is
 never loaded by the agent. The specification tests prove identical case IDs and absence of
 expectation-only keys in the no-gold file.
-

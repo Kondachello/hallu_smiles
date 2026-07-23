@@ -78,9 +78,19 @@ def parse_json_completion(content: Any, output_schema: Mapping[str, Any], operat
 class FakeStructuredModel:
     """Offline operation recorder with optional schema-valid scripted results."""
 
-    def __init__(self, responses: Mapping[str, Mapping[str, Any]] | None = None):
+    def __init__(
+        self,
+        responses: Mapping[
+            str,
+            Mapping[str, Any]
+            | list[Mapping[str, Any]]
+            | Callable[[tuple[BaseMessage, ...], int], Mapping[str, Any]],
+        ]
+        | None = None,
+    ):
         self.responses = dict(responses or {})
         self.calls: list[dict[str, Any]] = []
+        self._operation_counts: dict[str, int] = {}
 
     def invoke(
         self,
@@ -97,7 +107,17 @@ class FakeStructuredModel:
                 "message_count": len(messages),
             }
         )
-        response = self.responses.get(operation)
+        scripted = self.responses.get(operation)
+        index = self._operation_counts.get(operation, 0)
+        self._operation_counts[operation] = index + 1
+        if callable(scripted):
+            response = scripted(messages, index)
+        elif isinstance(scripted, list):
+            if index >= len(scripted):
+                raise ModelProtocolError(f"{operation}: no scripted response for call {index}")
+            response = scripted[index]
+        else:
+            response = scripted
         if response is None:
             return {}
         Draft202012Validator(output_schema).validate(response)

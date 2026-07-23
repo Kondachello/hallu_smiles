@@ -4,7 +4,7 @@ This directory is the autonomous package boundary for the model-backed dynamic e
 typing agent. It is intentionally separate from the experiment runner, KGGen and
 HalluGraph scoring code.
 
-Current status: **functional standalone core, verified offline**. It contains source and
+Current status: **entity-by-entity, NLI-gated standalone agent, verified offline**. It contains source and
 answer LangGraph graphs, immutable file cache and auditable artifacts, a deterministic
 fake model/NLI mode, strict contracts, a local CLI, and an optional LiteLLM transport
 that fails closed when its dependency or explicit live configuration is absent. The
@@ -15,11 +15,12 @@ The package will expose two operations:
 
 1. `build_source_registry(context, query, context_graph, query_graph)` — produces and
    freezes a source-only hierarchical registry.
-2. `annotate_answer(response, answer_graph, frozen_registry)` — assigns only types from
-   that registry or abstains.
+2. `annotate_answer(response, answer_graph, frozen_registry)` — assigns final types from
+   that registry to every answer vertex.
 
-Neither operation accepts gold labels. Transport/protocol failures are distinct from
-epistemic `unknown` decisions.
+Neither operation accepts gold labels. Every source and answer graph vertex must have a
+non-empty final type assignment before output is accepted. Transport/protocol failures
+remain failures; they are never converted into semantic uncertainty.
 
 Key documents:
 
@@ -27,7 +28,10 @@ Key documents:
 - [Implementation plan](docs/IMPLEMENTATION_PLAN.md)
 - [Prompt catalog](docs/PROMPT_CATALOG.md)
 - [Integration contract](docs/INTEGRATION.md)
+- [Unified local test framework](docs/TEST_FRAMEWORK.md)
+- [Interactive run viewer](docs/RUN_VIEWER.md)
 - [Test plan](docs/TEST_PLAN.md)
+- [Audit of the stopped 13-case historical run](docs/HISTORICAL_13_AUDIT.md)
 
 Offline checks (from this directory):
 
@@ -47,10 +51,42 @@ hallugraph-type-agent run-fixture --input examples/dynamic_typing_20.no_gold.jso
 During source-tree development, use `PYTHONPATH=src` before `python -m
 hallugraph_dynamic_typing ...`.
 
+## One test command for text or graphs
+
+The `test` command is the preferred local entry point. It accepts one no-gold JSONL file
+whose rows may contain either raw `context/query/response` text or the same fields plus a
+`graphs` object. In `auto` mode every row is adapted independently, while all cases are
+written to the same artifact contract and one local dashboard.
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m hallugraph_dynamic_typing test `
+  --input examples\dynamic_typing_20.no_gold.jsonl `
+  --input-mode auto `
+  --limit 1 `
+  --output runs\graph-one
+```
+
+For raw text, KGGen is invoked before typing. The safe offline plumbing check uses the
+fake KGGen backend:
+
+```powershell
+python -m hallugraph_dynamic_typing test `
+  --input examples\text_kggen_smoke.no_gold.jsonl `
+  --input-mode text `
+  --kggen fake `
+  --limit 1 `
+  --output runs\unified-text-kggen-smoke
+```
+
+The generated entry page is always `<output>\viewer\index.html`. It links to every case
+and requires no web server. Each output directory is immutable and must be new or empty;
+use a new run name for every attempt.
+
 ## Live LLM plus local HHEM NLI
 
 `config/live-gateway-hhem.yaml` uses a real OpenAI-compatible LLM endpoint for source
-typing and a local, pinned HHEM snapshot for answer-side NLI. It deliberately contains no
+typing and a local, pinned HHEM snapshot for source, hierarchy and answer NLI. It deliberately contains no
 secret. Copy `env.example.ps1` to `env.local.ps1`, put the values in the copy, then load it
 into the current PowerShell process. On this Windows workspace use Python 3.12 for the
 live virtual environment: the installed Python 3.13 does not provide a reliable `torch`
@@ -95,14 +131,15 @@ records source commits, file sizes and SHA-256 values; all payloads remain ignor
 
 ## Interactive result viewer
 
-Create one self-contained, local HTML explorer for a completed no-gold run:
+Every unified test run renders the dashboard automatically. Rebuild it for a current or
+legacy artifact directory without contacting any model:
 
 ```powershell
 $env:PYTHONPATH = "src"
 python scripts\render_run_viewer.py --run runs\live-test
 ```
 
-It presents context, query and answer text, evidence spans, entity assignments, frozen type
-hierarchy and NLI result. A run created before this viewer was added needs the fixture
-fallback once: `--fixture examples\dynamic_typing_20.no_gold.jsonl`. Details:
-[run viewer](docs/RUN_VIEWER.md).
+The dashboard opens individual cases. Each case connects context/query/answer mentions,
+the canvas KG, stable type colors, the frozen hierarchy, entity assignments, NLI and
+human-readable agent events. Full recorded inputs and outputs remain available under
+expandable technical details. Details: [run viewer](docs/RUN_VIEWER.md).
