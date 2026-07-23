@@ -1,0 +1,2 @@
+[kg] retry:cluster-llm program=predict attempt=1 next_sleep_s=2.00 error=RateLimitError
+[kg] retry:cluster-llm program=predict attempt=1 next_sleep_s=2.00 error=RateLimitError

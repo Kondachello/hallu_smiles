@@ -1,0 +1,7 @@
+[
+  {
+    "case_id": "dt-001-bank-generalization",
+    "status": "failed",
+    "failure": "TransportError('schema_overview: live completion failed after 1/5 attempt(s): BadRequestError (status=400): litellm.BadRequestError: OpenAIException - Vertex rejected the request')"
+  }
+]

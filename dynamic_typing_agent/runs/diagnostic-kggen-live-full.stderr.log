@@ -1,0 +1,154 @@
+Traceback (most recent call last):
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\llms\openai\openai.py", line 725, in completion
+    raise e
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\llms\openai\openai.py", line 653, in completion
+    ) = self.make_sync_openai_chat_completion_request(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\litellm_core_utils\logging_utils.py", line 149, in sync_wrapper
+    result = func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\llms\openai\openai.py", line 471, in make_sync_openai_chat_completion_request
+    raise e
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\llms\openai\openai.py", line 453, in make_sync_openai_chat_completion_request
+    raw_response = openai_client.chat.completions.with_raw_response.create(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\openai\_legacy_response.py", line 364, in wrapped
+    return cast(LegacyAPIResponse[R], func(*args, **kwargs))
+                                      ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\openai\_utils\_utils.py", line 279, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\openai\resources\chat\completions\completions.py", line 929, in create
+    return self._post(
+           ^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\openai\_base_client.py", line 1276, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\openai\_base_client.py", line 949, in request
+    return self._request(
+           ^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\openai\_base_client.py", line 1057, in _request
+    raise self._make_status_error_from_response(err.response) from None
+openai.BadRequestError: Error code: 400 - {'error': {'message': "response_format.type must be 'json_schema'", 'type': 'invalid_request_error', 'code': 400}}
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\main.py", line 1833, in completion
+    raise e
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\main.py", line 1806, in completion
+    response = openai_chat_completions.completion(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\llms\openai\openai.py", line 736, in completion
+    raise OpenAIError(
+litellm.llms.openai.common_utils.OpenAIError: Error code: 400 - {'error': {'message': "response_format.type must be 'json_schema'", 'type': 'invalid_request_error', 'code': 400}}
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\src\hallugraph_dynamic_typing\__main__.py", line 3, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\src\hallugraph_dynamic_typing\cli.py", line 127, in main
+    return int(args.handler(args))
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\src\hallugraph_dynamic_typing\cli.py", line 96, in run_kggen_pipeline
+    summary = run_pipeline(agent=agent, records=records, output=output, kggen_config=args.kggen_config, fake_kggen=args.fake_kggen, kggen_cache_root=args.kggen_cache_root)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\src\hallugraph_dynamic_typing\kggen_pipeline.py", line 113, in run_pipeline
+    context = extractor.extract(str(row["context"]), kind="context")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles\src\extract.py", line 967, in extract
+    graph = self._call_with_transport_retries(text, cache_key=key, kind=kind)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles\src\extract.py", line 919, in _call_with_transport_retries
+    for attempt in Retrying(
+                   ^^^^^^^^^
+  File "C:\Users\Kolya\AppData\Local\Programs\Python\Python312\Lib\site-packages\tenacity\__init__.py", line 445, in __iter__
+    do = self.iter(retry_state=retry_state)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\AppData\Local\Programs\Python\Python312\Lib\site-packages\tenacity\__init__.py", line 378, in iter
+    result = action(retry_state)
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\AppData\Local\Programs\Python\Python312\Lib\site-packages\tenacity\__init__.py", line 400, in <lambda>
+    self._add_action_func(lambda rs: rs.outcome.result())
+                                     ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\AppData\Local\Programs\Python\Python312\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\AppData\Local\Programs\Python\Python312\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles\src\extract.py", line 934, in _call_with_transport_retries
+    graph = self._call_backend(text, cache_key=cache_key, kind=kind)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles\src\extract.py", line 842, in _call_backend
+    g = backend.generate(**gen_kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\kg_gen\kg_gen.py", line 211, in generate
+    relations = get_relations(
+                ^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\kg_gen\steps\_2_get_relations.py", line 85, in get_relations
+    result = extract(source_text=input_data, entities=entities)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\predict\predict.py", line 130, in __call__
+    return super().__call__(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\utils\callback.py", line 326, in sync_wrapper
+    return fn(instance, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\primitives\module.py", line 110, in __call__
+    return self.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\predict\predict.py", line 253, in forward
+    completions = adapter(lm, lm_kwargs=config, signature=signature, demos=demos, inputs=kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\adapters\chat_adapter.py", line 85, in __call__
+    return JSONAdapter()(lm, lm_kwargs, signature, demos, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\adapters\json_adapter.py", line 66, in __call__
+    result = self._json_adapter_call_common(lm, lm_kwargs, signature, demos, inputs, super().__call__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\adapters\json_adapter.py", line 56, in _json_adapter_call_common
+    return call_fn(lm, lm_kwargs, signature, demos, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\adapters\chat_adapter.py", line 84, in __call__
+    raise e
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\adapters\chat_adapter.py", line 72, in __call__
+    return super().__call__(lm, lm_kwargs, signature, demos, inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\adapters\base.py", line 205, in __call__
+    outputs = lm(messages=inputs, **lm_kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\utils\callback.py", line 326, in sync_wrapper
+    return fn(instance, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\clients\base_lm.py", line 129, in __call__
+    response = self.forward(prompt=prompt, messages=messages, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles\src\dspy_adapter.py", line 91, in guarded_forward
+    response = original_forward(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\clients\lm.py", line 186, in forward
+    results = completion(
+              ^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\clients\cache.py", line 279, in sync_wrapper
+    result = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\dspy\clients\lm.py", line 392, in litellm_completion
+    return litellm.completion(
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\utils.py", line 1279, in wrapper
+    raise e
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\utils.py", line 1157, in wrapper
+    result = original_function(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\main.py", line 3220, in completion
+    raise exception_type(
+          ^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\litellm_core_utils\exception_mapping_utils.py", line 2232, in exception_type
+    raise e
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\.venv-local-live\Lib\site-packages\litellm\litellm_core_utils\exception_mapping_utils.py", line 339, in exception_type
+    raise BadRequestError(
+litellm.exceptions.BadRequestError: litellm.BadRequestError: OpenAIException - response_format.type must be 'json_schema'

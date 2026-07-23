@@ -1,0 +1,1 @@
+{"cases":[{"case_id":"cqdiag-ru-004-legal-changing-roles","failure":"ModelProtocolError('schema_overview: JSON does not satisfy the required schema')","status":"failed"}],"kggen_protocol":"hallu-smiles-kggen-v13-strict-cluster-schema-retries","schema_version":"kggen-typing-run-v1"}

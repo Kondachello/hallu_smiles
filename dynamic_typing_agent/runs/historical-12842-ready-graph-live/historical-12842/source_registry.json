@@ -1,0 +1,1 @@
+{"artifacts":[],"failure":"TransportError('schema_overview: live completion failed after 5/5 attempt(s): APIError (status=500): litellm.APIError: APIError: OpenAIException - Connection error.')","registry":null,"status":"failed"}

@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\src\hallugraph_dynamic_typing\__main__.py", line 3, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\src\hallugraph_dynamic_typing\cli.py", line 203, in main
+    return int(args.handler(args))
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\src\hallugraph_dynamic_typing\cli.py", line 106, in run_unified_test
+    manifest = run_test_suite(
+               ^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\src\hallugraph_dynamic_typing\test_framework.py", line 181, in run_test_suite
+    rows = load_no_gold_cases(input_path, limit=limit, case_ids=case_ids)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\Desktop\SMILES\HaluVSGraph_Eval\hallu_smiles_dynamic_entity_typing\dynamic_typing_agent\src\hallugraph_dynamic_typing\test_framework.py", line 40, in load_no_gold_cases
+    row = json.loads(line)
+          ^^^^^^^^^^^^^^^^
+  File "C:\Users\Kolya\AppData\Local\Programs\Python\Python312\Lib\json\__init__.py", line 335, in loads
+    raise JSONDecodeError("Unexpected UTF-8 BOM (decode using utf-8-sig)",
+json.decoder.JSONDecodeError: Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)

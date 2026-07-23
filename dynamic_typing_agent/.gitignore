@@ -7,7 +7,7 @@ build/
 dist/
 *.egg-info/
 .cache/
-runs/
+# Run artifacts are versioned for reproducibility and HTML inspection.
 env.local.ps1
 local_resources/
 .venv-local-live/

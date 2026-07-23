@@ -1,0 +1,7 @@
+[
+  {
+    "case_id": "dt-ru-001-credit-risk-structure",
+    "status": "failed",
+    "failure": "ModelProtocolError('schema_overview: JSON does not satisfy the required schema')"
+  }
+]

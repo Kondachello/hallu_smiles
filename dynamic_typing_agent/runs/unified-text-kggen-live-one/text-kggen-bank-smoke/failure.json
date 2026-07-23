@@ -1,0 +1,1 @@
+{"case_id":"text-kggen-bank-smoke","error_type":"BadRequestError","input_mode":"text","message":"litellm.BadRequestError: OpenAIException - response_format.type must be 'json_schema'","schema_version":"typing-test-failure-v1"}

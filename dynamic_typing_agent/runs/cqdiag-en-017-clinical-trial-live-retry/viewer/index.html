@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Запуски типизатора</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <main class="shell dashboard-shell">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">HalluGraph · динамическая типизация</p>
+        <h1 id="run-title">Результаты запуска</h1>
+        <p class="lede" id="run-description">Локальный набор проверок без золотых меток.</p>
+      </div>
+      <div class="header-actions">
+        <span class="pill quiet" id="run-mode"></span>
+        <span class="pill success" id="run-status"></span>
+      </div>
+    </header>
+
+    <section class="summary-strip" aria-label="Сводка запуска" id="summary-strip"></section>
+
+    <section class="section-heading">
+      <div>
+        <h2>Примеры</h2>
+        <p class="muted">Откройте пример, чтобы связать текст, граф, типы, NLI и шаги агента.</p>
+      </div>
+      <div class="compact-controls">
+        <label class="search-field">
+          <span class="sr-only">Поиск примера</span>
+          <input id="case-search" type="search" placeholder="Найти пример">
+        </label>
+        <label>
+          <span class="sr-only">Фильтр статуса</span>
+          <select id="status-filter">
+            <option value="all">Все статусы</option>
+            <option value="ok">Успешные</option>
+            <option value="failed">Ошибки</option>
+          </select>
+        </label>
+        <label>
+          <span class="sr-only">Фильтр входа</span>
+          <select id="mode-filter">
+            <option value="all">Любой вход</option>
+            <option value="text">Текст → KGGen</option>
+            <option value="graphs">Готовые графы</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <div class="case-grid" id="case-grid"></div>
+    <p class="empty-state" id="empty-state" hidden>По этому фильтру примеров нет.</p>
+  </main>
+  <script src="run-data.js"></script>
+  <script src="assets/dashboard.js"></script>
+</body>
+</html>

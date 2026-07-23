@@ -1,0 +1,1 @@
+{"cases":[{"artifact_dir":"cqdiag-en-017-clinical-trial-long","case_id":"cqdiag-en-017-clinical-trial-long","failure":"APIError: litellm.APIError: APIError: OpenAIException - Connection error.","has_answer":false,"input_mode":"text","metrics":{},"status":"failed"}]}

@@ -1,0 +1,1 @@
+{"cases":[{"artifact_dir":"text-kggen-bank-smoke","case_id":"text-kggen-bank-smoke","failure":"BadRequestError: litellm.BadRequestError: OpenAIException - response_format.type must be 'json_schema'","has_answer":true,"input_mode":"text","metrics":{},"status":"failed"}]}

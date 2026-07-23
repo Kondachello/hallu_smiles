@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Разбор типизации</title>
+  <link rel="stylesheet" href="../../assets/styles.css">
+</head>
+<body>
+  <main class="shell case-shell" id="case-viewer">
+    <header class="case-header">
+      <div>
+        <a class="back-link" href="../../index.html">← Все примеры</a>
+        <p class="eyebrow">Подробный разбор</p>
+        <h1 id="case-title">Пример</h1>
+      </div>
+      <div class="header-actions" id="case-chips"></div>
+    </header>
+
+    <div class="failure-banner" id="failure-banner" hidden></div>
+
+    <nav class="role-tabs" id="role-tabs" aria-label="Части входа"></nav>
+
+    <section class="workspace">
+      <div class="primary-column">
+        <article class="surface text-surface">
+          <header class="surface-header">
+            <div>
+              <p class="section-kicker">Исходный текст</p>
+              <h2 id="text-title">Контекст</h2>
+            </div>
+            <span class="selection-hint" id="text-hint">Нажмите на сущность</span>
+          </header>
+          <div class="document-text" id="document-text"></div>
+        </article>
+
+        <article class="surface graph-surface">
+          <header class="surface-header">
+            <div>
+              <p class="section-kicker">KGGen</p>
+              <h2>Граф знаний</h2>
+            </div>
+            <div class="graph-tools">
+              <span class="selection-hint">Колесо — масштаб · перетаскивание — перемещение</span>
+              <button type="button" class="quiet-button" id="reset-graph">Сбросить вид</button>
+            </div>
+          </header>
+          <div class="canvas-wrap" id="canvas-wrap">
+            <canvas id="knowledge-graph" aria-label="Интерактивный граф знаний"></canvas>
+            <div class="canvas-empty" id="canvas-empty" hidden>В этой части входа нет вершин графа.</div>
+          </div>
+          <div class="graph-caption" id="graph-caption"></div>
+        </article>
+      </div>
+
+      <aside class="inspector-column">
+        <section class="surface inspector-section">
+          <div class="segmented" role="tablist" aria-label="Словарь и сущности">
+            <button type="button" data-inspector="types" aria-selected="true">Словарь типов</button>
+            <button type="button" data-inspector="entities" aria-selected="false">Сущности</button>
+          </div>
+          <label class="search-field full-width">
+            <span class="sr-only">Поиск по словарю или сущностям</span>
+            <input id="inspector-search" type="search" placeholder="Поиск">
+          </label>
+          <div class="type-tree" id="type-tree"></div>
+          <div class="entity-list" id="entity-list" hidden></div>
+        </section>
+
+        <section class="surface detail-surface" aria-live="polite">
+          <p class="section-kicker">Выбранный объект</p>
+          <h2 id="detail-title">Ничего не выбрано</h2>
+          <div id="detail-body" class="detail-body muted">
+            Выберите сущность в тексте или графе, тип в словаре либо событие агента.
+          </div>
+        </section>
+      </aside>
+    </section>
+
+    <section class="surface trace-surface">
+      <header class="surface-header trace-header">
+        <div>
+          <p class="section-kicker">Наблюдаемость</p>
+          <h2>Как агент пришёл к результату</h2>
+        </div>
+        <div class="compact-controls">
+          <label>
+            <span class="sr-only">Фаза журнала</span>
+            <select id="trace-phase">
+              <option value="all">Все этапы</option>
+              <option value="input">Подготовка графа</option>
+              <option value="source">Источник</option>
+              <option value="answer">Ответ</option>
+            </select>
+          </label>
+          <label class="search-field">
+            <span class="sr-only">Поиск события</span>
+            <input id="trace-search" type="search" placeholder="Найти событие">
+          </label>
+        </div>
+      </header>
+      <div class="trace-layout">
+        <div class="timeline" id="timeline"></div>
+        <div class="event-detail" id="event-detail">
+          <div class="event-placeholder">
+            Выберите событие слева. Здесь появятся понятное описание, ответ модели,
+            решение NLI и технические поля.
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="data.js"></script>
+  <script src="../../assets/case.js"></script>
+</body>
+</html>

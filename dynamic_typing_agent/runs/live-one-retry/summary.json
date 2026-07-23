@@ -1,0 +1,7 @@
+[
+  {
+    "case_id": "dt-001-bank-generalization",
+    "status": "failed",
+    "failure": "TransportError(\"schema_overview: live completion failed after 1/5 attempt(s): NotFoundError (status=404): litellm.NotFoundError: NotFoundError: OpenAIException - Error code: 404 - {'detail': 'Not Found'}\")"
+  }
+]

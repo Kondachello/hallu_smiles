@@ -1,0 +1,1 @@
+{"cases":[{"artifact_dir":"cqdiag-ru-009-industrial-model-instance-long","case_id":"cqdiag-ru-009-industrial-model-instance-long","failure":null,"has_answer":false,"input_mode":"text","metrics":{"answer_assignments":0,"graph_entities":0,"graph_relations":0,"nli_results":0,"source_assignments":0,"types":1},"status":"ok"}]}

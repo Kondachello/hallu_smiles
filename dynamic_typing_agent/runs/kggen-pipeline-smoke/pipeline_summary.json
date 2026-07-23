@@ -1,0 +1,1 @@
+{"cases":[{"artifact_dir":"runs\\kggen-pipeline-smoke\\dt-001-bank-generalization","case_id":"dt-001-bank-generalization","status":"ok"},{"artifact_dir":"runs\\kggen-pipeline-smoke\\dt-002-legal-contextual-role","case_id":"dt-002-legal-contextual-role","status":"ok"}],"kggen_protocol":"fake-kggen-v1","schema_version":"kggen-typing-run-v1"}

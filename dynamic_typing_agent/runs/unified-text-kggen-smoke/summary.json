@@ -1,0 +1,1 @@
+{"cases":[{"artifact_dir":"text-kggen-bank-smoke","case_id":"text-kggen-bank-smoke","failure":null,"has_answer":true,"input_mode":"text","metrics":{"answer_assignments":5,"graph_entities":17,"graph_relations":14,"nli_results":15,"source_assignments":12,"types":1},"status":"ok"}]}

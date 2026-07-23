@@ -1,0 +1,1 @@
+{"case_id":"cqdiag-en-017-clinical-trial-long","error_type":"APIError","input_mode":"text","message":"litellm.APIError: APIError: OpenAIException - Connection error.","schema_version":"typing-test-failure-v1"}

@@ -1,0 +1,1 @@
+{"cases":[{"artifact_dir":"runs\\diagnostic-kggen-cluster-probe\\cqdiag-ru-003-virus-disease","case_id":"cqdiag-ru-003-virus-disease","status":"ok"}],"kggen_protocol":"hallu-smiles-kggen-v12-strict-cluster-schema","schema_version":"kggen-typing-run-v1"}
