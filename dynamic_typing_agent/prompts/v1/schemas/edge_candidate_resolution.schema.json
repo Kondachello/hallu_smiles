@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:edge-candidate-resolution:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resolutions"],
+  "properties": {
+    "schema_version": {"const": "edge-candidate-resolution-v1"},
+    "resolutions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["answer_edge_id", "status", "selected_source_edge_id", "subject_match", "object_match", "relation_match", "direction_match", "role_compatibility", "source_evidence_span_ids", "requires_nli", "nli_hypothesis", "reason"],
+        "properties": {
+          "answer_edge_id": {"type": "string"},
+          "status": {"enum": ["selected", "unknown"]},
+          "selected_source_edge_id": {"type": ["string", "null"]},
+          "subject_match": {"type": "boolean"},
+          "object_match": {"type": "boolean"},
+          "relation_match": {"enum": ["compatible", "incompatible", "uncertain"]},
+          "direction_match": {"enum": ["same", "reversed", "uncertain"]},
+          "role_compatibility": {"enum": ["compatible", "incompatible", "unknown"]},
+          "source_evidence_span_ids": {"type": "array", "items": {"type": "string"}},
+          "requires_nli": {"type": "boolean"},
+          "nli_hypothesis": {"type": ["string", "null"]},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}
+

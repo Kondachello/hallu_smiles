@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hallugraph-dynamic-typing-agent"
+version = "0.2.0"
+description = "Standalone evidence-constrained dynamic entity typing agent for HalluGraph"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = {text = "Research-only; see repository license"}
+dependencies = [
+  "jinja2>=3.1,<4",
+  "jsonschema>=4.23,<5",
+  "langchain-core>=1,<2",
+  "langgraph>=1,<2",
+  "pydantic>=2.11,<3",
+  "pyyaml>=6,<7",
+]
+
+[project.optional-dependencies]
+litellm = ["litellm>=1.60,<1.70"]
+hhem = ["transformers>=4.45,<5", "torch>=2.2"]
+live = ["litellm>=1.60,<1.70", "transformers>=4.45,<5", "torch>=2.2"]
+kggen = ["kg-gen>=0.1.6", "dspy-ai>=2.5", "tenacity>=8,<10"]
+dev = ["pytest>=8,<10", "pytest-cov>=6,<8"]
+
+[project.scripts]
+hallugraph-type-agent = "hallugraph_dynamic_typing.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hallugraph_dynamic_typing = ["py.typed"]
+
+[tool.setuptools.data-files]
+"share/hallugraph-dynamic-typing-agent/prompts/v1" = [
+  "prompts/v1/*.json",
+  "prompts/v1/*.j2",
+  "prompts/v1/*.md",
+]
+"share/hallugraph-dynamic-typing-agent/prompts/v1/schemas" = ["prompts/v1/schemas/*.json"]
+"share/hallugraph-dynamic-typing-agent/config" = ["config/*.yaml"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]

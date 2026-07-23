@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:schema-overview:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_summary", "draft_types", "contextual_roles", "open_questions"],
+  "properties": {
+    "schema_version": {"const": "schema-overview-v1"},
+    "source_summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "draft_types": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["candidate_type_id", "label", "definition", "parent_candidate_ids", "aliases", "distinctions", "role_signatures", "evidence_span_ids", "evidence_level"],
+        "properties": {
+          "candidate_type_id": {"type": "string", "pattern": "^CT-[^\\s]+$"},
+          "label": {"type": "string", "minLength": 1, "maxLength": 160},
+          "definition": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "parent_candidate_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "aliases": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 160}},
+          "distinctions": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+          "role_signatures": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 200}},
+          "evidence_span_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+          "evidence_level": {"enum": ["source_entailed", "example_supported", "definition_only", "unknown"]}
+        }
+      }
+    },
+    "contextual_roles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role_id", "label", "relation_pattern", "evidence_span_ids"],
+        "properties": {
+          "role_id": {"type": "string", "pattern": "^CR-[^\\s]+$"},
+          "label": {"type": "string", "minLength": 1, "maxLength": 160},
+          "relation_pattern": {"type": "string", "minLength": 1, "maxLength": 500},
+          "evidence_span_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["question_id", "description", "affected_ids"],
+        "properties": {
+          "question_id": {"type": "string"},
+          "description": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "affected_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

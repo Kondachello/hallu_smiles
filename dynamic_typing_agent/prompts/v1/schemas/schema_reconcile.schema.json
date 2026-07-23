@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:schema-reconcile:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "types", "roles", "draft_mappings", "conflicts"],
+  "properties": {
+    "schema_version": {"const": "schema-reconcile-v1"},
+    "types": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["candidate_type_id", "label", "definition", "parent_candidate_ids", "aliases", "source_draft_ids", "evidence_span_ids", "status"],
+        "properties": {
+          "candidate_type_id": {"type": "string"},
+          "label": {"type": "string", "minLength": 1, "maxLength": 160},
+          "definition": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "parent_candidate_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "aliases": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "source_draft_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+          "evidence_span_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+          "status": {"enum": ["proposed", "preliminary", "unknown"]}
+        }
+      }
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role_id", "label", "evidence_span_ids", "source_draft_ids"],
+        "properties": {
+          "role_id": {"type": "string"},
+          "label": {"type": "string"},
+          "evidence_span_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "source_draft_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+        }
+      }
+    },
+    "draft_mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_draft_id", "reconciled_id", "mapping_kind"],
+        "properties": {
+          "source_draft_id": {"type": "string"},
+          "reconciled_id": {"type": ["string", "null"]},
+          "mapping_kind": {"enum": ["preserved", "alias_merged", "parent_linked", "kept_separate", "unresolved"]}
+        }
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["conflict_id", "affected_ids", "description", "evidence_span_ids"],
+        "properties": {
+          "conflict_id": {"type": "string"},
+          "affected_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "description": {"type": "string", "minLength": 1},
+          "evidence_span_ids": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}
+

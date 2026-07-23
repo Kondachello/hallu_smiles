@@ -1,0 +1,80 @@
+{
+  "prompt_set_id": "hallugraph-dynamic-typing-prompts-v1",
+  "prompt_set_version": "1.0.0",
+  "contract_version": "dynamic-typing-agent-contract-v2-draft",
+  "entries": [
+    {
+      "prompt_id": "schema_overview",
+      "phase": "source",
+      "system": "schema_overview.system.md",
+      "user": "schema_overview.user.j2",
+      "schema": "schemas/schema_overview.schema.json",
+      "required_variables": ["source_id", "source_language", "context_text", "query_text", "evidence_spans_json", "seed_types_json", "graph_summary_json", "policy_json"]
+    },
+    {
+      "prompt_id": "schema_reconcile",
+      "phase": "source",
+      "system": "schema_reconcile.system.md",
+      "user": "schema_reconcile.user.j2",
+      "schema": "schemas/schema_reconcile.schema.json",
+      "required_variables": ["source_id", "draft_schemas_json", "evidence_spans_json", "policy_json"]
+    },
+    {
+      "prompt_id": "entity_type_decision",
+      "phase": "source",
+      "system": "entity_type_decision.system.md",
+      "user": "entity_type_decision.user.j2",
+      "schema": "schemas/entity_type_decision.schema.json",
+      "required_variables": ["source_id", "entity_profiles_json", "candidate_types_json", "draft_registry_json", "evidence_spans_json", "policy_json"]
+    },
+    {
+      "prompt_id": "registry_consistency_review",
+      "phase": "source",
+      "system": "registry_consistency_review.system.md",
+      "user": "registry_consistency_review.user.j2",
+      "schema": "schemas/registry_consistency_review.schema.json",
+      "required_variables": ["source_id", "candidate_type_pairs_json", "draft_registry_json", "evidence_spans_json", "policy_json"]
+    },
+    {
+      "prompt_id": "cluster_split_review",
+      "phase": "source",
+      "system": "cluster_split_review.system.md",
+      "user": "cluster_split_review.user.j2",
+      "schema": "schemas/cluster_split_review.schema.json",
+      "required_variables": ["source_id", "suspect_clusters_json", "draft_registry_json", "entity_profiles_json", "evidence_spans_json", "policy_json"]
+    },
+    {
+      "prompt_id": "registry_repair",
+      "phase": "source",
+      "system": "registry_repair.system.md",
+      "user": "registry_repair.user.j2",
+      "schema": "schemas/registry_repair.schema.json",
+      "required_variables": ["source_id", "invalid_registry_json", "violations_json", "evidence_spans_json", "repair_attempt", "policy_json"]
+    },
+    {
+      "prompt_id": "answer_typing",
+      "phase": "answer",
+      "system": "answer_typing.system.md",
+      "user": "answer_typing.user.j2",
+      "schema": "schemas/answer_typing.schema.json",
+      "required_variables": ["source_id", "response_id", "response_text", "answer_graph_json", "answer_profiles_json", "frozen_registry_json", "source_evidence_spans_json", "policy_json"]
+    },
+    {
+      "prompt_id": "edge_candidate_resolution",
+      "phase": "answer",
+      "system": "edge_candidate_resolution.system.md",
+      "user": "edge_candidate_resolution.user.j2",
+      "schema": "schemas/edge_candidate_resolution.schema.json",
+      "required_variables": ["source_id", "response_id", "answer_edges_json", "candidate_source_edges_json", "entity_alignment_json", "frozen_registry_json", "source_evidence_spans_json", "policy_json"]
+    },
+    {
+      "prompt_id": "nli_verification",
+      "phase": "shared_nli",
+      "system": "nli_verification.system.md",
+      "user": "nli_verification.user.j2",
+      "schema": "schemas/nli_verification.schema.json",
+      "required_variables": ["hypothesis_kind", "premise", "hypothesis", "evidence_span_ids_json", "evidence_level", "source_language", "policy_json"]
+    }
+  ]
+}
+

@@ -1,0 +1,23 @@
+Propose the smallest safe repair for this invalid source registry.
+
+SOURCE ID
+{{ source_id }}
+
+REPAIR ATTEMPT
+{{ repair_attempt }}
+
+POLICY
+{{ policy_json }}
+
+MACHINE-DETECTED VIOLATIONS
+{{ violations_json }}
+
+INVALID REGISTRY
+{{ invalid_registry_json }}
+
+AUTHORITATIVE SOURCE SPANS
+{{ evidence_spans_json }}
+
+Return only operations that directly resolve listed violations. Use CANNOT_REPAIR when no
+evidence-preserving operation is safe.
+

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:entity-type-decision:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "decisions"],
+  "properties": {
+    "schema_version": {"const": "entity-type-decision-v1"},
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity_id", "actions", "evidence_span_ids", "confidence", "requires_nli", "nli_hypotheses", "abstention_reason"],
+        "properties": {
+          "entity_id": {"type": "string"},
+          "actions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["action", "target_type_ids", "proposed_type", "role_label"],
+              "properties": {
+                "action": {"enum": ["assign_existing", "add_child", "add_parent", "multi_assign", "alias_merge", "create_branch", "role_assign", "unknown"]},
+                "target_type_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+                "proposed_type": {
+                  "type": ["object", "null"],
+                  "additionalProperties": false,
+                  "required": ["candidate_type_id", "label", "definition", "parent_type_ids", "distinctions"],
+                  "properties": {
+                    "candidate_type_id": {"type": "string"},
+                    "label": {"type": "string"},
+                    "definition": {"type": "string"},
+                    "parent_type_ids": {"type": "array", "items": {"type": "string"}},
+                    "distinctions": {"type": "array", "items": {"type": "string"}}
+                  }
+                },
+                "role_label": {"type": ["string", "null"]}
+              }
+            }
+          },
+          "evidence_span_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "requires_nli": {"type": "boolean"},
+          "nli_hypotheses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["hypothesis_id", "kind", "text", "evidence_span_ids"],
+              "properties": {
+                "hypothesis_id": {"type": "string"},
+                "kind": {"enum": ["type_assignment", "type_parent", "type_alias", "role_assignment"]},
+                "text": {"type": "string", "minLength": 1},
+                "evidence_span_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+              }
+            }
+          },
+          "abstention_reason": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}
+

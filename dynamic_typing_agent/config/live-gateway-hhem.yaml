@@ -1,0 +1,36 @@
+# No secret is stored here. All endpoint/key/model-path values come from environment.
+contract_version: dynamic-typing-agent-contract-v2-draft
+prompt_set:
+  version: v1
+  root: null
+
+model:
+  backend: live
+  model_env: HALLU_TYPING_MODEL
+  api_base_env: HALLU_GATEWAY_URL
+  api_key_env: HALLU_GATEWAY_API_KEY
+  temperature: 0.0
+  timeout_seconds: 90
+  # Bounded retry for temporary gateway/network failures. Authentication and malformed
+  # requests fail immediately; retry diagnostics redact the configured API key.
+  max_attempts: 5
+  retry_backoff_base_seconds: 2
+  retry_backoff_max_seconds: 60
+  retry_jitter_seconds: 1
+  structured_output: response_format
+  # The deployed Vertex gateway accepts simple response schemas but rejects the
+  # agent's deeply nested contract. The full schema is supplied in the system
+  # instruction and enforced locally after generation.
+  structured_schema_profile: prompt
+
+nli:
+  backend: hhem
+  model_path_env: HALLU_HHEM_MODEL_PATH
+  # Same pinned HHEM-2.1-Open revision used by the GraphEval live configuration.
+  revision: 0e7edb3689e710c52ba120086e8f91ea3ee87f23
+  entailment_threshold: 0.80
+  contradiction_threshold: 0.20
+
+persistence:
+  cache_root: .cache/dynamic-typing-agent-live
+  artifacts_root: runs/live

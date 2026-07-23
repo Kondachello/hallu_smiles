@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:answer-typing:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "assignments", "explicit_type_assertions"],
+  "properties": {
+    "schema_version": {"const": "answer-typing-v1"},
+    "assignments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["answer_entity_id", "status", "registry_type_ids", "answer_span_ids", "source_evidence_span_ids", "confidence", "reason"],
+        "properties": {
+          "answer_entity_id": {"type": "string"},
+          "status": {"enum": ["assigned", "unknown"]},
+          "registry_type_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "answer_span_ids": {"type": "array", "items": {"type": "string"}},
+          "source_evidence_span_ids": {"type": "array", "items": {"type": "string"}},
+          "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "explicit_type_assertions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assertion_id", "answer_entity_id", "type_phrase", "mapped_registry_type_id", "relationship", "answer_span_ids", "source_evidence_span_ids", "requires_nli", "nli_hypothesis"],
+        "properties": {
+          "assertion_id": {"type": "string"},
+          "answer_entity_id": {"type": "string"},
+          "type_phrase": {"type": "string", "minLength": 1},
+          "mapped_registry_type_id": {"type": ["string", "null"]},
+          "relationship": {"enum": ["exact", "safe_generalization", "specialization", "conflict", "unmapped", "unknown"]},
+          "answer_span_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "source_evidence_span_ids": {"type": "array", "items": {"type": "string"}},
+          "requires_nli": {"type": "boolean"},
+          "nli_hypothesis": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}
+
