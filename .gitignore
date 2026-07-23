@@ -15,7 +15,8 @@ results/*
 data/*.jsonl
 data/ragtruth/
 data/subsets/
-runs/
+# Keep local run artifacts under version control so other developers can inspect
+# execution traces and the generated HTML viewer.
 examples/mock_output/
 
 # synthetic smoke fixtures
