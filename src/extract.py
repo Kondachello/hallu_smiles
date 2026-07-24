@@ -18,6 +18,7 @@ import faulthandler
 import hashlib
 import json
 import os
+import random
 import threading
 import time
 from contextlib import contextmanager
@@ -29,6 +30,8 @@ from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_neve
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .dspy_adapter import (
+    StructuredOutputParseError,
+    StructuredOutputSchemaError,
     install_dspy_completion_guard,
     is_retryable_llm_exception,
     structured_output_settings,
@@ -297,6 +300,11 @@ class KGExtractor:
         )
         if self.backoff_max < float(self.backoff_base):
             raise ValueError("llm.retry_backoff_max_s must be at least retry_backoff_base_s")
+        self.max_protocol_retries = int(
+            config_value(cfg.extraction, "max_protocol_retries", 0)
+        )
+        if self.max_protocol_retries < 0:
+            raise ValueError("extraction.max_protocol_retries must be non-negative")
         self.request_timeout_s = float(
             cfg.llm.get("request_timeout_s", 90)
             if hasattr(cfg.llm, "get")
@@ -853,25 +861,16 @@ class KGExtractor:
         }
         return Graph(entities, relations)
 
-    def extract(self, text: str, kind: str = "graph") -> Graph:
-        """Extract a graph from a single text, using the disk cache.
+    def _call_backend_with_transient_retries(
+        self, text: str, *, cache_key: str, kind: str
+    ) -> Graph:
+        """Make one schema-valid graph attempt, retrying transient provider errors.
 
-        Returns an empty graph (no API call) for empty/whitespace text -- this is how
-        empty queries (Data2txt / Summary) yield G_q = empty.
+        Protocol failures are deliberately handled by ``extract`` rather than
+        this loop: a malformed completion is not a transport failure, and it
+        must stay bounded even when ``llm.max_retries=0`` means retry transient
+        429/5xx errors until the enclosing Job deadline.
         """
-        text = (text or "").strip()
-        if not text:
-            return Graph.empty()
-
-        key = self._cache_key(text)
-        cached = self._load_cache(key)
-        if cached is not None:
-            self.usage.record_call(kind, key, 0.0, cached=True)
-            return cached
-        if self.cache_only:
-            raise CacheOnlyMissError(kind, key, self._cache_path(key))
-
-        start = time.perf_counter()
         graph: Graph | None = None
         for attempt in Retrying(
             # ``0`` means retry transient provider failures until the outer
@@ -896,12 +895,60 @@ class KGExtractor:
                         self.debug_dump_after_s, repeat=False, exit=False
                     )
                 try:
-                    graph = self._call_backend(text, cache_key=key, kind=kind)
+                    graph = self._call_backend(text, cache_key=cache_key, kind=kind)
                 finally:
                     if self.debug_dump_after_s is not None:
                         faulthandler.cancel_dump_traceback_later()
         # With reraise=True, we only reach here on success, so graph is bound.
         assert graph is not None
+        return graph
+
+    def extract(self, text: str, kind: str = "graph") -> Graph:
+        """Extract a graph from a single text, using the disk cache.
+
+        Returns an empty graph (no API call) for empty/whitespace text -- this is how
+        empty queries (Data2txt / Summary) yield G_q = empty.
+        """
+        text = (text or "").strip()
+        if not text:
+            return Graph.empty()
+
+        key = self._cache_key(text)
+        cached = self._load_cache(key)
+        if cached is not None:
+            self.usage.record_call(kind, key, 0.0, cached=True)
+            return cached
+        if self.cache_only:
+            raise CacheOnlyMissError(kind, key, self._cache_path(key))
+
+        start = time.perf_counter()
+        protocol_attempt = 0
+        while True:
+            try:
+                graph = self._call_backend_with_transient_retries(
+                    text, cache_key=key, kind=kind
+                )
+                break
+            except (StructuredOutputParseError, StructuredOutputSchemaError) as exc:
+                if protocol_attempt >= self.max_protocol_retries:
+                    raise
+                protocol_attempt += 1
+                self.usage.record_retry(kind, exc)
+                # This is a fresh native-schema request, never JSON repair and
+                # never an acceptance of the malformed document. Keep retries
+                # bounded and jittered so four isolated misses do not create a
+                # quota herd after a long cache-backed resume.
+                ceiling = min(
+                    self.backoff_max,
+                    float(self.backoff_base) * (2 ** (protocol_attempt - 1)),
+                )
+                print(
+                    "[kg] structured-output retry "
+                    f"kind={kind} attempt={protocol_attempt}/{self.max_protocol_retries}",
+                    flush=True,
+                )
+                if ceiling > 0:
+                    time.sleep(random.uniform(0, ceiling))
         elapsed = time.perf_counter() - start
         self._save_cache(key, graph)
         self.usage.record_call(kind, key, elapsed, cached=False)

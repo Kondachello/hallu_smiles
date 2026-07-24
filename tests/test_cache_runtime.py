@@ -10,7 +10,7 @@ import pytest
 
 from src.cache import CacheOnlyMissError, evaluation_runtime_metadata
 from src.data import Instance
-from src.dspy_adapter import StructuredOutputSchemaError
+from src.dspy_adapter import StructuredOutputParseError, StructuredOutputSchemaError
 from src.extract import (
     CLUSTER_EQUIVALENCE_POLICY,
     ClusteringCollapseError,
@@ -84,6 +84,12 @@ def test_graph_cache_key_fingerprints_runtime_revision_and_clustering(tmp_path):
     changed_concurrency = copy.deepcopy(cfg)
     changed_concurrency.llm.concurrency = 2
     assert KGExtractor(changed_concurrency, backend=FakeKGGen())._cache_key("same text") != original
+
+    # Transport recovery controls do not change the graph protocol or its cache
+    # representation, so a resumed Job may reuse already-valid graph entries.
+    changed_retry_budget = copy.deepcopy(cfg)
+    changed_retry_budget.extraction.max_protocol_retries = 3
+    assert KGExtractor(changed_retry_budget, backend=FakeKGGen())._cache_key("same text") == original
 
 
 def test_cache_only_extractor_reads_warm_cache_and_fails_before_backend(tmp_path):
@@ -521,3 +527,33 @@ def test_extractor_fails_fast_on_schema_error_but_retries_timeout(tmp_path):
     graph = KGExtractor(cfg, backend=transient).extract("Swiss chard after timeout")
     assert transient.calls == 3
     assert graph.relations == {("Swiss chard", "similar to", "spinach")}
+
+
+def test_extractor_retries_bounded_malformed_structured_output_without_caching_it(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.extraction.cluster = False
+    cfg.extraction.max_protocol_retries = 2
+
+    class MalformedThenValid:
+        calls = 0
+
+        def generate(self, **kwargs):  # noqa: ARG002
+            self.calls += 1
+            if self.calls == 1:
+                raise StructuredOutputParseError("completion is invalid JSON")
+            if self.calls == 2:
+                raise StructuredOutputSchemaError("completion violates schema")
+            return SimpleNamespace(
+                entities={"Swiss chard", "spinach"},
+                relations={("Swiss chard", "similar to", "spinach")},
+            )
+
+    backend = MalformedThenValid()
+    extractor = KGExtractor(cfg, backend=backend)
+    graph = extractor.extract("Swiss chard after malformed structured output")
+
+    assert backend.calls == 3
+    assert graph.relations == {("Swiss chard", "similar to", "spinach")}
+    key = extractor._cache_key("Swiss chard after malformed structured output")
+    assert (Path(cfg.cache_dir) / f"{key}.json").exists()
+    assert extractor.usage.retries == 2
