@@ -25,6 +25,9 @@ extraction:
   # native response schema. Retry only the rejected response a bounded number
   # of times; no invalid graph is ever cached or treated as supported evidence.
   max_protocol_retries: 3
+  # If Vertex reports finish_reason=length, retry the same native request with
+  # a bounded larger output ceiling before declaring the graph unavailable.
+  max_tokens_ceiling: 32768
   # KGGen 0.4 exposes a native clustering ``context`` parameter.  Ground its
   # otherwise label-only LLM decisions in the exact text currently being
   # clustered (G_c, G_q, or G_a respectively); this does not mix graph roles.

@@ -284,6 +284,31 @@ def test_runtime_cluster_contracts_use_current_candidates_and_members():
     validate_json_document(all_null, assignment_schema)
 
 
+def test_singleton_cluster_representative_is_deterministic_without_an_llm_call(monkeypatch):
+    from dspy.adapters.base import Adapter
+    from kg_gen.steps._3_cluster_graph import choose_rep
+
+    calls = 0
+
+    def forbidden_call(*args, **kwargs):  # noqa: ARG001
+        nonlocal calls
+        calls += 1
+        raise AssertionError("a singleton representative must not call the model")
+
+    monkeypatch.setattr(Adapter, "__call__", forbidden_call)
+
+    result = strict_json_schema_adapter()(
+        object(),
+        {},
+        choose_rep.signature,
+        [],
+        {"cluster": {"only valid representative"}, "context": "source"},
+    )
+
+    assert result == [{"representative": "only valid representative"}]
+    assert calls == 0
+
+
 def test_strict_adapter_sends_and_parses_the_same_runtime_specialized_schema(
     monkeypatch,
 ):

@@ -32,6 +32,7 @@ from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .dspy_adapter import (
     StructuredOutputParseError,
     StructuredOutputSchemaError,
+    StructuredOutputTruncatedError,
     install_dspy_completion_guard,
     is_retryable_llm_exception,
     structured_output_settings,
@@ -305,6 +306,19 @@ class KGExtractor:
         )
         if self.max_protocol_retries < 0:
             raise ValueError("extraction.max_protocol_retries must be non-negative")
+        raw_max_tokens_ceiling = config_value(
+            cfg.extraction, "max_tokens_ceiling", self.max_tokens
+        )
+        self.max_tokens_ceiling = (
+            int(raw_max_tokens_ceiling)
+            if raw_max_tokens_ceiling is not None
+            else None
+        )
+        if self.max_tokens is not None and self.max_tokens_ceiling is not None:
+            if self.max_tokens_ceiling < int(self.max_tokens):
+                raise ValueError(
+                    "extraction.max_tokens_ceiling must be at least llm.max_tokens"
+                )
         self.request_timeout_s = float(
             cfg.llm.get("request_timeout_s", 90)
             if hasattr(cfg.llm, "get")
@@ -319,6 +333,7 @@ class KGExtractor:
         if not self.cache_only:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._backend = backend  # if None, lazily construct KGGen on first use
+        self._token_budget_lock = threading.RLock()
         self._cluster_audit_lock = threading.Lock()
         self.last_cluster_audit: dict[str, Any] | None = None
         # Never let an offline FakeKGGen smoke artifact masquerade as a live
@@ -362,6 +377,37 @@ class KGExtractor:
                 install_dspy_completion_guard(lm)
             self.usage.try_hook_litellm()
         return self._backend
+
+    @contextmanager
+    def _temporary_token_budget(self, max_tokens: int | None):
+        """Temporarily raise one KGGen request's output ceiling.
+
+        Gemini may use its initial budget on hidden reasoning and return a
+        strictly invalid truncated document.  The configured ceiling is a
+        bounded retry control, not a changed extraction protocol: only a
+        ``finish_reason=length`` response enters this branch.  The lock keeps
+        this per-request override isolated if a caller configures extraction
+        concurrency above one.
+        """
+        if max_tokens is None or max_tokens == self.max_tokens:
+            yield
+            return
+        backend = self._get_backend()
+        lm = getattr(backend, "lm", None)
+        kwargs = getattr(lm, "kwargs", None)
+        if not isinstance(kwargs, dict):
+            raise RuntimeError("KGGen backend has no mutable LM token budget")
+        with self._token_budget_lock:
+            had_previous = "max_tokens" in kwargs
+            previous = kwargs.get("max_tokens")
+            kwargs["max_tokens"] = max_tokens
+            try:
+                yield
+            finally:
+                if had_previous:
+                    kwargs["max_tokens"] = previous
+                else:
+                    kwargs.pop("max_tokens", None)
 
     # -- cache ----------------------------------------------------------------
     def _cache_key(self, text: str) -> str:
@@ -862,7 +908,7 @@ class KGExtractor:
         return Graph(entities, relations)
 
     def _call_backend_with_transient_retries(
-        self, text: str, *, cache_key: str, kind: str
+        self, text: str, *, cache_key: str, kind: str, max_tokens: int | None = None
     ) -> Graph:
         """Make one schema-valid graph attempt, retrying transient provider errors.
 
@@ -895,7 +941,8 @@ class KGExtractor:
                         self.debug_dump_after_s, repeat=False, exit=False
                     )
                 try:
-                    graph = self._call_backend(text, cache_key=cache_key, kind=kind)
+                    with self._temporary_token_budget(max_tokens):
+                        graph = self._call_backend(text, cache_key=cache_key, kind=kind)
                 finally:
                     if self.debug_dump_after_s is not None:
                         faulthandler.cancel_dump_traceback_later()
@@ -923,12 +970,44 @@ class KGExtractor:
 
         start = time.perf_counter()
         protocol_attempt = 0
+        token_budget = self.max_tokens
         while True:
             try:
                 graph = self._call_backend_with_transient_retries(
-                    text, cache_key=key, kind=kind
+                    text, cache_key=key, kind=kind, max_tokens=token_budget
                 )
                 break
+            except StructuredOutputTruncatedError as exc:
+                if (
+                    token_budget is not None
+                    and self.max_tokens_ceiling is not None
+                    and token_budget < self.max_tokens_ceiling
+                ):
+                    next_budget = min(token_budget * 2, self.max_tokens_ceiling)
+                    protocol_attempt += 1
+                    self.usage.record_retry(kind, exc)
+                    print(
+                        "[kg] token-budget retry "
+                        f"kind={kind} max_tokens={next_budget}",
+                        flush=True,
+                    )
+                    token_budget = next_budget
+                    continue
+                if protocol_attempt >= self.max_protocol_retries:
+                    raise
+                protocol_attempt += 1
+                self.usage.record_retry(kind, exc)
+                print(
+                    "[kg] structured-output retry "
+                    f"kind={kind} attempt={protocol_attempt}/{self.max_protocol_retries}",
+                    flush=True,
+                )
+                ceiling = min(
+                    self.backoff_max,
+                    float(self.backoff_base) * (2 ** (protocol_attempt - 1)),
+                )
+                if ceiling > 0:
+                    time.sleep(random.uniform(0, ceiling))
             except (StructuredOutputParseError, StructuredOutputSchemaError) as exc:
                 if protocol_attempt >= self.max_protocol_retries:
                     raise

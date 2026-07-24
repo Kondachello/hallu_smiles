@@ -10,7 +10,11 @@ import pytest
 
 from src.cache import CacheOnlyMissError, evaluation_runtime_metadata
 from src.data import Instance
-from src.dspy_adapter import StructuredOutputParseError, StructuredOutputSchemaError
+from src.dspy_adapter import (
+    StructuredOutputParseError,
+    StructuredOutputSchemaError,
+    StructuredOutputTruncatedError,
+)
 from src.extract import (
     CLUSTER_EQUIVALENCE_POLICY,
     ClusteringCollapseError,
@@ -557,3 +561,32 @@ def test_extractor_retries_bounded_malformed_structured_output_without_caching_i
     key = extractor._cache_key("Swiss chard after malformed structured output")
     assert (Path(cfg.cache_dir) / f"{key}.json").exists()
     assert extractor.usage.retries == 2
+
+
+def test_extractor_raises_token_budget_only_after_a_truncated_completion(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.extraction.cluster = False
+    cfg.extraction.max_tokens_ceiling = 512
+
+    class TruncatedThenValid:
+        def __init__(self):
+            self.calls = 0
+            self.budgets = []
+            self.lm = SimpleNamespace(kwargs={"max_tokens": 256})
+
+        def generate(self, **kwargs):  # noqa: ARG002
+            self.calls += 1
+            self.budgets.append(self.lm.kwargs["max_tokens"])
+            if self.calls == 1:
+                raise StructuredOutputTruncatedError("completion did not finish cleanly: 'length'")
+            return SimpleNamespace(
+                entities={"Swiss chard", "spinach"},
+                relations={("Swiss chard", "similar to", "spinach")},
+            )
+
+    backend = TruncatedThenValid()
+    graph = KGExtractor(cfg, backend=backend).extract("Swiss chard after truncation")
+
+    assert graph.relations == {("Swiss chard", "similar to", "spinach")}
+    assert backend.budgets == [256, 512]
+    assert backend.lm.kwargs["max_tokens"] == 256

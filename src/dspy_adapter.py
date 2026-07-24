@@ -42,6 +42,10 @@ class StructuredOutputParseError(StructuredOutputError):
     """The server returned something other than one strict JSON document."""
 
 
+class StructuredOutputTruncatedError(StructuredOutputParseError):
+    """The provider stopped a strict response at its output-token limit."""
+
+
 def _response_field(value: Any, name: str) -> Any:
     if isinstance(value, Mapping):
         return value.get(name)
@@ -54,6 +58,10 @@ def validate_completion_envelope(response: Any, *, label: str = "DSPy completion
     if not isinstance(choices, (list, tuple)) or len(choices) != 1:
         raise StructuredOutputParseError(f"{label} must contain exactly one choice")
     finish_reason = _response_field(choices[0], "finish_reason")
+    if finish_reason == "length":
+        raise StructuredOutputTruncatedError(
+            f"{label} did not finish cleanly: {finish_reason!r}"
+        )
     if finish_reason != "stop":
         raise StructuredOutputParseError(
             f"{label} did not finish cleanly: {finish_reason!r}"
@@ -710,6 +718,33 @@ def strict_json_schema_adapter(*, request_backend: str | None = None) -> Any:
 
     class StrictJSONSchemaAdapter(JSONAdapter):
         @staticmethod
+        def _singleton_representative(
+            signature: Any, inputs: Mapping[str, Any]
+        ) -> list[dict[str, str]] | None:
+            """Return the only schema-valid representative without an LLM call.
+
+            KGGen's clustering loop asks ``choose_rep`` even for a validated
+            one-item cluster.  In that case the output contract has exactly one
+            possible value, so invoking a model cannot add information and a
+            provider's schema violation only turns a no-op into a failed graph.
+            This is not response repair: no model document is accepted, and the
+            returned value is the sole member required by KGGen's own contract.
+            """
+            output_fields = getattr(signature, "output_fields", {})
+            if set(output_fields) != {"representative"} or "cluster" not in inputs:
+                return None
+            cluster = inputs["cluster"]
+            if isinstance(cluster, (str, bytes)):
+                return None
+            try:
+                members = sorted({str(member) for member in cluster})
+            except TypeError:
+                return None
+            if len(members) != 1:
+                return None
+            return [{"representative": members[0]}]
+
+        @staticmethod
         def _request_kwargs(
             lm_kwargs: Mapping[str, Any], signature: Any
         ) -> dict[str, Any]:
@@ -781,6 +816,9 @@ def strict_json_schema_adapter(*, request_backend: str | None = None) -> Any:
             demos: list[dict[str, Any]],
             inputs: dict[str, Any],
         ) -> list[dict[str, Any]]:
+            singleton = self._singleton_representative(signature, inputs)
+            if singleton is not None:
+                return singleton
             contract_signature = specialize_dspy_signature(signature, inputs)
             return Adapter.__call__(
                 self,
@@ -801,6 +839,9 @@ def strict_json_schema_adapter(*, request_backend: str | None = None) -> Any:
         ) -> list[dict[str, Any]]:
             # Do not let an async DSPy caller silently bypass the schema or
             # re-enter JSONAdapter's fallback path.
+            singleton = self._singleton_representative(signature, inputs)
+            if singleton is not None:
+                return singleton
             contract_signature = specialize_dspy_signature(signature, inputs)
             return await Adapter.acall(
                 self,
