@@ -24,6 +24,9 @@ def main() -> None:
     parser.add_argument("--replay-selection-seed", type=int, default=20260722)
     parser.add_argument("--timeout-seconds", type=int, default=43200,
                         help="Job wall-time ceiling (default: 43200 = 12h; raise for large replay-count)")
+    parser.add_argument("--diagnostic-only", action="store_true",
+                        help="Skip the real replay; only report how many computed cache_keys "
+                             "for the selected QA texts already exist in the historical cache root")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", args.run_id):
@@ -44,6 +47,7 @@ def main() -> None:
         .replace("__QA_SAMPLE_SIZE__", str(args.qa_sample_size))
         .replace("__REPLAY_COUNT__", str(args.replay_count)).replace("__REPLAY_SELECTION_SEED__", str(args.replay_selection_seed))
         .replace("__JOB_TIMEOUT_SECONDS__", str(args.timeout_seconds))
+        .replace("__DIAGNOSTIC_ONLY__", "1" if args.diagnostic_only else "0")
         .replace("__DOCKER_ENV_BLOCK__", f"  docker:\n    image: {image}"))
     if "__" in rendered:
         raise RuntimeError("unresolved Job template placeholder")

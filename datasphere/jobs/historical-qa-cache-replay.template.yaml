@@ -12,7 +12,7 @@ cmd: >-
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
   export CHECKPOINT_PARENT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa";
   export QA_SAMPLE_SIZE="__QA_SAMPLE_SIZE__";
-  export RECORDED_GATEWAY_URL="__GATEWAY_URL__" REPLAY_COUNT="__REPLAY_COUNT__" REPLAY_SELECTION_SEED="__REPLAY_SELECTION_SEED__"; export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  export RECORDED_GATEWAY_URL="__GATEWAY_URL__" REPLAY_COUNT="__REPLAY_COUNT__" REPLAY_SELECTION_SEED="__REPLAY_SELECTION_SEED__"; export DIAGNOSTIC_ONLY="__DIAGNOSTIC_ONLY__"; export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
   archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
   trap "status=\$?; archive || status=1; exit \$status" EXIT;
   timeout --signal=TERM --kill-after=60s __JOB_TIMEOUT_SECONDS__ bash source/scripts/run_datasphere_historical_qa_cache_replay.sh 2>&1 | tee "$RUN_ROOT/replay.console.log"'

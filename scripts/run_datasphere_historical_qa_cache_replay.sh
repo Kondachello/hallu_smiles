@@ -234,10 +234,23 @@ HISTORICAL_CACHE_ROOT="$TARGET_CACHE_ROOT"
   --retry-backoff-max-s 60 --retry-backoff-jitter-s 0 --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/historical-cache-runtime-identity.json"
 
-"$CLIENT_PYTHON" "$ROOT/scripts/historical_qa_cache_replay_probe.py" \
-  --data-dir "$DATA_DIR" --output-root "$RUN_ROOT" \
-  --hallugraph-config "$RUN_ROOT/historical-cache-runtime.yaml" \
-  --grapheval-config "$ROOT/graph_eval/config.datasphere.one-instance.shared-kggen.live.yaml" \
-  --historical-cache-root "$HISTORICAL_CACHE_ROOT" --lineage "$HISTORICAL_LINEAGE" \
-  --run-id historical-cache-replay --replay-count "$REPLAY_COUNT" \
-  --replay-selection-seed "$REPLAY_SELECTION_SEED" | tee "$RUN_ROOT/historical-cache-replay-summary.log"
+if [[ "${DIAGNOSTIC_ONLY:-0}" == "1" ]]; then
+  # Read-only: check how many computed cache_keys for the selected QA texts
+  # already exist as files in $HISTORICAL_CACHE_ROOT, using the exact same
+  # config this replay would otherwise run with. No gateway call beyond the
+  # manifest fetch already done above; no LLM inference; nothing written to
+  # the checkpoint.
+  "$CLIENT_PYTHON" "$ROOT/scripts/diagnose_historical_cache_key_mismatch.py" \
+    --config "$RUN_ROOT/historical-cache-runtime.yaml" \
+    --kg-dir "$HISTORICAL_CACHE_ROOT" --data-dir "$DATA_DIR" \
+    --qa-sample-size "$QA_SAMPLE_SIZE" --qa-test-fraction "$QA_TEST_FRACTION" \
+    | tee "$RUN_ROOT/diagnostic-cache-key-report.json"
+else
+  "$CLIENT_PYTHON" "$ROOT/scripts/historical_qa_cache_replay_probe.py" \
+    --data-dir "$DATA_DIR" --output-root "$RUN_ROOT" \
+    --hallugraph-config "$RUN_ROOT/historical-cache-runtime.yaml" \
+    --grapheval-config "$ROOT/graph_eval/config.datasphere.one-instance.shared-kggen.live.yaml" \
+    --historical-cache-root "$HISTORICAL_CACHE_ROOT" --lineage "$HISTORICAL_LINEAGE" \
+    --run-id historical-cache-replay --replay-count "$REPLAY_COUNT" \
+    --replay-selection-seed "$REPLAY_SELECTION_SEED" | tee "$RUN_ROOT/historical-cache-replay-summary.log"
+fi
