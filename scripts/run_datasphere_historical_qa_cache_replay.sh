@@ -36,8 +36,29 @@ PY
 )"
 MANIFEST_RAW="$RUN_ROOT/historical-gateway-manifest.raw.json"
 MANIFEST="$RUN_ROOT/historical-gateway-manifest.json"
-curl --fail --silent --show-error -H "Authorization: Bearer $HALLU_GATEWAY_API_KEY" \
-  "$RECORDED_GATEWAY_URL/v1/hallu/manifest" > "$MANIFEST_RAW"
+# Transient 429/5xx/network errors are retried with exponential backoff and jitter
+# (same policy as the live gateway calls); 4xx fails fast since retrying won't help.
+fetch_gateway_manifest() {
+  local out="$1" attempt=1 max_attempts=5 delay=5 http_code
+  while :; do
+    http_code="$(curl --silent --show-error -o "$out" -w '%{http_code}' \
+      -H "Authorization: Bearer $HALLU_GATEWAY_API_KEY" "$RECORDED_GATEWAY_URL/v1/hallu/manifest")" || http_code="000"
+    if [[ "$http_code" == "200" ]]; then
+      return 0
+    fi
+    if { [[ "$http_code" == "429" ]] || [[ "$http_code" =~ ^5[0-9][0-9]$ ]] || [[ "$http_code" == "000" ]]; } \
+        && (( attempt < max_attempts )); then
+      echo "gateway manifest fetch got HTTP $http_code (attempt $attempt/$max_attempts); retrying in ${delay}s" >&2
+      sleep "$((delay + RANDOM % 6))"
+      attempt=$((attempt + 1))
+      delay=$((delay * 2 > 60 ? 60 : delay * 2))
+      continue
+    fi
+    echo "gateway manifest fetch failed with HTTP $http_code (attempt $attempt/$max_attempts)" >&2
+    return 1
+  done
+}
+fetch_gateway_manifest "$MANIFEST_RAW"
 "$CLIENT_PYTHON" "$ROOT/scripts/validate_vertex_gateway_manifest.py" \
   --manifest "$MANIFEST_RAW" --logical-model openai/gemini-2.5-flash --output "$MANIFEST"
 rm -f "$MANIFEST_RAW"
