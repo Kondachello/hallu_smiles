@@ -17,6 +17,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--commit", required=True); parser.add_argument("--run-id", required=True)
     parser.add_argument("--gateway-url", required=True); parser.add_argument("--docker-image", required=True)
+    parser.add_argument("--qa-sample-size", type=int, default=100,
+                        help="total records in the target historical checkpoint (e.g. 100 or 750); "
+                             "disambiguates between multiple checkpoints sharing one gateway manifest")
     parser.add_argument("--replay-count", type=int, default=5)
     parser.add_argument("--replay-selection-seed", type=int, default=20260722)
     parser.add_argument("--output", required=True)
@@ -27,11 +30,14 @@ def main() -> None:
     if gateway.scheme != "https" or not gateway.netloc or gateway.path.rstrip("/") or gateway.query or gateway.fragment:
         raise SystemExit("--gateway-url must be an HTTPS origin")
     image = require_runtime_image(args.docker_image, registry=True)
-    if not 1 <= args.replay_count <= 100:
-        raise SystemExit("--replay-count must be between 1 and 100")
+    if args.qa_sample_size < 1:
+        raise SystemExit("--qa-sample-size must be a positive integer")
+    if not 1 <= args.replay_count <= args.qa_sample_size:
+        raise SystemExit("--replay-count must be between 1 and --qa-sample-size")
     rendered = TEMPLATE.read_text(encoding="utf-8")
     rendered = (rendered.replace("__GIT_COMMIT__", args.commit).replace("__RUN_ID__", args.run_id)
         .replace("__GATEWAY_URL__", f"https://{gateway.netloc}").replace("__DOCKER_IMAGE__", image)
+        .replace("__QA_SAMPLE_SIZE__", str(args.qa_sample_size))
         .replace("__REPLAY_COUNT__", str(args.replay_count)).replace("__REPLAY_SELECTION_SEED__", str(args.replay_selection_seed))
         .replace("__DOCKER_ENV_BLOCK__", f"  docker:\n    image: {image}"))
     if "__" in rendered:
