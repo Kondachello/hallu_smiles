@@ -1,0 +1,46 @@
+# Read-only diagnostic: list checkpoints/vertex-qa/* on Project storage, no
+# gateway call, no secret, no detector code executed. Used to check whether a
+# historical checkpoint of a given QA size physically exists yet, and under
+# which gateway-manifest-sha256 suffix, before submitting an expensive replay.
+name: checkpoint-listing-probe-__RUN_ID__
+desc: "Read-only listing of checkpoints/vertex-qa/* on Project storage; no gateway call, no secret, no detector code."
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export RUN_ROOT="$PWD/checkpoint-listing-probe-artifacts/__RUN_ID__";
+  mkdir -p "$RUN_ROOT";
+  export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
+  export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
+  trap "status=\$?; archive || status=1; exit \$status" EXIT;
+  PARENT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa";
+  {
+    echo "=== $PARENT (depth 1) ===";
+    find "$PARENT" -mindepth 1 -maxdepth 1 -type d 2>&1 | sort;
+    echo;
+    echo "=== $PARENT (depth 2, candidate namespace dirs) ===";
+    find "$PARENT" -mindepth 2 -maxdepth 2 -type d 2>&1 | sort;
+    echo;
+    echo "=== checkpoint-identity.json of every depth-2 dir that has one ===";
+    for d in $(find "$PARENT" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | sort); do
+      if [ -f "$d/checkpoint-identity.json" ]; then
+        echo "--- $d ---"; cat "$d/checkpoint-identity.json"; echo;
+      fi
+    done;
+    echo "=== depth 3 (e.g. support-critical/<namespace>) ===";
+    find "$PARENT" -mindepth 3 -maxdepth 3 -type d 2>&1 | sort;
+  } > "$RUN_ROOT/checkpoint-listing.txt" 2>&1 || true;
+  cat "$RUN_ROOT/checkpoint-listing.txt"'
+env:
+__DOCKER_ENV_BLOCK__
+outputs:
+  - checkpoint-listing-probe-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+flags:
+  - attach-project-disk
+cloud-instance-types:
+  - c1.4
+working-storage:
+  type: SSD
+  size: 100Gb
+graceful-shutdown:
+  signal: SIGTERM
+  timeout: 30s
