@@ -5,6 +5,7 @@ on:
     branches:
       - new-metrics
       - codex/experiment-framework-spec
+      - zhenya
   workflow_dispatch:
 
 permissions:

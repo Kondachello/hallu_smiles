@@ -17,7 +17,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--commit", required=True); parser.add_argument("--run-id", required=True)
     parser.add_argument("--gateway-url", required=True); parser.add_argument("--docker-image", required=True)
-    parser.add_argument("--replay-count", type=int, default=1)
+    parser.add_argument("--replay-count", type=int, default=5)
     parser.add_argument("--replay-selection-seed", type=int, default=20260722)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()

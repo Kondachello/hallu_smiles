@@ -2,7 +2,7 @@
 # Submit only after the source commit and its CPU image have been published.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
-PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; REPLAY_COUNT="1"; REPLAY_SELECTION_SEED="20260722"; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; PROFILE="default"; PYTHON_BIN="${PYTHON_BIN:-python3}"
+PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; REPLAY_COUNT="5"; REPLAY_SELECTION_SEED="20260722"; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; PROFILE="default"; PYTHON_BIN="${PYTHON_BIN:-python3}"
 while [[ $# -gt 0 ]]; do case "$1" in
   --project-id) PROJECT_ID="$2"; shift 2;; --run-id) RUN_ID="$2"; shift 2;; --gateway-url) GATEWAY_URL="$2"; shift 2;;
   --replay-count) REPLAY_COUNT="$2"; shift 2;; --replay-selection-seed) REPLAY_SELECTION_SEED="$2"; shift 2;;

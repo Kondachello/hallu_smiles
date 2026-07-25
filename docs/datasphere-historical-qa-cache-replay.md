@@ -72,6 +72,17 @@
 $env:YC_AUTH="yc"; $env:PYTHON_BIN="python"; $env:PATH="$env:USERPROFILE\yandex-cloud\bin;$env:PATH"; & "C:\Program Files\Git\bin\bash.exe" -lc "cd /c/Users/Kolya/Desktop/SMILES/HaluVSGraph_Eval/hallu_smiles && source .venv-datasphere/Scripts/activate && bash scripts/submit_datasphere_historical_qa_cache_replay.sh --project-id bt1i64odluitglbaj5st --branch codex/experiment-framework-spec --run-id historical-cache-YYYYMMDD --gateway-url https://hallu-vertex-gateway-453887629111.europe-west4.run.app"
 ```
 
+### Быстрый минимальный прогон (5 записей, ветка `zhenya`)
+
+На ветке `zhenya` значение `--replay-count` по умолчанию изменено с `1` на `5`
+(в `scripts/render_datasphere_historical_qa_cache_replay_job.py` и
+`scripts/submit_datasphere_historical_qa_cache_replay.sh`). Это чисто
+инфраструктурная проверка сквозного пайплайна (branch → CI image → DataSphere
+Job) на пяти произвольных исторических записях вместо всех ста; она ничего не
+говорит о качестве детекторов на полном датасете и не заменяет
+[отчёт по 100-QA](../../global_docs_SMILES/tasks/DASH_BOARD_HALLUGRAPH_VS_GRAPHEVAL.md).
+Явно указать количество всё ещё можно флагом `--replay-count N` (1–100).
+
 `gateway-url` в этой команде — только часть исторического ключа кэша. Скрипт не
 подключается к нему. Не меняйте URL, commit или runtime image: это изменит ключ и
 превратит корректный исторический кэш в пропуск.

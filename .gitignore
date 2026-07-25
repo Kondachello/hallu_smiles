@@ -30,5 +30,8 @@ __pycache__/
 # Local OpenRouter credential for the KGGen micro demo. Never commit it.
 .env.micro_qa_demo
 
+# Local secrets for this working copy (API keys, gateway tokens). Never commit it.
+.env
+
 # Rendered DataSphere Job submissions are per-run artifacts, not source config.
 datasphere/jobs/rendered/
