@@ -15,7 +15,7 @@ cmd: >-
   export RECORDED_GATEWAY_URL="__GATEWAY_URL__" REPLAY_COUNT="__REPLAY_COUNT__" REPLAY_SELECTION_SEED="__REPLAY_SELECTION_SEED__"; export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
   archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
   trap "status=\$?; archive || status=1; exit \$status" EXIT;
-  timeout --signal=TERM --kill-after=60s 1800 bash source/scripts/run_datasphere_historical_qa_cache_replay.sh 2>&1 | tee "$RUN_ROOT/replay.console.log"'
+  timeout --signal=TERM --kill-after=60s __JOB_TIMEOUT_SECONDS__ bash source/scripts/run_datasphere_historical_qa_cache_replay.sh 2>&1 | tee "$RUN_ROOT/replay.console.log"'
 env:
 __DOCKER_ENV_BLOCK__
 outputs:

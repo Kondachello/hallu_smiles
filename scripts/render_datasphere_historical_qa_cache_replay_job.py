@@ -22,6 +22,8 @@ def main() -> None:
                              "disambiguates between multiple checkpoints sharing one gateway manifest")
     parser.add_argument("--replay-count", type=int, default=5)
     parser.add_argument("--replay-selection-seed", type=int, default=20260722)
+    parser.add_argument("--timeout-seconds", type=int, default=43200,
+                        help="Job wall-time ceiling (default: 43200 = 12h; raise for large replay-count)")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", args.run_id):
@@ -34,11 +36,14 @@ def main() -> None:
         raise SystemExit("--qa-sample-size must be a positive integer")
     if not 1 <= args.replay_count <= args.qa_sample_size:
         raise SystemExit("--replay-count must be between 1 and --qa-sample-size")
+    if args.timeout_seconds < 60:
+        raise SystemExit("--timeout-seconds must be at least 60")
     rendered = TEMPLATE.read_text(encoding="utf-8")
     rendered = (rendered.replace("__GIT_COMMIT__", args.commit).replace("__RUN_ID__", args.run_id)
         .replace("__GATEWAY_URL__", f"https://{gateway.netloc}").replace("__DOCKER_IMAGE__", image)
         .replace("__QA_SAMPLE_SIZE__", str(args.qa_sample_size))
         .replace("__REPLAY_COUNT__", str(args.replay_count)).replace("__REPLAY_SELECTION_SEED__", str(args.replay_selection_seed))
+        .replace("__JOB_TIMEOUT_SECONDS__", str(args.timeout_seconds))
         .replace("__DOCKER_ENV_BLOCK__", f"  docker:\n    image: {image}"))
     if "__" in rendered:
         raise RuntimeError("unresolved Job template placeholder")
