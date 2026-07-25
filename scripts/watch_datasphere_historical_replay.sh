@@ -21,8 +21,13 @@ mkdir -p "$OUT_DIR"
 echo "Watching Job $JOB_ID (run-id=$RUN_ID), refreshing every ${INTERVAL}s. Ctrl+C to stop." >&2
 
 while :; do
+  # datasphere prints an INFO log line to stdout before the JSON object itself
+  # (not just stderr), so extract from the first '{' rather than parsing raw stdin.
   STATUS="$(datasphere --profile "$PROFILE" project job get --id "$JOB_ID" --format json 2>/dev/null \
-    | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("status","?"))' 2>/dev/null || echo "?")"
+    | "$PYTHON_BIN" -c 'import json,sys
+text = sys.stdin.read()
+start = text.find("{")
+print(json.loads(text[start:]).get("status", "?") if start >= 0 else "?")' 2>/dev/null || echo "?")"
   echo "[$(date -u +%H:%M:%S)] status=$STATUS" >&2
 
   # download-files can legitimately report "no files yet" on an early EXECUTING
