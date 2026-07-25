@@ -8,7 +8,9 @@ before allocating a CPU or GPU instance.
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -23,6 +25,24 @@ except ImportError:  # pragma: no cover - package import in unit tests
 SHELL_PREFIX = "bash -lc '"
 SHELL_VAR = re.compile(r"\$\{([^}]+)\}")
 ALLOWED_DATASPHERE_VARS = {"ARTIFACT_ARCHIVE"}
+
+
+def _resolve_bash() -> str:
+    """Return a real POSIX bash, sidestepping the Windows WSL launcher shim.
+
+    A bare ``"bash"`` can resolve to ``C:\\Windows\\System32\\bash.exe`` (the WSL
+    launcher) on Windows regardless of PATH order or working directory, which
+    fails immediately outside a configured WSL distro. Prefer Git for Windows'
+    bundled bash when present; ``HALLU_BASH_EXE`` is an explicit override.
+    """
+    for candidate in (
+        os.environ.get("HALLU_BASH_EXE"),
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+    ):
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return shutil.which("bash") or "bash"
 
 
 def _require(condition: bool, message: str) -> None:
@@ -50,7 +70,7 @@ def validate_job(path: Path, repo_root: Path) -> dict:  # noqa: ARG001 - stable 
         "Use $VAR (not ${VAR}) for shell variables in Job YAML; "
         f"DataSphere would parse these as undeclared variables: {', '.join(unknown_vars)}",
     )
-    subprocess.run(["bash", "-n", "-c", body], check=True)
+    subprocess.run([_resolve_bash(), "-n", "-c", body], check=True)
 
     flags = document.get("flags", [])
     _require("attach-project-disk" in flags, "Job must attach the shared Project storage")
