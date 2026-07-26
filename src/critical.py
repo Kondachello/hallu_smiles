@@ -657,6 +657,14 @@ class AtomicClaimExtractor(_CachedComponent):
             # repair the schema/offsets. Do not discard the entire 100-QA run
             # because it paraphrased a single claim.
             claims = _sentence_fallback_claims(segment, "atomic_fallback_sentence")
+        except Exception as exc:  # noqa: BLE001
+            if not is_retryable_llm_exception(exc):
+                raise
+            # A list-producing component must not pretend the missing model
+            # result was empty: sentence candidates preserve every factual
+            # span for the later four-way verifier, and the cache records the
+            # deterministic fallback for cache-only replay.
+            claims = _sentence_fallback_claims(segment, "atomic_fallback_sentence")
         self._save_claims(key, claims)
         self._record(key, time.perf_counter() - start, cached=False)
         return claims
@@ -734,6 +742,11 @@ class AtomicClaimExtractor(_CachedComponent):
                 self._record(key, time.perf_counter() - start, cached=False)
                 return claims
             except Exception as exc:  # noqa: BLE001
+                if is_retryable_llm_exception(exc):
+                    claims = _sentence_fallback_claims(response, "atomic_fallback_sentence")
+                    self._save_claims(key, claims)
+                    self._record(key, time.perf_counter() - start, cached=False)
+                    return claims
                 raise CriticalProtocolError("atomic claim extraction failed") from exc
             self._save_claims(key, claims)
             self._record(key, time.perf_counter() - start, cached=False)
@@ -827,6 +840,12 @@ class FullContextReviewer(_CachedComponent):
             # Coverage is an additional adversarial review. Its protocol
             # failure must not erase the answer-level candidate coverage.
             claims = _sentence_fallback_claims(segment, "global_review_fallback_sentence")
+        except Exception as exc:  # noqa: BLE001
+            if not is_retryable_llm_exception(exc):
+                raise
+            # Preserve coverage under an exhausted network budget instead of
+            # silently omitting factual answer spans from the claim layer.
+            claims = _sentence_fallback_claims(segment, "global_review_fallback_sentence")
         self._save_claims(key, claims)
         self._record(key, time.perf_counter() - start, cached=False)
         return claims
@@ -909,6 +928,11 @@ class FullContextReviewer(_CachedComponent):
                 self._record(key, time.perf_counter() - start, cached=False)
                 return claims
             except Exception as exc:  # noqa: BLE001
+                if is_retryable_llm_exception(exc):
+                    claims = _sentence_fallback_claims(response, "global_review_fallback_sentence")
+                    self._save_claims(key, claims)
+                    self._record(key, time.perf_counter() - start, cached=False)
+                    return claims
                 raise CriticalProtocolError("full-context coverage review failed") from exc
             self._save_claims(key, claims)
             self._record(key, time.perf_counter() - start, cached=False)

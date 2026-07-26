@@ -455,6 +455,29 @@ def test_scalar_verifier_transient_exhaustion_is_cached_as_conservative_unknown(
     assert replay.fallback_reason == "transient_exhausted"
 
 
+def test_transient_claim_extraction_and_coverage_preserve_sentence_candidates(tmp_path):
+    cfg = _cfg(tmp_path)
+    response = "Alpha has one. Beta has two."
+
+    class TimeoutAtomic(AtomicClaimExtractor):
+        def _retry_validated_json(self, messages, schema, name, validator):  # noqa: ARG002
+            raise TimeoutError("gateway read timeout")
+
+    extracted = TimeoutAtomic(cfg).extract(response)
+    assert [claim.text for claim in extracted] == ["Alpha has one.", "Beta has two."]
+    assert all(claim.sources == ("atomic_fallback_sentence",) for claim in extracted)
+    assert AtomicClaimExtractor(cfg, cache_only=True).extract(response) == extracted
+
+    class TimeoutCoverage(FullContextReviewer):
+        def _retry_validated_json(self, messages, schema, name, validator):  # noqa: ARG002
+            raise TimeoutError("gateway read timeout")
+
+    reviewed = TimeoutCoverage(cfg).review(response, "", None, [])
+    assert [claim.text for claim in reviewed] == ["Alpha has one.", "Beta has two."]
+    assert all(claim.sources == ("global_review_fallback_sentence",) for claim in reviewed)
+    assert FullContextReviewer(cfg, cache_only=True).review(response, "", None, []) == reviewed
+
+
 def test_corrupt_live_claim_cache_is_recomputed_but_cache_only_stays_strict(tmp_path):
     cfg = _cfg(tmp_path)
     response = "Alpha has one."
