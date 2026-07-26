@@ -49,6 +49,7 @@ def test_vertex_runtime_config_derives_identity_from_authenticated_manifest(tmp_
     assert cfg["llm"]["max_retries"] == 7
     assert cfg["llm"]["retry_backoff_base_s"] == 5.0
     assert cfg["llm"]["retry_backoff_max_s"] == 60.0
+    assert cfg["llm"]["rate_limit_cooldown_max_s"] == 900.0
     assert cfg["eval"]["alpha_cv_folds"] == 5
     assert cfg["extraction"]["serial_chunking"] is False
     assert cfg["cache_dir"] == str(tmp_path / "work" / "cache" / "kg")
@@ -245,6 +246,7 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert 'QA_TEST_FRACTION="0.2"' in command
     assert 'QA_CV_FOLDS="5"' in command
     assert 'QA_EXCLUDE_SOURCE_IDS="12448"' in command
+    assert 'tee "$RUN_ROOT/qa.stdout.log"' in command
     assert "timeout --signal=TERM --kill-after=60s 43200" in command
     subprocess.run([sys.executable, str(SCRIPTS / "validate_datasphere_job.py"), "--job", str(rendered), "--repo-root", str(ROOT)], check=True)
     runner = (SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh").read_text(encoding="utf-8")

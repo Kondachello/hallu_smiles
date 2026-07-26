@@ -37,7 +37,7 @@ from .dspy_adapter import (
     is_retryable_llm_exception,
     structured_output_settings,
 )
-from .retry import WaitRetryAfterOrExponentialJitter
+from .retry import StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
 
 
 # --------------------------------------------------------------------------------------
@@ -301,6 +301,15 @@ class KGExtractor:
         )
         if self.backoff_max < float(self.backoff_base):
             raise ValueError("llm.retry_backoff_max_s must be at least retry_backoff_base_s")
+        self.rate_limit_cooldown_max_s = float(
+            cfg.llm.get("rate_limit_cooldown_max_s", 900)
+            if hasattr(cfg.llm, "get")
+            else getattr(cfg.llm, "rate_limit_cooldown_max_s", 900)
+        )
+        if self.rate_limit_cooldown_max_s < self.backoff_max:
+            raise ValueError(
+                "llm.rate_limit_cooldown_max_s must be at least retry_backoff_max_s"
+            )
         self.max_protocol_retries = int(
             config_value(cfg.extraction, "max_protocol_retries", 0)
         )
@@ -922,10 +931,17 @@ class KGExtractor:
             # ``0`` means retry transient provider failures until the outer
             # DataSphere wall-time limit.  Completed graph calls are flushed
             # atomically, so an interrupted Job resumes from cache.
-            stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
+            stop=(
+                stop_never if self.max_retries == 0
+                else StopAfterAttemptsExceptRateLimit(self.max_retries)
+            ),
             # Honour gateway Retry-After where supplied and otherwise use
             # bounded full-jitter exponential backoff to avoid a quota herd.
-            wait=WaitRetryAfterOrExponentialJitter(self.backoff_base, self.backoff_max),
+            wait=WaitRetryAfterOrExponentialJitter(
+                self.backoff_base,
+                self.backoff_max,
+                rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
+            ),
             retry=retry_if_exception(is_retryable_llm_exception),
             before_sleep=lambda state: self.usage.record_retry(
                 kind, state.outcome.exception()

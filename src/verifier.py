@@ -30,7 +30,7 @@ from .dspy_adapter import (
     validate_json_document,
 )
 from .matching import normalize
-from .retry import WaitRetryAfterOrExponentialJitter
+from .retry import StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
 
 
 VERDICTS = frozenset({"entailed", "contradicted", "unknown"})
@@ -179,6 +179,13 @@ class RelationVerifier:
         self.backoff_max = float(getattr(cfg.llm, "retry_backoff_max_s", 60))
         if self.backoff_max < self.backoff_base:
             raise ValueError("llm.retry_backoff_max_s must be at least retry_backoff_base_s")
+        self.rate_limit_cooldown_max_s = float(
+            getattr(cfg.llm, "rate_limit_cooldown_max_s", 900)
+        )
+        if self.rate_limit_cooldown_max_s < self.backoff_max:
+            raise ValueError(
+                "llm.rate_limit_cooldown_max_s must be at least retry_backoff_max_s"
+            )
         self.request_timeout_s = float(getattr(cfg.llm, "request_timeout_s", 90))
         if self.request_timeout_s <= 0:
             raise ValueError("llm.request_timeout_s must be positive")
@@ -225,8 +232,15 @@ class RelationVerifier:
             for attempt in Retrying(
                 # ``0`` delegates the final deadline to the enclosing Job and
                 # keeps polling Vertex after transient 429/5xx responses.
-                stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
-                wait=WaitRetryAfterOrExponentialJitter(self.backoff_base, self.backoff_max),
+                stop=(
+                    stop_never if self.max_retries == 0
+                    else StopAfterAttemptsExceptRateLimit(self.max_retries)
+                ),
+                wait=WaitRetryAfterOrExponentialJitter(
+                    self.backoff_base,
+                    self.backoff_max,
+                    rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
+                ),
                 retry=retry_if_exception(is_retryable_llm_exception),
                 before_sleep=(
                     (lambda state: self.usage.record_retry(

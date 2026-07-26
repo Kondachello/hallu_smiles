@@ -47,7 +47,7 @@ cmd: >-
   };
   trap archive_on_exit EXIT;
   set +e;
-  __JOB_RUN_COMMAND__ >"$RUN_ROOT/qa.stdout.log" 2>"$RUN_ROOT/qa.stderr.log";
+  __JOB_RUN_COMMAND__ > >(tee "$RUN_ROOT/qa.stdout.log") 2> >(tee "$RUN_ROOT/qa.stderr.log" >&2);
   status=$?;
   set -e;
   if ! archive_artifacts; then status=1; fi;

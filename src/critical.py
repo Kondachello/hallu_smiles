@@ -33,7 +33,7 @@ from .dspy_adapter import (
     validate_json_document,
 )
 from .matching import Embedder, normalize
-from .retry import WaitRetryAfterOrExponentialJitter
+from .retry import StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
 from .verifier import EvidenceSpan, _sentences
 
 
@@ -375,13 +375,21 @@ class _CachedComponent:
         self.backoff_base = float(cfg.llm.retry_backoff_base_s)
         self.backoff_max = float(getattr(cfg.llm, "retry_backoff_max_s", 60))
         self.request_timeout_s = float(getattr(cfg.llm, "request_timeout_s", 90))
+        self.rate_limit_cooldown_max_s = float(
+            getattr(cfg.llm, "rate_limit_cooldown_max_s", 900)
+        )
         self.prompt_version = str(config_value(section, "prompt_version", "v1"))
         self.cache_dir = Path(str(config_value(section, "cache_dir")))
         raw_read_dirs = config_value(section, "cache_read_dirs", []) or []
         self.cache_read_dirs = [Path(str(path)) for path in raw_read_dirs]
         self.cache_only = bool(cache_only)
         self.usage = usage
-        if self.max_tokens <= 0 or self.max_retries < 0 or self.request_timeout_s <= 0:
+        if (
+            self.max_tokens <= 0
+            or self.max_retries < 0
+            or self.request_timeout_s <= 0
+            or self.rate_limit_cooldown_max_s < self.backoff_max
+        ):
             raise ValueError(f"invalid {self.component} runtime limits")
         if self.max_protocol_retries <= 0:
             raise ValueError(f"{self.component}.max_protocol_retries must be positive")
@@ -518,8 +526,15 @@ class _CachedComponent:
             # ``0`` keeps retrying only transient 429/5xx/network failures
             # until the outer DataSphere wall-time deadline. Each completed
             # artifact is atomically cached before the next claim begins.
-            stop=stop_never if self.max_retries == 0 else stop_after_attempt(self.max_retries),
-            wait=WaitRetryAfterOrExponentialJitter(self.backoff_base, self.backoff_max),
+            stop=(
+                stop_never if self.max_retries == 0
+                else StopAfterAttemptsExceptRateLimit(self.max_retries)
+            ),
+            wait=WaitRetryAfterOrExponentialJitter(
+                self.backoff_base,
+                self.backoff_max,
+                rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
+            ),
             retry=retry_if_exception(should_retry),
             before_sleep=(
                 (lambda state: self.usage.record_retry(

@@ -21,7 +21,12 @@ from src.dspy_adapter import (
     structured_output_settings,
     validate_json_document,
 )
-from src.retry import retry_after_seconds
+from src.retry import (
+    StopAfterAttemptsExceptRateLimit,
+    WaitRetryAfterOrExponentialJitter,
+    is_rate_limit_error,
+    retry_after_seconds,
+)
 
 
 RELATION_SCHEMA = {
@@ -567,3 +572,29 @@ def test_retry_after_is_read_from_a_wrapped_gateway_response():
     error = RuntimeError("capacity")
     error.response = response
     assert retry_after_seconds(error) == 12.0
+
+
+def test_rate_limit_waits_past_timeout_budget_but_timeout_does_not():
+    class RateLimitError(Exception):
+        status_code = 429
+
+    class TimedOut(Exception):
+        status_code = 408
+
+    def state(error):
+        return SimpleNamespace(
+            attempt_number=12,
+            outcome=SimpleNamespace(failed=True, exception=lambda: error),
+        )
+
+    rate_limit = RateLimitError("capacity")
+    rate_limit.response = SimpleNamespace(headers={"Retry-After": "180"})
+    stop = StopAfterAttemptsExceptRateLimit(12)
+
+    assert is_rate_limit_error(rate_limit) is True
+    assert stop(state(rate_limit)) is False
+    assert stop(state(TimedOut("upstream request timed out"))) is True
+    delay = WaitRetryAfterOrExponentialJitter(
+        5, 60, rate_limit_cooldown_max_seconds=900
+    )(state(rate_limit))
+    assert 180.0 <= delay <= 185.0

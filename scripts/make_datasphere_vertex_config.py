@@ -122,6 +122,12 @@ def main() -> None:
     parser.add_argument("--retry-backoff-base-s", type=float, default=5.0)
     parser.add_argument("--retry-backoff-max-s", type=float, default=60.0)
     parser.add_argument(
+        "--rate-limit-cooldown-max-s",
+        type=float,
+        default=900.0,
+        help="maximum cooldown after an HTTP 429; must be at least --retry-backoff-max-s",
+    )
+    parser.add_argument(
         "--cv-folds", type=int, default=5,
         help="stratified folds used only for train-only alpha/tau selection",
     )
@@ -138,6 +144,10 @@ def main() -> None:
         raise ValueError("--retry-backoff-max-s must be positive")
     if args.retry_backoff_max_s < args.retry_backoff_base_s:
         raise ValueError("--retry-backoff-max-s must be at least --retry-backoff-base-s")
+    if args.rate_limit_cooldown_max_s < args.retry_backoff_max_s:
+        raise ValueError(
+            "--rate-limit-cooldown-max-s must be at least --retry-backoff-max-s"
+        )
     if args.cv_folds < 2:
         raise ValueError("--cv-folds must be at least 2")
     if args.llm_runtime_fingerprint_override is not None:
@@ -189,6 +199,7 @@ def main() -> None:
     llm["max_retries"] = args.max_retries
     llm["retry_backoff_base_s"] = args.retry_backoff_base_s
     llm["retry_backoff_max_s"] = args.retry_backoff_max_s
+    llm["rate_limit_cooldown_max_s"] = args.rate_limit_cooldown_max_s
     llm["structured_output_transport"] = "response_format"
     llm["structured_output_backend"] = "vertex"
     llm["structured_output_request_backend"] = None
