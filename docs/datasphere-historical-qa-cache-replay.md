@@ -1,91 +1,184 @@
-# Проверка повторного использования исторического кэша 100-QA
+# Historical QA cache-only replay (100-QA и 750-QA)
 
-Этот запуск доказывает ровно одно: фреймворк берёт три уже извлечённых графа
-знаний (`context`, `query`, `response`) из исторического 100-QA хранилища и
-передаёт один и тот же граф ответа HalluGraph и GraphEval. Это не новый
-эксперимент качества и не извлечение графов.
+Этот запуск доказывает ровно одно: фреймворк берёт уже извлечённые графы знаний
+(`context`, `query`, `response`) из исторического QA-кэша на Project storage и
+передаёт их HalluGraph и GraphEval **без единого вызова LLM** (`cache_only`).
+Это не новый эксперимент качества и не извлечение графов.
 
-## Что запускается
+Свежий полный прогон и метрики: `docs/vertex-750qa-cache-replay-results.md`.
 
-Шаблон Job: `datasphere/jobs/historical-qa-cache-replay.template.yaml`.
-Точка запуска в контейнере:
-`scripts/run_datasphere_historical_qa_cache_replay.sh`.
+---
 
-Перед работой оболочка запуска:
+## 1. TL;DR — как запустить
 
-1. проверяет закреплённый CPU runtime и локальную модель HHEM;
-2. читает `datasphere/historical_kg_cache_lineages.json` и
-   `checkpoint-identity.json` в Project storage;
-3. выбирает единственный каталог 100-QA, чья версия кода, параметры
-   извлечения, fingerprint runtime и схема 80/20/5 совпадают с реестром;
-4. восстанавливает тот же детерминированный набор из 100 RAGTruth QA записей;
-5. вычисляет ключи кэша для всех трёх ролей, выбирает первую по стабильному
-   порядку запись, у которой есть все три совместимых графа;
-6. запускает HalluGraph и GraphEval в `cache_only`.
+Образ рантайма собирается GitHub Actions на каждый коммит. **Сначала запушьте код
+и дождитесь зелёного CI-билда образа**, иначе submit будет висеть, ожидая образ.
 
-При пропуске графа выбранная запись не подменяется генерацией: запуск завершается
-ошибкой. При пропуске у другой из 100 записей это не мешает выбрать первую полную
-запись; отчёт сохраняет покрытие всех 100 записей.
+```bash
+# Git Bash. Токен ставим заранее, иначе datasphere CLI уйдёт в браузерный OAuth и подвиснет.
+export PATH="/c/Program Files/Git/bin:$HOME/yandex-cloud/bin:$PATH"
+export YC_AUTH=yc
+export YC_TOKEN="$(yc iam create-token)"
+export TEMP="D:\\tmp-datasphere"; export TMP="D:\\tmp-datasphere"; export TMPDIR="/d/tmp-datasphere"
+cd /d/RagTruth/hallu_smiles
+set -a; source .env; set +a          # HALLU_GATEWAY_URL и т.п.
 
-## Гарантии стоимости и изоляции
-
-- Только CPU `c1.4`; GPU в YAML отсутствует.
-- Job получает Project secret `HALLU_GATEWAY_API_KEY` только для одного
-  аутентифицированного HTTP-запроса к `/v1/hallu/manifest`. Это метаданные о версии
-  gateway, а не запрос к LLM: текст RAGTruth не передаётся, извлечение не вызывается.
-  Хэш manifest обязан совпасть с исторической линией; иначе Job завершается до lookup.
-- В режиме `cache_only` KGGen backend не может быть сконструирован. Отчёт требует
-  `kggen_api_calls = 0` и `grapheval_extractor_calls = 0`.
-- HHEM — закреплённая локальная CPU модель GraphEval, не LLM и не сетевой вызов.
-- В детекторы передаётся только `instances.no_gold.jsonl`; поля разметки и качества
-  не попадают в этот файл.
-- Исторический каталог монтируется только для чтения; текущий служебный каталог
-  находится в рабочем storage Job и не меняет исторический кэш.
-
-## Что искать в архиве Job
-
-В `historical-qa-cache-replay-<run-id>.tar.gz` находятся:
-
-- `historical-lineage.json` — выбранный checkpoint и его идентичность;
-- `historical-cache-runtime-identity.json` — fingerprint, участвующий в ключе;
-- `historical-cache-replay/historical_qa_cache_replay_report.json` — главный
-  отчёт с выбранным `response_id`, статусами обоих методов и нулевыми счётчиками;
-- `historical-cache-replay/reports/historical_cache_coverage.json` — все
-  проверенные ключи и источники графов;
-- `historical-cache-replay/shared_graphs/graph_index.jsonl` и
-  `cache/cache_resolution.jsonl` — доказательство источника
-  `historical_100qa` для трёх графов;
-- `historical-cache-replay/prediction_seal.json` и `run_manifest.json` —
-  контрольные суммы и итоговый статус;
-- `replay.stdout.log` и `replay.stderr.log` — диагностические журналы.
-
-Успешным считается только архив, где оба метода имеют `status=ok`, валиден
-`prediction_seal`, все использованные источники равны `historical_100qa`, а оба
-счётчика извлечения равны нулю.
-
-## Отправка после зелёного CI
-
-До прохождения CI Job не отправляется. После явного подтверждения пользователя
-из PowerShell используется одинарная команда (Git Bash вызывается внутри неё):
-
-```powershell
-$env:YC_AUTH="yc"; $env:PYTHON_BIN="python"; $env:PATH="$env:USERPROFILE\yandex-cloud\bin;$env:PATH"; & "C:\Program Files\Git\bin\bash.exe" -lc "cd /c/Users/Kolya/Desktop/SMILES/HaluVSGraph_Eval/hallu_smiles && source .venv-datasphere/Scripts/activate && bash scripts/submit_datasphere_historical_qa_cache_replay.sh --project-id bt1i64odluitglbaj5st --branch codex/experiment-framework-spec --run-id historical-cache-YYYYMMDD --gateway-url https://hallu-vertex-gateway-453887629111.europe-west4.run.app"
+RUN_ID="qa750-$(date -u +%Y%m%d-%H%M%S)"
+PYTHON_BIN=python bash scripts/submit_datasphere_historical_qa_cache_replay.sh \
+  --project-id bt1i64odluitglbaj5st \
+  --run-id "$RUN_ID" \
+  --gateway-url "$HALLU_GATEWAY_URL" \
+  --qa-sample-size 750 \          # ОБЯЗАТЕЛЬНО = размеру целевого чекпойнта
+  --replay-count all \            # реплеить все полностью закэшированные записи
+  --commit "$(git rev-parse HEAD)" \
+  --timeout-seconds 43200
 ```
 
-### Быстрый минимальный прогон (5 записей, ветка `zhenya`)
+Быстрая проверка сквозного пайплайна (не качество): `--qa-sample-size 100
+--replay-count 5`.
 
-На ветке `zhenya` значение `--replay-count` по умолчанию изменено с `1` на `5`
-(в `scripts/render_datasphere_historical_qa_cache_replay_job.py` и
-`scripts/submit_datasphere_historical_qa_cache_replay.sh`). Это чисто
-инфраструктурная проверка сквозного пайплайна (branch → CI image → DataSphere
-Job) на пяти произвольных исторических записях вместо всех ста; она ничего не
-говорит о качестве детекторов на полном датасете и не заменяет
-[отчёт по 100-QA](../../global_docs_SMILES/tasks/DASH_BOARD_HALLUGRAPH_VS_GRAPHEVAL.md).
-Явно указать количество всё ещё можно флагом `--replay-count N` (1–100).
+### Флаги, которые задают, к какому кэшу подключаемся
 
-`gateway-url` в этой команде — только часть исторического ключа кэша. Скрипт не
-подключается к нему. Не меняйте URL, commit или runtime image: это изменит ключ и
-превратит корректный исторический кэш в пропуск.
+| Флаг | Смысл | Частая ошибка |
+|---|---|---|
+| `--qa-sample-size N` | Размер QA-выборки И имя чекпойнта `qa-N-test-...`. **Должен совпадать с размером кэша.** | Дефолт `100`. Если оставить дефолт при кэше на 750 → материализуется другой набор текстов → все ключи мимо → `available=0`. |
+| `--replay-count all` | Реплеить каждую запись, у которой все 3 роли в кэше. | Жёсткое число `750` упадёт, если хоть одна запись неполна. |
+| `--replay-count N` | Реплеить ровно N полных записей (детерминированный сэмпл). | `N` > числа полных записей → ошибка `available<requested`. |
+| `--gateway-url`, `--commit` | Часть ключа кэша (fingerprint, версия кода). Скрипт к gateway для инференса НЕ ходит. | Смена URL/commit/образа меняет ключ и превращает валидный кэш в промах. |
+| `--diagnostic-only` | Read-only: только сверить ключи с файлами кэша, ничего не считать. | — |
 
-Связанный общий контракт: `docs/graph-cache-reuse.md`. Источник исторического
-контекста: `docs/vertex-100qa-hypothesis-report.md`.
+---
+
+## 2. Как устроено подключение к кэшу (это было самое сложное)
+
+Оболочка запуска `scripts/run_datasphere_historical_qa_cache_replay.sh` внутри
+Job делает discovery в три шага и **собирает цепочку из двух read-источников**.
+
+### Модель хранения (два класса артефактов)
+
+1. **Persistent cache на Project storage** — то, что переиспользуется:
+   ```
+   checkpoints/vertex-qa/
+     qa-750-test-150-cv-5/
+       baseline-v1-<gateway-manifest-sha>/       # writable primary кэш этого прогона
+         kg/  verdicts/
+       support-critical/
+         support-critical-v1-<gateway-manifest-sha>/
+           kg/ critical_claims/ critical_coverage/ critical_verdicts/
+           checkpoint-identity.json
+     qa-100-test-20-cv-5/
+       <commit>-<gateway-manifest-sha>/kg/        # исторический 100-QA кэш (lineage source)
+   ```
+2. **Артефакт конкретного Job** (в его `RUN_ROOT`, попадает в tar.gz): `run_metadata.json`,
+   `usage-counts.json`, отчёты, `raw_predictions.jsonl` и т.д. **`run_metadata.json`
+   живёт здесь, а НЕ в `checkpoints/**`** — его отсутствие в кэше это норма и НЕ
+   признак незавершённости.
+
+`checkpoint-identity.json` — тоже НЕ маркер завершения: он пишется атомарно в
+начале Job, чтобы закрепить совместимость namespace (gateway manifest, split
+`750 = 600 train + 150 test`, CV=5, протокол кэша). Отсутствие его прямо в
+`qa-750-test-150-cv-5/` нормально — это родительская папка; файл лежит глубже, в
+`.../support-critical/support-critical-v1-<hash>/`.
+
+Каждая валидная запись пишется сразу, контент-адресно и атомарно (`os.replace`).
+Если Job упадёт, готовые записи остаются и переиспользуются следующим Job с тем
+же protocol/gateway hash. Поэтому «нет итоговых метрик» ≠ «кэш не готов».
+
+### Цепочка чтения (read-through)
+
+- **primary** = `baseline-v1-<sha>/kg` целевого размера (для 750-прогона содержит
+  графы «новых» ~650 записей);
+- **secondary** = `qa-100-test-20-cv-5/<...>/kg` — read-through для 100 записей,
+  общих у 750- и 100-выборок; их графы физически лежат в 100-QA кэше и в baseline
+  не дублируются.
+
+Скрипт подключает secondary автоматически в режиме `direct` (когда есть свежий
+`baseline-v1` для запрошенного размера). В `graph_sources` итогового отчёта
+должны быть **оба** id: `historical_100qa` и `historical_lineage_0`.
+
+### Ключ кэша и legacy-схема
+
+Ключи 750-кэша посчитаны схемой `kggen-v11-pre-length-retry` (legacy), а не
+current. Источник читается с `cache_key_compatibility=(V11_PRE_LENGTH_RETRY,)`,
+поэтому попадания идут по legacy-ключу. Fingerprint берётся из lineage
+(`vertex-gateway:9ba169...`) как **явный override**, а не свежевычисленный — это
+та идентичность, которой кэш реально записан.
+
+---
+
+## 3. Диагностика перед реальным прогоном (дёшево, read-only)
+
+`--diagnostic-only` запускает `scripts/diagnose_historical_cache_key_mismatch.py`:
+он вычисляет те же ключи для всех выбранных текстов и проверяет, сколько уже лежит
+в кэше — по ОБОИМ каталогам (несколько `--kg-dir` подключаются автоматически).
+
+Ключевые поля отчёта (`diagnostic-cache-key-report.json` / stdout):
+
+- `combined_available` из `keys_probed` (ждём ≈ `3 × qa_sample_size`);
+- `complete_records` — сколько записей полны по всем 3 ролям (столько отреплеит `all`);
+- `probed_kg_dirs[].records_or_roles_owned` — вклад каждого источника (secondary
+  должен дать ~300; если 0 — read-through не подключился);
+- `missing_sources` / `missing[]` — какие записи ещё не в кэше (их дописывает
+  поздний extraction-run).
+
+Пример последнего снимка 750-QA: `combined_available=2247/2250`,
+`complete_records=749`, не хватает 1 записи (`17712`/source `12448`).
+
+---
+
+## 4. Что искать в архиве Job и критерий успеха
+
+В `historical-qa-cache-replay-<run-id>.tar.gz`:
+
+- `historical-cache-replay/reports/historical_qa_cache_replay_report.json` —
+  главный отчёт: `replay_count`, `detector_statuses`, `detector_status_counts`,
+  нулевые счётчики, `graph_sources`;
+- `.../reports/historical_cache_coverage.json` — проверенные ключи/источники;
+- `.../shared_graphs/graph_index.jsonl`, `.../cache/cache_resolution.jsonl` —
+  доказательство источника каждого графа;
+- `.../reports/progress.jsonl` — по-записный прогресс (пишется инкрементально с
+  flush; переживает падение — из него можно восстановить скоры);
+- `.../prediction_seal.json`, `run_manifest.json` — контрольные суммы и статус.
+
+**Успех** = все выбранные записи имеют статус `ok` **или** `empty_graph`,
+`validation.valid=true`, `kggen_api_calls=0`, `gateway_llm_calls=0`,
+`grapheval_extractor_calls=0`, а `graph_sources ⊆ {configured}`.
+
+> `empty_graph` — легитимный не-LLM исход (пустой/невалидный граф ответа →
+> `raw_score=None`, см. `graph_eval/DEVIATIONS.md` §9). Инвариант считает его
+> проходным; на статус детектора он не влияет.
+
+---
+
+## 5. Гарантии стоимости и изоляции
+
+- Только CPU `c1.4`; GPU в YAML отсутствует.
+- Project secret `HALLU_GATEWAY_API_KEY` используется только для одного HTTP к
+  `/v1/hallu/manifest` (метаданные версии gateway, не запрос к LLM; текст RAGTruth
+  не передаётся). Хэш manifest обязан совпасть с исторической линией.
+- В `cache_only` KGGen backend не конструируется; промах = ошибка, а не инференс.
+- HHEM — закреплённая локальная CPU-модель GraphEval, не LLM и не сетевой вызов.
+- В детекторы идёт только `instances.no_gold.jsonl` (без разметки/качества).
+- Исторический кэш монтируется на чтение; служебный кэш Job отдельный.
+
+---
+
+## 6. Типовые причины `available=0` / падений (чек-лист)
+
+1. **Не передан `--qa-sample-size`** → материализуется дефолтная выборка 100 →
+   набор текстов не тот → все промахи. Передавайте размер целевого чекпойнта.
+2. **Secondary-источник не подключился** (`records_or_roles_owned=0` у lineage kg)
+   → 100 общих записей мимо. Проверьте, что режим `direct` и lineage kg существует.
+3. **Жёсткий `--replay-count N` больше числа полных записей** → `available<requested`.
+   Используйте `--replay-count all`.
+4. **Изменили `--gateway-url`/`--commit`/образ** → сменился ключ → тотальный промах.
+5. **submit висит** → не собран CI-образ для коммита ИЛИ не задан `YC_TOKEN`
+   (уходит в OAuth). Дождитесь билда, экспортируйте свежий токен.
+6. **Падение в самом конце с `invariants failed`** до коммита `566f5a8` — из-за
+   `empty_graph`. На свежем коде проходит.
+
+---
+
+Связанные документы: `docs/graph-cache-reuse.md` (общий контракт кэша),
+`docs/vertex-100qa-hypothesis-report.md` (источник исторического контекста),
+`docs/vertex-750qa-cache-replay-results.md` (метрики последнего прогона).

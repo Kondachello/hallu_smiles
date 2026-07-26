@@ -56,6 +56,10 @@ See [the CPU 3-QA gateway runbook](docs/vertex-gateway-datasphere.md) and the
 [team Vertex/DataSphere runbook](docs/vertex-datasphere-team-runbook.md). For
 a task-agnostic hand-off to coding agents, see the
 [Cloud Run + DataSphere agent tutorial](docs/cloud-run-datasphere-agent-tutorial.md).
+For replaying detectors over a historical QA cache with zero LLM calls (how the
+cache is discovered, the two-source read-through chain, and every `available=0`
+pitfall), see the [historical QA cache-only replay runbook](docs/datasphere-historical-qa-cache-replay.md)
+and the [750-QA replay results](docs/vertex-750qa-cache-replay-results.md).
 
 **OpenRouter (alternative local profile)**
 ```bash
