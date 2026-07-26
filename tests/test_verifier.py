@@ -117,6 +117,35 @@ def test_verifier_cache_key_changes_with_output_budget(tmp_path):
     )._cache_key(triple, evidence, {})
 
 
+def test_verifier_cache_key_deduplicates_matching_grid_and_migrates_v4(tmp_path):
+    cfg = _cfg(tmp_path)
+    triple = ("Paris", "is capital of", "France")
+    evidence = select_evidence("Paris is the capital of France.", None, triple)
+    verifier = RelationVerifier(cfg)
+    first_key = verifier._cache_key(triple, evidence, {"tau_e": 0.85, "tau_r": 0.65})
+    second_key = verifier._cache_key(triple, evidence, {"tau_e": 0.95, "tau_r": 0.85})
+    assert first_key == second_key
+
+    legacy_key = verifier._legacy_cache_key(triple, evidence, {"tau_e": 0.85, "tau_r": 0.65})
+    verifier._save_cache(legacy_key, "entailed")
+    migrated = RelationVerifier(cfg).verify(
+        triple,
+        "Paris is the capital of France.",
+        None,
+        matching_params={"tau_e": 0.85, "tau_r": 0.65},
+    )
+    assert migrated.cache_hit and migrated.verdict == "entailed"
+    assert (tmp_path / "verdicts" / f"{first_key}.json").is_file()
+
+    across_grid = RelationVerifier(cfg, cache_only=True).verify(
+        triple,
+        "Paris is the capital of France.",
+        None,
+        matching_params={"tau_e": 0.95, "tau_r": 0.85},
+    )
+    assert across_grid.cache_hit and across_grid.verdict == "entailed"
+
+
 def test_verifier_rejects_non_stop_finish_reason_without_parsing(monkeypatch, tmp_path):
     def completion(**kwargs):  # noqa: ARG001
         return {

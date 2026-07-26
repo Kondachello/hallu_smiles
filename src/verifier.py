@@ -231,11 +231,24 @@ class RelationVerifier:
         if not evidence:
             return RelationVerdict("unknown", tuple(), cache_hit=False)
         key = self._cache_key(canonical_triple, evidence, matching_params or {})
-        cached = self._load_cache(key)
+        legacy_key = self._legacy_cache_key(canonical_triple, evidence, matching_params or {})
+        cached = self._load_cache(key, legacy_key)
         if cached is not None:
             if self.usage is not None:
                 self.usage.record_call("relation_verifier", key, 0.0, cached=True)
-            verdict, protocol_fallback, fallback_reason = cached
+            verdict, protocol_fallback, fallback_reason, cache_key = cached
+            # Earlier cache entries unnecessarily included matching thresholds
+            # even though the LLM receives only the already-canonical triple
+            # and selected text evidence. Promote a compatible old entry only
+            # during a live/cache-fill run; a cache-only acceptance replay must
+            # leave every cache inventory byte-for-byte unchanged.
+            if cache_key != key and not self.cache_only:
+                self._save_cache(
+                    key,
+                    verdict,
+                    protocol_fallback=protocol_fallback,
+                    fallback_reason=fallback_reason,
+                )
             return RelationVerdict(
                 verdict,
                 tuple(evidence),
@@ -412,6 +425,38 @@ class RelationVerifier:
     def _cache_key(
         self, triple: tuple[str, str, str], evidence: list[EvidenceSpan], matching_params: dict[str, Any]
     ) -> str:
+        """Key a textual verdict by the inputs actually sent to the LLM.
+
+        ``matching_params`` determines which answer edge reaches this method,
+        but it has already done so through the canonical triple. It never
+        changes the evidence prompt or the returned textual entailment label,
+        so putting it in this cache key caused duplicate paid calls across the
+        train-only threshold grid.
+        """
+        payload = {
+            "v": 5,
+            "verifier_protocol": "relation-entailment-closed-schema-v4-matching-independent",
+            "llm": llm_runtime_fingerprint(self.cfg),
+            "api_base": self.api_base,
+            "prompt_version": self.prompt_version,
+            "max_tokens": self.max_tokens,
+            "max_evidence_sentences": self.max_sentences,
+            "embedding_model": config_value(self.cfg.matching, "embedding_model"),
+            "embedding_model_revision": config_value(
+                self.cfg.matching, "embedding_model_revision"
+            ),
+            "triple": list(triple),
+            "evidence": [span.to_dict() for span in evidence],
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+    def _legacy_cache_key(
+        self,
+        triple: tuple[str, str, str],
+        evidence: list[EvidenceSpan],
+        matching_params: dict[str, Any],
+    ) -> str:
+        """Locate v4 entries produced before matching-independent verdict keys."""
         payload = {
             "v": 4,
             "verifier_protocol": "relation-entailment-closed-schema-v3",
@@ -430,26 +475,34 @@ class RelationVerifier:
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
-    def _load_cache(self, key: str) -> tuple[str, bool, str | None] | None:
+    def _load_cache(
+        self,
+        key: str,
+        *compatible_legacy_keys: str,
+    ) -> tuple[str, bool, str | None, str] | None:
         # Historical support-verdict namespaces are immutable read-through
         # inputs.  A malformed primary entry must not hide a compatible,
         # validated verdict in a later root.
         for root in [self.cache_dir, *self.cache_read_dirs]:
-            try:
-                payload = json.loads((root / f"{key}.json").read_text(encoding="utf-8"))
-                verdict = payload.get("verdict")
-                if verdict in VERDICTS:
+            for candidate_key in (key, *compatible_legacy_keys):
+                try:
+                    payload = json.loads(
+                        (root / f"{candidate_key}.json").read_text(encoding="utf-8")
+                    )
+                    verdict = payload.get("verdict")
+                    if verdict not in VERDICTS:
+                        continue
                     protocol_fallback = bool(payload.get("_hallu_protocol_fallback", False))
                     fallback_reason = payload.get("_hallu_fallback_reason")
                     if protocol_fallback:
                         if fallback_reason not in FALLBACK_REASONS or verdict != "unknown":
                             continue
-                        return str(verdict), True, str(fallback_reason)
+                        return str(verdict), True, str(fallback_reason), candidate_key
                     if fallback_reason is not None:
                         continue
-                    return str(verdict), False, None
-            except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
-                continue
+                    return str(verdict), False, None, candidate_key
+                except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+                    continue
         return None
 
     def _save_cache(
