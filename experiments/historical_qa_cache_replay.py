@@ -198,8 +198,25 @@ def run_historical_qa_cache_controlled_replay(
     per_response_statuses: dict[str, dict[str, str]] = {}
     for row in prediction_rows:
         per_response_statuses.setdefault(str(row["response_id"]), {})[str(row["method"])] = str(row["status"])
+    # "empty_graph" is a legitimate, LLM-free detector outcome (an empty/all-invalid
+    # answer graph yields raw_score=None by design), not a failure. Only a genuinely
+    # errored record should fail the method.
+    _NON_FAILING_STATUSES = {"ok", "empty_graph"}
     statuses = {
-        method: "ok" if all(per_response_statuses.get(response_id, {}).get(method) == "ok" for response_id in selected_ids) else "failed"
+        method: "ok" if all(
+            per_response_statuses.get(response_id, {}).get(method) in _NON_FAILING_STATUSES
+            for response_id in selected_ids
+        ) else "failed"
+        for method in ("hallugraph", "grapheval")
+    }
+    status_counts = {
+        method: {
+            status: sum(
+                1 for response_id in selected_ids
+                if per_response_statuses.get(response_id, {}).get(method) == status
+            )
+            for status in ("ok", "empty_graph")
+        }
         for method in ("hallugraph", "grapheval")
     }
     usage = provider.extractor.usage.summary()
@@ -221,6 +238,7 @@ def run_historical_qa_cache_controlled_replay(
         "historical_lineage_id": lineage.get("lineage_id"),
         "cache_preflight": coverage,
         "detector_statuses": statuses,
+        "detector_status_counts": status_counts,
         "per_response_statuses": per_response_statuses,
         "summary": summary,
         "seal": seal,
