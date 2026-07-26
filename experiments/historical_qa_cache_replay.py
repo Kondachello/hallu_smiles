@@ -65,6 +65,7 @@ def run_historical_qa_cache_controlled_replay(
     hallugraph_config: str | Path,
     grapheval_config: str | Path,
     historical_cache_root: str | Path,
+    additional_cache_roots: "list[str | Path] | tuple[str | Path, ...]" = (),
     lineage_path: str | Path,
     run_id: str,
     qa_sample_size: int = 100,
@@ -94,18 +95,33 @@ def run_historical_qa_cache_controlled_replay(
     records = materialize_historical_qa_no_gold(
         data_dir, qa_sample_size=qa_sample_size, qa_test_fraction=qa_test_fraction, sample_seed=sample_seed,
     )
+    # Primary source is the highest-priority read root; any additional roots are
+    # chained at lower priority (e.g. a 750-QA baseline kg that reads its shared
+    # records through the original 100-QA lineage kg).
     source = GraphCacheSource(
         "historical_100qa",
         Path(historical_cache_root),
         read_only=True,
+        priority=len(additional_cache_roots) + 1,
         cache_key_compatibility=(CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY,),
     )
+    sources = [source]
+    for index, extra_root in enumerate(additional_cache_roots):
+        sources.append(GraphCacheSource(
+            f"historical_lineage_{index}",
+            Path(extra_root),
+            read_only=True,
+            priority=len(additional_cache_roots) - index,
+            cache_key_compatibility=(CACHE_KEY_SCHEMA_V11_PRE_LENGTH_RETRY,),
+        ))
+    # "empty_input" is the provider's own id for an empty text's empty graph.
+    configured_source_ids = {candidate.source_id for candidate in sources} | {"empty_input"}
     factory = detector_factory or build_controlled_shared_kggen_detectors
     detectors, provider = factory(
         hallugraph_config=hallugraph_config,
         grapheval_config=graph,
         gateway_manifest_sha256=str(lineage.get("gateway_manifest_sha256", "")) or None,
-        cache_sources=(source,),
+        cache_sources=tuple(sources),
         cache_mode="cache_only",
     )
     inspection = provider.inspection()
@@ -125,6 +141,7 @@ def run_historical_qa_cache_controlled_replay(
             "comparison_track": "controlled_shared_kggen_response_v1",
             "cache_mode": "cache_only",
             "historical_cache_root": str(source.root),
+            "additional_cache_roots": [str(Path(root)) for root in additional_cache_roots],
             "historical_lineage_id": lineage.get("lineage_id"),
             "historical_llm_runtime_fingerprint": lineage["llm_runtime_fingerprint"],
             "selected_response_id": None,
@@ -220,7 +237,7 @@ def run_historical_qa_cache_controlled_replay(
         or not validation["valid"]
         or report["kggen_api_calls"] != 0
         or report["grapheval_extractor_calls"] != 0
-        or sources != {"historical_100qa"}
+        or not sources.issubset(configured_source_ids)
     ):
         raise RuntimeError(f"historical cache replay invariants failed: {report}")
     archive.update_status("completed")

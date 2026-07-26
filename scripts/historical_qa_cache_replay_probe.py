@@ -15,7 +15,11 @@ parser.add_argument("--data-dir", required=True)
 parser.add_argument("--output-root", required=True)
 parser.add_argument("--hallugraph-config", required=True)
 parser.add_argument("--grapheval-config", required=True)
-parser.add_argument("--historical-cache-root", required=True)
+parser.add_argument("--historical-cache-root", required=True,
+                    help="primary (highest-priority) kg/ cache directory to read")
+parser.add_argument("--additional-cache-root", action="append", default=[],
+                    help="lower-priority kg/ cache directory read through after the primary; "
+                         "repeatable (e.g. the 100-QA lineage kg shared with a 750-QA baseline)")
 parser.add_argument("--lineage", required=True)
 parser.add_argument("--run-id", required=True)
 parser.add_argument("--qa-sample-size", type=int, default=100)
@@ -34,6 +38,7 @@ archive, report = run_historical_qa_cache_controlled_replay(
     hallugraph_config=args.hallugraph_config,
     grapheval_config=args.grapheval_config,
     historical_cache_root=args.historical_cache_root,
+    additional_cache_roots=args.additional_cache_root,
     lineage_path=args.lineage,
     run_id=args.run_id,
     qa_sample_size=args.qa_sample_size,
