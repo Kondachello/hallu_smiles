@@ -17,6 +17,23 @@
 | Режим выбора записей | `replay_count=all` (все полностью закэшированные записи) |
 | Cache key schema (попадания) | `kggen-v11-pre-length-retry` (legacy) — 2247/2250 |
 
+## Реестр DataSphere Job'ов этого эксперимента
+
+Все запуски в проекте `bt1i64odluitglbaj5st`. **Артефакты на DataSphere истекают
+через 14 дней** (`data_expired_at ≈ 2026-08-09`) — постоянная запись это данный
+реестр плюс скачанный локально архив `outputs/datasphere-results/`.
+
+| Job ID | Назначение | Commit | Итог |
+|---|---|---|---|
+| `bt1lg75octuqhdsur90f` | Диагностика cache_key (1 источник) | `30c7cbd` | SUCCESS — 1938/2250 legacy-хитов |
+| `bt10dol8v0nipnl9take` | Read-only листинг чекпойнта | `30c7cbd` | SUCCESS |
+| `bt10s0v3f8f1nd413fa1` | Replay (до фикса 2 источников) | `1943418` | ERROR — `available=0` (диагностировано) |
+| `bt1ej0lq66elk3p2ctos` | Диагностика cache_key (2 источника) | `4266dc6` | SUCCESS — 2247/2250, complete=749 |
+| **`bt1583ah6e0o0jm9lqd3`** | **Реальный replay `all` (итоговый)** | **`4266dc6`** | **749/750, 0 LLM; данные валидны** |
+
+Итоговый архив с результатами:
+`outputs/datasphere-results/zhenya-750all-final/historical-qa-cache-replay-zhenya-750all-20260726-165854.tar.gz`.
+
 ## Источники графов (read-through цепочка)
 
 Кэш собирается из ДВУХ каталогов на Project storage (порядок по приоритету):
