@@ -256,6 +256,8 @@ def run_evaluation(
     tuning_info: dict[str, Any] | None = None,
     usage_summary: dict[str, Any] | None = None,
     n_failed: int = 0,
+    n_explicitly_excluded: int = 0,
+    manifest_records: int | None = None,
     relation_mode: str = "strict",
     tau_e: float | None = None,
     tau_r: float | None = None,
@@ -309,6 +311,9 @@ def run_evaluation(
         "n_ref_empty": int(test["ref_empty"].sum()),
         "n_empty_Ea": int((test["Ea"] == 0).sum()),
         "n_failed_extractions": int(n_failed),
+        "n_explicitly_excluded": int(n_explicitly_excluded),
+        "n_manifest_records": int(len(rows) if manifest_records is None else manifest_records),
+        "n_scored_records": int(len(rows)),
     }
 
     summary = {

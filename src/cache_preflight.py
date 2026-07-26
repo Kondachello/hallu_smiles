@@ -24,7 +24,12 @@ def manifest_sha256(manifest: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def verify_kg_cache(cfg: Any, instances: Iterable[Instance]) -> dict[str, Any]:
+def verify_kg_cache(
+    cfg: Any,
+    instances: Iterable[Instance],
+    *,
+    excluded_source_ids: Iterable[str] = (),
+) -> dict[str, Any]:
     """Check each non-empty C/Q/A graph lookup using cache-only KGExtractor.
 
     No backend is constructed and no cache file is written.  The returned
@@ -33,12 +38,21 @@ def verify_kg_cache(cfg: Any, instances: Iterable[Instance]) -> dict[str, Any]:
     threaded extraction stage to fail on its first miss.
     """
     rows = list(instances)
+    excluded = {str(source_id) for source_id in excluded_source_ids}
+    known_sources = set(unique_sources(rows))
+    unknown_exclusions = sorted(excluded - known_sources)
+    if unknown_exclusions:
+        raise ValueError(
+            "explicitly excluded source_id(s) are absent from the fixed manifest: "
+            + ", ".join(unknown_exclusions)
+        )
+    analysis_rows = [row for row in rows if row.source_id not in excluded]
     extractor = KGExtractor(cfg, cache_only=True)
     checks: list[tuple[str, str, str, str]] = []
-    for source_id, inst in sorted(unique_sources(rows).items()):
+    for source_id, inst in sorted(unique_sources(analysis_rows).items()):
         checks.append(("context", source_id, "", inst.context))
         checks.append(("query", source_id, "", inst.query))
-    for inst in sorted(rows, key=lambda item: (item.split, item.source_id, item.response_id)):
+    for inst in sorted(analysis_rows, key=lambda item: (item.split, item.source_id, item.response_id)):
         checks.append(("response", inst.source_id, inst.response_id, inst.response))
 
     seen_keys: set[str] = set()
@@ -67,6 +81,10 @@ def verify_kg_cache(cfg: Any, instances: Iterable[Instance]) -> dict[str, Any]:
         "status": "ready" if not misses else "missing",
         "responses": len(rows),
         "sources": len(unique_sources(rows)),
+        "analysis_responses": len(analysis_rows),
+        "analysis_sources": len(unique_sources(analysis_rows)),
+        "excluded_source_ids": sorted(excluded),
+        "excluded_response_count": len(rows) - len(analysis_rows),
         "graph_slots": len(checks),
         "empty_graph_slots": skipped_empty,
         "unique_nonempty_cache_keys": len(seen_keys),

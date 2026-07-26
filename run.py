@@ -102,18 +102,80 @@ def get_critical_pipeline(
     return CriticalClaimPipeline(cfg, usage=usage, cache_only=cache_only, embedder=embedder)
 
 
+def _emit_progress(
+    stage: str,
+    completed: int,
+    total: int,
+    usage: UsageLogger,
+    *,
+    force: bool = False,
+) -> None:
+    """Emit a redacted, attach-friendly live progress heartbeat.
+
+    DataSphere's Job status only distinguishes lifecycle states.  These compact
+    lines let an operator attach to a running Job and distinguish real cache
+    progress from a retry loop without exposing source text, prompts, answers,
+    credentials, or cache keys.
+    """
+    interval = max(1, total // 20) if total else 1
+    if not force and completed not in {0, total} and completed % interval:
+        return
+    summary = usage.summary()
+    payload = {
+        "stage": stage,
+        "completed": completed,
+        "total": total,
+        "api_calls": summary["api_calls"],
+        "cache_hits": summary["cache_hits"],
+        "retries": summary["retries"],
+    }
+    print("[progress] " + json.dumps(payload, sort_keys=True), flush=True)
+
+
 # --------------------------------------------------------------------------------------
 # Stage: extract
 # --------------------------------------------------------------------------------------
 def extract_all(
-    cfg, instances: list[Instance], extractor: KGExtractor, out_dir: Path
+    cfg,
+    instances: list[Instance],
+    extractor: KGExtractor,
+    out_dir: Path,
+    *,
+    excluded_source_ids: set[str] | None = None,
 ) -> tuple[dict[str, tuple[Graph, Graph]], dict[str, Graph], list[dict[str, Any]]]:
-    """Return reference and answer graphs; references are built once per source."""
+    """Return reference and answer graphs; references are built once per source.
+
+    A source can be explicitly quarantined only by an invocation-level option.
+    Its rows are never replaced by a synthetic empty graph: they are omitted
+    from scoring and recorded in a separate audit artifact.  Thus a fixed
+    manifest remains inspectable while a known deterministic failure cannot
+    repeatedly spend provider budget on every resume.
+    """
     failures: list[dict[str, Any]] = []
     ref_graphs: dict[str, tuple[Graph, Graph]] = {}
     resp_graphs: dict[str, Graph] = {}
+    out_dir.mkdir(parents=True, exist_ok=True)
     sources = unique_sources(instances)
+    excluded = {str(source_id) for source_id in (excluded_source_ids or set())}
+    unknown_exclusions = sorted(excluded - set(sources))
+    if unknown_exclusions:
+        raise ValueError(
+            "explicitly excluded source_id(s) are absent from the fixed manifest: "
+            + ", ".join(unknown_exclusions)
+        )
+    active_sources = {
+        source_id: inst for source_id, inst in sources.items() if source_id not in excluded
+    }
+    active_instances = [inst for inst in instances if inst.source_id not in excluded]
+    if excluded:
+        print(
+            "[extract] explicit source quarantine; no graph extraction or scoring for "
+            + ", ".join(sorted(excluded)),
+            flush=True,
+        )
     concurrency = max(1, int(cfg.llm.concurrency))
+    progress_usage = getattr(extractor, "usage", UsageLogger(None))
+    _emit_progress("kg_reference", 0, len(active_sources), progress_usage, force=True)
 
     def do_ref(item):
         source_id, inst = item
@@ -129,13 +191,14 @@ def extract_all(
             return source_id, None, {"stage": "reference", "source_id": source_id, "error": repr(exc)}
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        for source_id, graphs, error in tqdm(
-            pool.map(do_ref, sources.items()), total=len(sources), desc="extract G_c/G_q"
-        ):
+        for completed, (source_id, graphs, error) in enumerate(tqdm(
+            pool.map(do_ref, active_sources.items()), total=len(active_sources), desc="extract G_c/G_q"
+        ), start=1):
             if error:
                 failures.append(error)
             else:
                 ref_graphs[source_id] = graphs
+            _emit_progress("kg_reference", completed, len(active_sources), progress_usage)
 
     def do_response(inst: Instance):
         if inst.source_id not in ref_graphs:
@@ -168,18 +231,33 @@ def extract_all(
             }
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = [pool.submit(do_response, inst) for inst in instances]
-        for future in tqdm(as_completed(futures), total=len(futures), desc="extract G_a"):
+        futures = [pool.submit(do_response, inst) for inst in active_instances]
+        _emit_progress("kg_response", 0, len(futures), progress_usage, force=True)
+        for completed, future in enumerate(
+            tqdm(as_completed(futures), total=len(futures), desc="extract G_a"), start=1
+        ):
             response_id, graph, error = future.result()
             if error:
                 failures.append(error)
             else:
                 resp_graphs[response_id] = graph
+            _emit_progress("kg_response", completed, len(futures), progress_usage)
 
     failure_path = out_dir / "failed_extractions.jsonl"
     with open(failure_path, "w", encoding="utf-8") as handle:
         for failure in failures:
             handle.write(json.dumps(failure) + "\n")
+    quarantine_path = out_dir / "excluded_extractions.jsonl"
+    with open(quarantine_path, "w", encoding="utf-8") as handle:
+        for inst in instances:
+            if inst.source_id in excluded:
+                handle.write(json.dumps({
+                    "stage": "source_quarantine",
+                    "source_id": inst.source_id,
+                    "response_id": inst.response_id,
+                    "split": inst.split,
+                    "reason": "explicit source-level quarantine; no synthetic empty graph was used",
+                }) + "\n")
     return ref_graphs, resp_graphs, failures
 
 
@@ -202,6 +280,8 @@ def write_extraction_summary(
     failures: list[dict[str, Any]],
     extractor: KGExtractor,
     out_dir: Path,
+    *,
+    excluded_source_ids: set[str] | None = None,
 ) -> Path:
     """Write a machine-checkable proof of every selected reference/answer pair."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -216,6 +296,23 @@ def write_extraction_summary(
     ]
     expected_sources = {inst.source_id for inst in instances}
     expected_responses = {inst.response_id for inst in instances}
+    excluded = {str(source_id) for source_id in (excluded_source_ids or set())}
+    unknown_exclusions = sorted(excluded - expected_sources)
+    if unknown_exclusions:
+        raise ValueError(
+            "explicitly excluded source_id(s) are absent from the fixed manifest: "
+            + ", ".join(unknown_exclusions)
+        )
+    excluded_records = [
+        record for record in expected_records if record["source_id"] in excluded
+    ]
+    analysis_expected_records = [
+        record for record in expected_records if record["source_id"] not in excluded
+    ]
+    analysis_sources = expected_sources - excluded
+    analysis_responses = expected_responses - {
+        record["response_id"] for record in excluded_records
+    }
     completed_records: list[dict[str, Any]] = []
     graph_records: list[dict[str, Any]] = []
     cache_records: dict[str, dict[str, Any]] = {}
@@ -239,6 +336,8 @@ def write_extraction_summary(
         return record
 
     for inst in instances:
+        if inst.source_id in excluded:
+            continue
         reference = ref_graphs.get(inst.source_id)
         answer = resp_graphs.get(inst.response_id)
         if reference is None or answer is None:
@@ -265,19 +364,27 @@ def write_extraction_summary(
 
     complete = (
         not failures
-        and set(ref_graphs) == expected_sources
-        and set(resp_graphs) == expected_responses
-        and completed_records == expected_records
+        and set(ref_graphs) == analysis_sources
+        and set(resp_graphs) == analysis_responses
+        and completed_records == analysis_expected_records
         and all(record["cache_file_exists"] for record in cache_records.values())
     )
     summary = {
-        "protocol": "hallu-extraction-summary-v1",
-        "status": "ready" if complete else "error",
+        "protocol": "hallu-extraction-summary-v2",
+        "status": (
+            "ready_with_explicit_exclusions" if complete and excluded
+            else "ready" if complete else "error"
+        ),
         "expected_records": expected_records,
+        "analysis_expected_records": analysis_expected_records,
+        "excluded_source_ids": sorted(excluded),
+        "excluded_records": excluded_records,
         "completed_records": completed_records,
         "expected_sources": len(expected_sources),
+        "analysis_expected_sources": len(analysis_sources),
         "references_completed": len(ref_graphs),
         "responses_completed": len(resp_graphs),
+        "analysis_expected_responses": len(analysis_responses),
         "pairs_completed": len(completed_records),
         "failures": failures,
         "graph_records": graph_records,
@@ -327,6 +434,8 @@ def score_all(
     relation_mode: str = "strict",
     verifier=None,
     critical_pipeline=None,
+    usage: UsageLogger | None = None,
+    progress_stage: str | None = None,
 ) -> dict[str, ScoreResult]:
     """Score all available rows; verified modes audit every answer relation."""
     if relation_mode in {"support", "support-critical"} and verifier is None:
@@ -336,8 +445,12 @@ def score_all(
     results: dict[str, ScoreResult] = {}
     refgraph_cache: dict[str, RefGraph] = {}
     description = f"score {relation_mode} (tau_e={tau_e},tau_r={tau_r})"
-    for inst in tqdm(instances, desc=description):
+    if usage is not None and progress_stage is not None:
+        _emit_progress(progress_stage, 0, len(instances), usage, force=True)
+    for completed, inst in enumerate(tqdm(instances, desc=description), start=1):
         if inst.source_id not in ref_graphs or inst.response_id not in resp_graphs:
+            if usage is not None and progress_stage is not None:
+                _emit_progress(progress_stage, completed, len(instances), usage)
             continue
         gc, gq = ref_graphs[inst.source_id]
         refgraph = refgraph_cache.get(inst.source_id)
@@ -358,6 +471,8 @@ def score_all(
             answer_text=inst.response if relation_mode == "support-critical" else None,
             critical_pipeline=critical_pipeline if relation_mode == "support-critical" else None,
         )
+        if usage is not None and progress_stage is not None:
+            _emit_progress(progress_stage, completed, len(instances), usage)
     return results
 
 
@@ -473,6 +588,7 @@ def tune_joint(
     relation_mode: str,
     out_dir: Path,
     critical_pipeline=None,
+    usage: UsageLogger | None = None,
 ) -> dict[str, Any]:
     train = [
         inst for inst in instances
@@ -498,6 +614,8 @@ def tune_joint(
                 cfg, train, ref_graphs, resp_graphs, embedder,
                 tau_e=tau_e, tau_r=tau_r, relation_mode=relation_mode, verifier=verifier,
                 critical_pipeline=critical_pipeline,
+                usage=usage,
+                progress_stage=f"tune_{relation_mode}",
             )
             score_cache[(tau_e, tau_r)] = results
             scores = [results[i.response_id] for i in train if i.response_id in results]
@@ -728,6 +846,15 @@ def main() -> None:
     parser.add_argument("--cache-dir", default=None, help="override shared KG cache directory")
     parser.add_argument("--limit", type=int, default=None, help="cap #instances (smoke tests)")
     parser.add_argument(
+        "--exclude-source-id",
+        action="append",
+        default=[],
+        help=(
+            "explicitly quarantine one manifest source from graph extraction and scoring; "
+            "the source remains recorded in the manifest/audit (repeatable)"
+        ),
+    )
+    parser.add_argument(
         "--relation-mode", choices=["strict", "support", "support-critical"], default="strict"
     )
     parser.add_argument(
@@ -783,6 +910,20 @@ def main() -> None:
         print("[!] llm.model is PLACEHOLDER; configure it before a live run.")
 
     instances = _select_instances(args, cfg, out_dir)
+    excluded_source_ids = {str(source_id) for source_id in args.exclude_source_id}
+    known_source_ids = {inst.source_id for inst in instances}
+    unknown_exclusions = sorted(excluded_source_ids - known_source_ids)
+    if unknown_exclusions:
+        raise SystemExit(
+            "--exclude-source-id is absent from the selected manifest: "
+            + ", ".join(unknown_exclusions)
+        )
+    if excluded_source_ids:
+        print(
+            "[quarantine] source-level analysis exclusions="
+            + ",".join(sorted(excluded_source_ids)),
+            flush=True,
+        )
     n_train = sum(inst.split == "train" for inst in instances)
     n_test = sum(inst.split == "test" for inst in instances)
     print(f"[data] {len(instances)} responses (train={n_train}, test={n_test})")
@@ -810,9 +951,21 @@ def main() -> None:
     results: dict[str, ScoreResult] = {}
 
     if args.stage in {"extract", "score", "tune", "all"}:
-        ref_graphs, resp_graphs, failures = extract_all(cfg, instances, extractor, out_dir)
+        ref_graphs, resp_graphs, failures = extract_all(
+            cfg,
+            instances,
+            extractor,
+            out_dir,
+            excluded_source_ids=excluded_source_ids,
+        )
         extraction_summary = write_extraction_summary(
-            instances, ref_graphs, resp_graphs, failures, extractor, out_dir
+            instances,
+            ref_graphs,
+            resp_graphs,
+            failures,
+            extractor,
+            out_dir,
+            excluded_source_ids=excluded_source_ids,
         )
         print(f"[extract] refs={len(ref_graphs)} responses={len(resp_graphs)} failures={len(failures)}")
         print(f"[extract] summary={extraction_summary}")
@@ -825,6 +978,7 @@ def main() -> None:
         results = score_all(
             cfg, instances, ref_graphs, resp_graphs, embedder,
             relation_mode=args.relation_mode, verifier=verifier, critical_pipeline=critical_pipeline,
+            usage=usage, progress_stage=f"score_{args.relation_mode}",
         )
         persist_scored(scored_path, instances, results, args.relation_mode)
         _assert_cache_only_no_live_calls(args.cache_only, usage)
@@ -834,7 +988,7 @@ def main() -> None:
     if args.stage in {"tune", "all"}:
         info = tune_joint(
             cfg, instances, ref_graphs, resp_graphs, embedder, verifier, args.relation_mode, out_dir,
-            critical_pipeline=critical_pipeline,
+            critical_pipeline=critical_pipeline, usage=usage,
         )
         print(f"[tune] alpha={info['alpha']} tau_e={info['tau_e']} tau_r={info['tau_r']} theta={info['theta']:.4f}")
     else:
@@ -855,6 +1009,7 @@ def main() -> None:
             cfg, instances, ref_graphs, resp_graphs, embedder,
             tau_e=float(info["tau_e"]), tau_r=float(info["tau_r"]),
             relation_mode=args.relation_mode, verifier=verifier, critical_pipeline=critical_pipeline,
+            usage=usage, progress_stage=f"final_{args.relation_mode}",
         )
         persist_scored(scored_path, instances, results, args.relation_mode)
     if not scored_path.exists():
@@ -866,7 +1021,12 @@ def main() -> None:
     summary = run_evaluation(
         rows, alpha, float(info["theta"]), cfg, out_dir,
         tuning_info=info,
-        usage_summary=usage.summary(), n_failed=len(failures), relation_mode=args.relation_mode,
+        usage_summary=usage.summary(), n_failed=len(failures),
+        n_explicitly_excluded=sum(
+            inst.source_id in excluded_source_ids for inst in instances
+        ),
+        manifest_records=len(instances),
+        relation_mode=args.relation_mode,
         tau_e=float(info["tau_e"]), tau_r=float(info["tau_r"]),
     )
     print("[eval] summary:", json.dumps(_short(summary), indent=2))

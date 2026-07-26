@@ -17,6 +17,13 @@ QA_SAMPLE_SIZE="${QA_SAMPLE_SIZE:-20}"
 QA_TEST_FRACTION="${QA_TEST_FRACTION:-0.2}"
 QA_CV_FOLDS="${QA_CV_FOLDS:-5}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
+# A DataSphere Job must not spend days repeating one 408/429.  This is a
+# per-request circuit breaker (not a Job watchdog): completed entries remain
+# atomic on project disk, and a retry can resume them.  Twelve 90-second
+# request windows plus backoff is intentionally generous for transient quota
+# recovery while still making a stalled request diagnosable within minutes.
+LLM_MAX_RETRIES="${LLM_MAX_RETRIES:-12}"
+QA_EXCLUDE_SOURCE_IDS="${QA_EXCLUDE_SOURCE_IDS:-}"
 
 BASELINE_CONFIG="$RUN_ROOT/baseline_runtime_config.yaml"
 CRITICAL_CONFIG="$RUN_ROOT/critical_runtime_config.yaml"
@@ -84,7 +91,28 @@ read -r QA_TRAIN_SOURCES QA_TEST_SOURCES <<< "$QA_QUOTAS"
   echo "LLM_CONCURRENCY must be a positive integer" >&2
   exit 2
 }
-echo "[qa-sample] total=$QA_SAMPLE_SIZE train=$QA_TRAIN_SOURCES test=$QA_TEST_SOURCES cv_folds=$QA_CV_FOLDS"
+[[ "$LLM_MAX_RETRIES" =~ ^[0-9]+$ ]] && (( LLM_MAX_RETRIES >= 1 )) || {
+  echo "LLM_MAX_RETRIES must be a positive integer" >&2
+  exit 2
+}
+EXCLUDE_SOURCE_ARGS=()
+if [[ -n "$QA_EXCLUDE_SOURCE_IDS" ]]; then
+  IFS=',' read -r -a EXCLUDED_SOURCE_IDS <<< "$QA_EXCLUDE_SOURCE_IDS"
+  declare -A SEEN_EXCLUDED_SOURCE_IDS=()
+  for source_id in "${EXCLUDED_SOURCE_IDS[@]}"; do
+    [[ "$source_id" =~ ^[A-Za-z0-9._:-]+$ ]] || {
+      echo "QA_EXCLUDE_SOURCE_IDS contains an invalid source ID" >&2
+      exit 2
+    }
+    [[ -z "${SEEN_EXCLUDED_SOURCE_IDS[$source_id]+x}" ]] || {
+      echo "QA_EXCLUDE_SOURCE_IDS contains duplicate source ID: $source_id" >&2
+      exit 2
+    }
+    SEEN_EXCLUDED_SOURCE_IDS[$source_id]=1
+    EXCLUDE_SOURCE_ARGS+=(--exclude-source-id "$source_id")
+  done
+fi
+echo "[qa-sample] total=$QA_SAMPLE_SIZE train=$QA_TRAIN_SOURCES test=$QA_TEST_SOURCES cv_folds=$QA_CV_FOLDS max_retries=$LLM_MAX_RETRIES exclusions=${QA_EXCLUDE_SOURCE_IDS:-none}"
 cp "$RUNTIME_MANIFEST" "$RUN_ROOT/runtime-manifest.json"
 cp /opt/hallu/manifests/client.freeze.txt "$RUN_ROOT/client.freeze.txt"
 
@@ -241,7 +269,7 @@ PY
   --kg-cache-read-dir "$HISTORICAL_BASELINE_CACHE_ROOT/kg" \
   --relation-cache-read-dir "$HISTORICAL_BASELINE_CACHE_ROOT/verdicts" \
   --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
-  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 0 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
+  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries "$LLM_MAX_RETRIES" --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/baseline-runtime-config-identity.json"
 "$CLIENT_PYTHON" "$ROOT/scripts/make_datasphere_vertex_config.py" \
@@ -252,7 +280,7 @@ PY
   --kg-cache-read-dir "$HISTORICAL_BASELINE_CACHE_ROOT/kg" \
   --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
   "${CRITICAL_CACHE_READ_ARGS[@]}" \
-  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries 0 --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
+  --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries "$LLM_MAX_RETRIES" --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
   > "$RUN_ROOT/critical-runtime-config-identity.json"
 
@@ -263,7 +291,8 @@ PY
 "$CLIENT_PYTHON" "$ROOT/scripts/preflight_datasphere_kg_cache.py" \
   --config "$BASELINE_CONFIG" --data-dir "$DATA_DIR" \
   --qa-sample-size "$QA_SAMPLE_SIZE" --qa-test-fraction "$QA_TEST_FRACTION" \
-  --manifest-output "$QA_MANIFEST" --report "$KG_CACHE_PREFLIGHT" --allow-missing
+  --manifest-output "$QA_MANIFEST" --report "$KG_CACHE_PREFLIGHT" --allow-missing \
+  "${EXCLUDE_SOURCE_ARGS[@]}"
 
 # Check every selected answer's deterministic segmentation and no-network
 # fallback offsets before asking Vertex anything. This catches code/config
@@ -284,11 +313,20 @@ import json
 import sys
 summary = json.load(open(sys.argv[1], encoding='utf-8'))
 expected = int(sys.argv[2])
-if summary.get('status') != 'ready' or summary.get('failures') != []:
+excluded = list(summary.get('excluded_records', []))
+excluded_sources = list(summary.get('excluded_source_ids', []))
+if summary.get('status') not in {'ready', 'ready_with_explicit_exclusions'} or summary.get('failures') != []:
     raise SystemExit('extraction is incomplete')
-if summary.get('expected_sources') != expected or summary.get('responses_completed') != expected:
-    raise SystemExit('extraction did not produce every source/response graph')
-if summary.get('expected_records') != summary.get('completed_records'):
+if len(set(excluded_sources)) != len(excluded_sources):
+    raise SystemExit('extraction exclusion source IDs are not unique')
+if len(excluded) != len(excluded_sources):
+    raise SystemExit('extraction exclusion records do not match source exclusions')
+analysis_expected = expected - len(excluded_sources)
+if summary.get('expected_sources') != expected or summary.get('analysis_expected_sources') != analysis_expected:
+    raise SystemExit('extraction source denominator is inconsistent')
+if summary.get('references_completed') != analysis_expected or summary.get('responses_completed') != analysis_expected:
+    raise SystemExit('extraction did not produce every non-quarantined source/response graph')
+if summary.get('analysis_expected_records') != summary.get('completed_records'):
     raise SystemExit('extraction summary records are incomplete')
 PY
   test ! -s "$1/failed_extractions.jsonl" || {
@@ -303,7 +341,7 @@ PY
 find "$HISTORICAL_BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-before.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode strict --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$STRICT_OUT"
+  --output-dir "$STRICT_OUT" "${EXCLUDE_SOURCE_ARGS[@]}"
 require_complete_extraction "$STRICT_OUT" "$QA_SAMPLE_SIZE"
 mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-cache-fill-usage.jsonl"
 
@@ -311,7 +349,7 @@ mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-cache-fill-usage.jsonl"
 # are written only to the primary 1000-QA namespace.
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode support --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$SUPPORT_OUT"
+  --output-dir "$SUPPORT_OUT" "${EXCLUDE_SOURCE_ARGS[@]}"
 require_complete_extraction "$SUPPORT_OUT" "$QA_SAMPLE_SIZE"
 mv "$SUPPORT_OUT/usage.jsonl" "$RUN_ROOT/support-cache-fill-usage.jsonl"
 find "$HISTORICAL_BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-after-baseline.sha256"
@@ -322,7 +360,7 @@ cmp "$RUN_ROOT/historical-cache-before.sha256" "$RUN_ROOT/historical-cache-after
 # evidence components to make live gateway calls.
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$CRITICAL_CONFIG" --stage all \
   --relation-mode support-critical --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$CRITICAL_OUT" --kg-cache-only
+  --output-dir "$CRITICAL_OUT" --kg-cache-only "${EXCLUDE_SOURCE_ARGS[@]}"
 require_complete_extraction "$CRITICAL_OUT" "$QA_SAMPLE_SIZE"
 mv "$CRITICAL_OUT/usage.jsonl" "$RUN_ROOT/support-critical-live-usage.jsonl"
 "$CLIENT_PYTHON" "$ROOT/scripts/compare_qa_pilot_results.py" \
@@ -337,13 +375,13 @@ mv "$CRITICAL_OUT/usage.jsonl" "$RUN_ROOT/support-critical-live-usage.jsonl"
 find "$BASELINE_CACHE_ROOT" "$CRITICAL_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-before-replay.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode strict --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$REPLAY_STRICT" --cache-only
+  --output-dir "$REPLAY_STRICT" --cache-only "${EXCLUDE_SOURCE_ARGS[@]}"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode support --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$REPLAY_SUPPORT" --cache-only
+  --output-dir "$REPLAY_SUPPORT" --cache-only "${EXCLUDE_SOURCE_ARGS[@]}"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$CRITICAL_CONFIG" --stage all \
   --relation-mode support-critical --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$REPLAY_CRITICAL" --cache-only
+  --output-dir "$REPLAY_CRITICAL" --cache-only "${EXCLUDE_SOURCE_ARGS[@]}"
 require_complete_extraction "$REPLAY_STRICT" "$QA_SAMPLE_SIZE"
 require_complete_extraction "$REPLAY_SUPPORT" "$QA_SAMPLE_SIZE"
 require_complete_extraction "$REPLAY_CRITICAL" "$QA_SAMPLE_SIZE"

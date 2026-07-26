@@ -233,7 +233,7 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
         "--gateway-url", "https://gateway.example.run.app",
         "--gateway-manifest-sha256", "a" * 64, "--docker-image", IMAGE,
         "--qa-sample-size", "100", "--qa-test-fraction", "0.2", "--cv-folds", "5",
-        "--concurrency", "1", "--timeout-seconds", "43200",
+        "--concurrency", "1", "--exclude-source-id", "12448", "--timeout-seconds", "43200",
         "--output", str(rendered),
     ], check=True)
     job = yaml.safe_load(rendered.read_text(encoding="utf-8"))
@@ -244,10 +244,12 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert 'QA_SAMPLE_SIZE="100"' in command
     assert 'QA_TEST_FRACTION="0.2"' in command
     assert 'QA_CV_FOLDS="5"' in command
+    assert 'QA_EXCLUDE_SOURCE_IDS="12448"' in command
     assert "timeout --signal=TERM --kill-after=60s 43200" in command
     subprocess.run([sys.executable, str(SCRIPTS / "validate_datasphere_job.py"), "--job", str(rendered), "--repo-root", str(ROOT)], check=True)
     runner = (SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh").read_text(encoding="utf-8")
     assert "preflight_datasphere_kg_cache.py" in runner
+    assert "excluded_extractions.jsonl" in (ROOT / "run.py").read_text(encoding="utf-8")
     assert "--allow-missing" in runner
     assert "historical_kg_cache_lineages.json" in runner
     assert "--llm-runtime-fingerprint-override \"$HISTORICAL_LLM_RUNTIME_FINGERPRINT\"" in runner
@@ -258,7 +260,8 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "--relation-mode support-critical" in runner
     assert "--kg-cache-only" in runner
     assert "--cache-only" in runner
-    assert "--max-tokens 16384 --concurrency \"$LLM_CONCURRENCY\" --max-retries 0" in runner
+    assert "LLM_MAX_RETRIES=\"${LLM_MAX_RETRIES:-12}\"" in runner
+    assert "--max-tokens 16384 --concurrency \"$LLM_CONCURRENCY\" --max-retries \"$LLM_MAX_RETRIES\"" in runner
     assert "--cv-folds \"$QA_CV_FOLDS\"" in runner
     assert "--cache-root \"$BASELINE_CACHE_ROOT\"" in runner
     assert "--cache-root \"$CRITICAL_CACHE_ROOT\"" in runner

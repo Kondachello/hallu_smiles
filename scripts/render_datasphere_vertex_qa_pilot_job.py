@@ -34,6 +34,15 @@ def main() -> None:
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument(
+        "--exclude-source-id",
+        action="append",
+        default=[],
+        help=(
+            "explicit source-level quarantine recorded in the experiment audit; "
+            "no KG or metric calls are made for it (repeatable)"
+        ),
+    )
+    parser.add_argument(
         "--timeout-seconds", type=int, default=0,
         help=(
             "optional in-container wall-time ceiling; 0 lets DataSphere own the deadline "
@@ -58,6 +67,11 @@ def main() -> None:
         raise SystemExit("--cv-folds must be between 2 and the selected train source count")
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be positive")
+    excluded_source_ids = [str(source_id) for source_id in args.exclude_source_id]
+    if any(not re.fullmatch(r"[A-Za-z0-9._:-]+", source_id) for source_id in excluded_source_ids):
+        raise SystemExit("--exclude-source-id contains an invalid source ID")
+    if len(set(excluded_source_ids)) != len(excluded_source_ids):
+        raise SystemExit("--exclude-source-id cannot be repeated for the same source")
     if args.timeout_seconds < 0 or 0 < args.timeout_seconds < 60:
         raise SystemExit("--timeout-seconds must be 0 or at least 60")
     try:
@@ -83,6 +97,7 @@ def main() -> None:
         .replace("__QA_TEST_FRACTION__", str(args.qa_test_fraction))
         .replace("__QA_CV_FOLDS__", str(args.cv_folds))
         .replace("__LLM_CONCURRENCY__", str(args.concurrency))
+        .replace("__QA_EXCLUDE_SOURCE_IDS__", ",".join(excluded_source_ids))
         .replace("__JOB_RUN_COMMAND__", run_command)
         .replace("__DOCKER_ENV_BLOCK__", docker_block))
     if "__" in rendered:

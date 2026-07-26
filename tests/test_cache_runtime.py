@@ -215,6 +215,63 @@ def test_pipeline_does_not_downgrade_cache_only_miss_to_failed_extraction(tmp_pa
         )
 
 
+def test_explicit_source_quarantine_skips_only_that_source_and_is_auditable(tmp_path):
+    from run import extract_all, write_extraction_summary
+
+    cfg = _cfg(tmp_path)
+    cfg.extraction.explicit_clustering = False
+    instances = [
+        Instance(
+            response_id="r1", source_id="s1", task="QA", gen_model="fixture", split="train",
+            context="excluded context", query="excluded query", response="excluded answer", y=0,
+        ),
+        Instance(
+            response_id="r2", source_id="s2", task="QA", gen_model="fixture", split="test",
+            context="kept context", query="kept query", response="kept answer", y=1,
+        ),
+    ]
+    extractor = KGExtractor(cfg, backend=FakeKGGen())
+    refs, answers, failures = extract_all(
+        cfg, instances, extractor, tmp_path / "result", excluded_source_ids={"s1"}
+    )
+
+    assert failures == []
+    assert set(refs) == {"s2"}
+    assert set(answers) == {"r2"}
+    assert (tmp_path / "result" / "excluded_extractions.jsonl").read_text().count("s1") == 1
+    summary = __import__("json").loads(write_extraction_summary(
+        instances, refs, answers, failures, extractor, tmp_path / "result",
+        excluded_source_ids={"s1"},
+    ).read_text())
+    assert summary["status"] == "ready_with_explicit_exclusions"
+    assert summary["analysis_expected_sources"] == 1
+    assert summary["pairs_completed"] == 1
+    assert summary["excluded_source_ids"] == ["s1"]
+
+
+def test_cache_preflight_does_not_require_an_explicitly_quarantined_source(tmp_path):
+    from src.cache_preflight import verify_kg_cache
+    from src.extract import Graph
+
+    cfg = _cfg(tmp_path)
+    cfg.extraction.explicit_clustering = False
+    rows = [
+        Instance("r1", "s1", "QA", "fixture", "train", "cold context", "cold query", "cold answer", 0),
+        Instance("r2", "s2", "QA", "fixture", "test", "warm context", "warm query", "warm answer", 1),
+    ]
+    Path(cfg.cache_dir).mkdir(parents=True)
+    writer = KGExtractor(cfg, cache_only=True)
+    graph = Graph({"entity"}, {("entity", "rel", "entity")})
+    for text in (rows[1].context, rows[1].query, rows[1].response):
+        writer._save_cache(writer._cache_key(text), graph)
+
+    report = verify_kg_cache(cfg, rows, excluded_source_ids={"s1"})
+    assert report["status"] == "ready"
+    assert report["analysis_sources"] == 1
+    assert report["analysis_responses"] == 1
+    assert report["excluded_source_ids"] == ["s1"]
+
+
 def test_extraction_summary_proves_exact_reference_answer_pairs_and_cache(tmp_path):
     from run import write_extraction_summary
     from src.extract import Graph

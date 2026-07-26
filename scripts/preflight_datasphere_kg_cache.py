@@ -28,6 +28,15 @@ def main() -> None:
     parser.add_argument("--manifest-output", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument(
+        "--exclude-source-id",
+        action="append",
+        default=[],
+        help=(
+            "source ID explicitly quarantined from analysis; its graph cache is "
+            "not required and no live extraction will be attempted (repeatable)"
+        ),
+    )
+    parser.add_argument(
         "--allow-missing",
         action="store_true",
         help=(
@@ -59,7 +68,9 @@ def main() -> None:
         test_sources=test_sources,
     )
     manifest = json.loads(manifest_output.read_text(encoding="utf-8"))
-    report = verify_kg_cache(cfg, selected)
+    report = verify_kg_cache(
+        cfg, selected, excluded_source_ids=args.exclude_source_id
+    )
     report.update({
         "qa_sample": {
             "total": args.qa_sample_size,
