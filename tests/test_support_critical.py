@@ -433,6 +433,28 @@ def test_scalar_verifier_schema_failure_is_cached_as_conservative_unknown(tmp_pa
     assert replay.verdict == "unknown" and replay.cache_hit and replay.protocol_fallback
 
 
+def test_scalar_verifier_transient_exhaustion_is_cached_as_conservative_unknown(tmp_path):
+    cfg = _cfg(tmp_path)
+
+    class ExhaustedTimeout(CriticalClaimVerifier):
+        calls = 0
+
+        def _retry_validated_json(self, messages, schema, name, validator):  # noqa: ARG002
+            self.calls += 1
+            raise TimeoutError("gateway read timeout")
+
+    writer = ExhaustedTimeout(cfg, embedder=DictEmbedder())
+    first = writer.verify_claim("Alpha has one.", "Alpha has one.", None)
+    assert first.verdict == "unknown"
+    assert first.protocol_fallback and first.fallback_reason == "transient_exhausted"
+    assert writer.calls == 1
+    replay = CriticalClaimVerifier(cfg, cache_only=True, embedder=DictEmbedder()).verify_claim(
+        "Alpha has one.", "Alpha has one.", None
+    )
+    assert replay.verdict == "unknown" and replay.cache_hit and replay.protocol_fallback
+    assert replay.fallback_reason == "transient_exhausted"
+
+
 def test_corrupt_live_claim_cache_is_recomputed_but_cache_only_stays_strict(tmp_path):
     cfg = _cfg(tmp_path)
     response = "Alpha has one."

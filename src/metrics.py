@@ -323,6 +323,10 @@ def score_response(
                 audit["evidence"] = [span.to_dict() for span in decision.evidence]
                 audit["verdict"] = decision.verdict
                 audit["verifier_cache_hit"] = decision.cache_hit
+                audit["verifier_protocol_fallback"] = bool(
+                    getattr(decision, "protocol_fallback", False)
+                )
+                audit["verifier_fallback_reason"] = getattr(decision, "fallback_reason", None)
                 if decision.verdict == "entailed":
                     entailed_edges += 1
                     audit["status"] = "aligned" if alignment.matched else "entailed_from_text"

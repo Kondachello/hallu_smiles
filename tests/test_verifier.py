@@ -155,9 +155,10 @@ def test_verifier_parser_never_repairs_or_weakens_schema(content, error):
         _parse_verdict(content)
 
 
-def test_verifier_fails_fast_on_parse_error_and_retries_timeout(tmp_path):
+def test_verifier_caches_conservative_unknown_after_exhausted_protocol_or_timeout(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.llm.max_retries = 3
+    cfg.relation_verifier.max_protocol_retries = 2
 
     class ParseFailure(RelationVerifier):
         calls = 0
@@ -167,14 +168,21 @@ def test_verifier_fails_fast_on_parse_error_and_retries_timeout(tmp_path):
             raise StructuredOutputParseError("bare Relation-style response")
 
     deterministic = ParseFailure(cfg)
-    with pytest.raises(RelationVerifierError, match="relation verifier failed") as caught:
-        deterministic.verify(
-            ("Paris", "is capital of", "France"),
-            "Paris is the capital of France.",
-            None,
-        )
-    assert isinstance(caught.value.__cause__, StructuredOutputParseError)
-    assert deterministic.calls == 1
+    first = deterministic.verify(
+        ("Paris", "is capital of", "France"),
+        "Paris is the capital of France.",
+        None,
+    )
+    replay = deterministic.verify(
+        ("Paris", "is capital of", "France"),
+        "Paris is the capital of France.",
+        None,
+    )
+    assert first.verdict == "unknown"
+    assert first.protocol_fallback and first.fallback_reason == "structured_output_exhausted"
+    assert deterministic.calls == 2
+    assert replay.cache_hit and replay.protocol_fallback
+    assert replay.fallback_reason == "structured_output_exhausted"
 
     class TimeoutThenSuccess(RelationVerifier):
         calls = 0
@@ -193,3 +201,35 @@ def test_verifier_fails_fast_on_parse_error_and_retries_timeout(tmp_path):
     )
     assert verdict.verdict == "entailed"
     assert transient.calls == 3
+
+    class AlwaysTimeout(RelationVerifier):
+        calls = 0
+
+        def _call_llm(self, triple, evidence):  # noqa: ARG002
+            self.calls += 1
+            raise TimeoutError("temporary verifier timeout")
+
+    timeout = AlwaysTimeout(cfg)
+    fallback = timeout.verify(
+        ("Berlin", "is in", "Germany"),
+        "Berlin is in Germany.",
+        None,
+    )
+    assert fallback.verdict == "unknown"
+    assert fallback.protocol_fallback and fallback.fallback_reason == "transient_exhausted"
+    assert timeout.calls == 3
+
+
+def test_verifier_keeps_deterministic_configuration_errors_hard(tmp_path):
+    class InvalidRequest(RelationVerifier):
+        def _call_llm(self, triple, evidence):  # noqa: ARG002
+            raise ValueError("bad request configuration")
+
+    verifier = InvalidRequest(_cfg(tmp_path))
+    with pytest.raises(RelationVerifierError, match="relation verifier failed") as caught:
+        verifier.verify(
+            ("Paris", "is capital of", "France"),
+            "Paris is the capital of France.",
+            None,
+        )
+    assert isinstance(caught.value.__cause__, ValueError)

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from src.extract import Graph
 from src.matching import RefGraph
 from src.metrics import ScoreResult, score_response
-from src.verifier import FakeRelationVerifier
+from src.verifier import EvidenceSpan, FakeRelationVerifier, RelationVerdict
 
 
 def mcfg():
@@ -50,6 +50,27 @@ def test_grounded_unknown_is_not_support():
     assert result.RP_entailed_cond == 0.0
     assert result.RP_support == 0.0
     assert result.relation_audits[0]["status"] == "grounded_unknown"
+
+
+def test_relation_fallback_is_explicitly_audited_as_unknown():
+    class FallbackVerifier:
+        def verify(self, canonical_triple, context, query, *, matching_params=None):  # noqa: ARG002
+            return RelationVerdict(
+                "unknown",
+                (EvidenceSpan("context", 0, 0, 1, "France", 1),),
+                protocol_fallback=True,
+                fallback_reason="transient_exhausted",
+            )
+
+    ref = RefGraph({"france", "berlin"}, set(), mcfg(), embedder=None)
+    answer = Graph({"France", "Berlin"}, {("France", "is in", "Berlin")})
+    result = score_response(
+        answer, ref, Graph.empty(), Graph.empty(), context="France and Berlin.", verifier=FallbackVerifier(),
+    )
+    audit = result.relation_audits[0]
+    assert audit["status"] == "grounded_unknown"
+    assert audit["verifier_protocol_fallback"] is True
+    assert audit["verifier_fallback_reason"] == "transient_exhausted"
 
 
 def test_contradicted_relation_is_not_support_even_with_grounded_endpoints():

@@ -91,6 +91,12 @@ relation_verifier:
   cache_dir: ".cache/verdicts"
   prompt_version: "relation-entailment-v1"
   max_evidence_sentences: 4
+  # A native-schema response can still very rarely be malformed or truncated.
+  # Reissue only this scalar decision a small, bounded number of times.  If
+  # it remains invalid, the verifier records an explicitly marked ``unknown``
+  # rather than making an unsupported positive inference or aborting a long
+  # cache-backed run.
+  max_protocol_retries: 3
 
 # A separate protocol: it does not mutate historical strict/support caches or
 # their formulas.  Clear claims without direct evidence are ``unsupported``;

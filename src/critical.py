@@ -115,10 +115,15 @@ class CriticalVerdict:
     evidence: tuple[EvidenceSpan, ...]
     cache_hit: bool = False
     protocol_fallback: bool = False
+    fallback_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.verdict not in CRITICAL_VERDICTS:
             raise ValueError(f"unsupported critical verdict {self.verdict!r}")
+        if self.protocol_fallback != (self.fallback_reason is not None):
+            raise ValueError("critical fallback provenance must be explicit")
+        if self.fallback_reason is not None and self.verdict != "unknown":
+            raise ValueError("critical fallback must be an unknown verdict")
 
 
 def claim_risk(verdict: str | None, unknown_risk: float) -> float:
@@ -994,6 +999,12 @@ class CriticalClaimVerifier(_CachedComponent):
             return CriticalVerdict(
                 str(cached["verdict"]), tuple(evidence), cache_hit=True,
                 protocol_fallback=bool(cached.get("_hallu_protocol_fallback", False)),
+                fallback_reason=(
+                    str(cached["_hallu_fallback_reason"])
+                    if cached.get("_hallu_protocol_fallback", False)
+                    and isinstance(cached.get("_hallu_fallback_reason"), str)
+                    else ("structured_output_exhausted" if cached.get("_hallu_protocol_fallback", False) else None)
+                ),
             )
         if self.cache_only:
             raise CacheOnlyMissError(self.component, key, self.cache_dir / f"{key}.json")
@@ -1020,21 +1031,37 @@ class CriticalClaimVerifier(_CachedComponent):
                 _validated_critical_verdict,
             )
             protocol_fallback = False
+            fallback_reason = None
         except (CriticalOutputLimitError, StructuredOutputParseError, StructuredOutputSchemaError):
             # There is no defensible positive/negative inference when a scalar
             # verifier repeatedly violates its own schema. ``unknown`` is the
             # only conservative four-way result and remains train-tunable.
             verdict = "unknown"
             protocol_fallback = True
+            fallback_reason = "structured_output_exhausted"
         except Exception as exc:  # noqa: BLE001
-            raise CriticalProtocolError(f"critical claim verification failed for {claim!r}") from exc
+            if is_retryable_llm_exception(exc):
+                # After the finite timeout/5xx budget, a scalar factual
+                # decision has no defensible polarity. Preserve the completed
+                # cache work and let train-tuned ``unknown`` handling absorb
+                # this explicitly marked outcome.
+                verdict = "unknown"
+                protocol_fallback = True
+                fallback_reason = "transient_exhausted"
+            else:
+                raise CriticalProtocolError(f"critical claim verification failed for {claim!r}") from exc
         payload: dict[str, Any] = {"verdict": verdict}
         if protocol_fallback:
             payload["_hallu_protocol_fallback"] = True
+            payload["_hallu_fallback_reason"] = fallback_reason
         self._save(key, payload)
         self._record(key, time.perf_counter() - start, cached=False)
         return CriticalVerdict(
-            verdict, tuple(evidence), cache_hit=False, protocol_fallback=protocol_fallback
+            verdict,
+            tuple(evidence),
+            cache_hit=False,
+            protocol_fallback=protocol_fallback,
+            fallback_reason=fallback_reason,
         )
 
     # Interface parity with RelationVerifier for graph-edge scoring.
@@ -1071,6 +1098,7 @@ class CriticalClaimPipeline:
                 "verdict": decision.verdict,
                 "verifier_cache_hit": decision.cache_hit,
                 "verifier_protocol_fallback": decision.protocol_fallback,
+                "verifier_fallback_reason": decision.fallback_reason,
             })
         return audits
 

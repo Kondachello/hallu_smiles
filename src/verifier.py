@@ -2,13 +2,17 @@
 
 The verifier is deliberately separate from KG extraction: it receives only a
 canonical triple plus short spans from the original context/query and returns
-one of entailed, contradicted, or unknown.
+one of entailed, contradicted, or unknown.  Exhausted transient transport and
+structured-output failures are persisted as explicitly marked ``unknown``
+decisions: this keeps a long cache-backed run resumable without treating a
+failed model call as positive evidence.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -34,6 +38,7 @@ from .retry import StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponential
 
 
 VERDICTS = frozenset({"entailed", "contradicted", "unknown"})
+FALLBACK_REASONS = frozenset({"structured_output_exhausted", "transient_exhausted"})
 VERDICT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -83,10 +88,17 @@ class RelationVerdict:
     verdict: str
     evidence: tuple[EvidenceSpan, ...]
     cache_hit: bool = False
+    protocol_fallback: bool = False
+    fallback_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.verdict not in VERDICTS:
             raise ValueError(f"unsupported relation verdict {self.verdict!r}")
+        if self.protocol_fallback != (self.fallback_reason is not None):
+            raise ValueError("relation fallback provenance must be explicit")
+        if self.fallback_reason is not None:
+            if self.verdict != "unknown" or self.fallback_reason not in FALLBACK_REASONS:
+                raise ValueError("relation fallback must be an allowed unknown verdict")
 
 
 def select_evidence(
@@ -190,6 +202,9 @@ class RelationVerifier:
         if self.request_timeout_s <= 0:
             raise ValueError("llm.request_timeout_s must be positive")
         self.max_sentences = int(verifier_cfg.max_evidence_sentences)
+        self.max_protocol_retries = int(config_value(verifier_cfg, "max_protocol_retries", 3))
+        if self.max_protocol_retries < 1:
+            raise ValueError("relation_verifier.max_protocol_retries must be positive")
         self.prompt_version = str(verifier_cfg.prompt_version)
         self.stopwords = set(getattr(cfg.matching, "stopwords", []) or [])
         self.cache_dir = Path(verifier_cfg.cache_dir)
@@ -220,7 +235,14 @@ class RelationVerifier:
         if cached is not None:
             if self.usage is not None:
                 self.usage.record_call("relation_verifier", key, 0.0, cached=True)
-            return RelationVerdict(cached, tuple(evidence), cache_hit=True)
+            verdict, protocol_fallback, fallback_reason = cached
+            return RelationVerdict(
+                verdict,
+                tuple(evidence),
+                cache_hit=True,
+                protocol_fallback=protocol_fallback,
+                fallback_reason=fallback_reason,
+            )
         if self.cache_only:
             raise CacheOnlyMissError(
                 "relation_verifier", key, self.cache_dir / f"{key}.json"
@@ -228,37 +250,94 @@ class RelationVerifier:
 
         start = time.perf_counter()
         try:
-            verdict = None
-            for attempt in Retrying(
-                # ``0`` delegates the final deadline to the enclosing Job and
-                # keeps polling Vertex after transient 429/5xx responses.
-                stop=(
-                    stop_never if self.max_retries == 0
-                    else StopAfterAttemptsExceptRateLimit(self.max_retries)
-                ),
-                wait=WaitRetryAfterOrExponentialJitter(
-                    self.backoff_base,
-                    self.backoff_max,
-                    rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
-                ),
-                retry=retry_if_exception(is_retryable_llm_exception),
-                before_sleep=(
-                    (lambda state: self.usage.record_retry(
-                        "relation_verifier", state.outcome.exception()
-                    )) if self.usage is not None else (lambda state: None)
-                ),
-                reraise=True,
-            ):
-                with attempt:
-                    verdict = self._call_llm(canonical_triple, evidence)
-            assert verdict is not None
+            verdict, protocol_fallback, fallback_reason = self._resolve_verdict(
+                canonical_triple, evidence
+            )
         except Exception as exc:  # noqa: BLE001
             raise RelationVerifierError(f"relation verifier failed for {canonical_triple!r}") from exc
         elapsed = time.perf_counter() - start
-        self._save_cache(key, verdict)
+        self._save_cache(
+            key,
+            verdict,
+            protocol_fallback=protocol_fallback,
+            fallback_reason=fallback_reason,
+        )
         if self.usage is not None:
             self.usage.record_call("relation_verifier", key, elapsed, cached=False)
-        return RelationVerdict(verdict, tuple(evidence), cache_hit=False)
+        return RelationVerdict(
+            verdict,
+            tuple(evidence),
+            cache_hit=False,
+            protocol_fallback=protocol_fallback,
+            fallback_reason=fallback_reason,
+        )
+
+    def _resolve_verdict(
+        self,
+        canonical_triple: tuple[str, str, str],
+        evidence: list[EvidenceSpan],
+    ) -> tuple[str, bool, str | None]:
+        """Return a scalar verdict without letting one bad response kill a Job.
+
+        Transport retries and malformed-output retries are intentionally
+        separate.  ``429`` remains unlimited through the transport retry
+        policy; a timeout/5xx is bounded.  Neither class ever becomes
+        ``entailed`` merely because the provider did not return a valid answer.
+        """
+        for protocol_attempt in range(self.max_protocol_retries):
+            try:
+                return self._call_with_transient_retries(canonical_triple, evidence), False, None
+            except (StructuredOutputParseError, StructuredOutputSchemaError) as exc:
+                if protocol_attempt + 1 >= self.max_protocol_retries:
+                    return "unknown", True, "structured_output_exhausted"
+                if self.usage is not None:
+                    self.usage.record_retry("relation_verifier", exc)
+                ceiling = min(
+                    self.backoff_max,
+                    self.backoff_base * (2 ** protocol_attempt),
+                )
+                if ceiling > 0:
+                    time.sleep(random.uniform(0.0, ceiling))
+            except Exception as exc:  # noqa: BLE001
+                # A finite transient retry budget protects against requests
+                # which may have reached the upstream model but timed out.
+                # Authentication, model, request, and other deterministic
+                # configuration errors remain hard failures.
+                if is_retryable_llm_exception(exc):
+                    return "unknown", True, "transient_exhausted"
+                raise
+        raise AssertionError("unreachable relation verifier protocol state")
+
+    def _call_with_transient_retries(
+        self,
+        canonical_triple: tuple[str, str, str],
+        evidence: list[EvidenceSpan],
+    ) -> str:
+        verdict: str | None = None
+        for attempt in Retrying(
+            # ``0`` delegates the final deadline to the enclosing Job and
+            # keeps polling Vertex after transient 429/5xx responses.
+            stop=(
+                stop_never if self.max_retries == 0
+                else StopAfterAttemptsExceptRateLimit(self.max_retries)
+            ),
+            wait=WaitRetryAfterOrExponentialJitter(
+                self.backoff_base,
+                self.backoff_max,
+                rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
+            ),
+            retry=retry_if_exception(is_retryable_llm_exception),
+            before_sleep=(
+                (lambda state: self.usage.record_retry(
+                    "relation_verifier", state.outcome.exception()
+                )) if self.usage is not None else (lambda state: None)
+            ),
+            reraise=True,
+        ):
+            with attempt:
+                verdict = self._call_llm(canonical_triple, evidence)
+        assert verdict is not None
+        return verdict
 
     def _call_llm(self, triple: tuple[str, str, str], evidence: list[EvidenceSpan]) -> str:
         try:
@@ -351,7 +430,7 @@ class RelationVerifier:
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
-    def _load_cache(self, key: str) -> str | None:
+    def _load_cache(self, key: str) -> tuple[str, bool, str | None] | None:
         # Historical support-verdict namespaces are immutable read-through
         # inputs.  A malformed primary entry must not hide a compatible,
         # validated verdict in a later root.
@@ -360,15 +439,38 @@ class RelationVerifier:
                 payload = json.loads((root / f"{key}.json").read_text(encoding="utf-8"))
                 verdict = payload.get("verdict")
                 if verdict in VERDICTS:
-                    return verdict
+                    protocol_fallback = bool(payload.get("_hallu_protocol_fallback", False))
+                    fallback_reason = payload.get("_hallu_fallback_reason")
+                    if protocol_fallback:
+                        if fallback_reason not in FALLBACK_REASONS or verdict != "unknown":
+                            continue
+                        return str(verdict), True, str(fallback_reason)
+                    if fallback_reason is not None:
+                        continue
+                    return str(verdict), False, None
             except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
                 continue
         return None
 
-    def _save_cache(self, key: str, verdict: str) -> None:
+    def _save_cache(
+        self,
+        key: str,
+        verdict: str,
+        *,
+        protocol_fallback: bool = False,
+        fallback_reason: str | None = None,
+    ) -> None:
+        if protocol_fallback != (fallback_reason is not None):
+            raise ValueError("relation cache fallback provenance must be explicit")
+        if protocol_fallback and (verdict != "unknown" or fallback_reason not in FALLBACK_REASONS):
+            raise ValueError("relation fallback cache must be an allowed unknown verdict")
         dest = self.cache_dir / f"{key}.json"
         tmp = dest.with_name(f"{key}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps({"verdict": verdict}) + "\n", encoding="utf-8")
+        payload: dict[str, Any] = {"verdict": verdict}
+        if protocol_fallback:
+            payload["_hallu_protocol_fallback"] = True
+            payload["_hallu_fallback_reason"] = fallback_reason
+        tmp.write_text(json.dumps(payload) + "\n", encoding="utf-8")
         os.replace(tmp, dest)
 
 
