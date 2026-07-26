@@ -21,7 +21,10 @@ parser.add_argument("--run-id", required=True)
 parser.add_argument("--qa-sample-size", type=int, default=100)
 parser.add_argument("--qa-test-fraction", default="0.2")
 parser.add_argument("--sample-seed", type=int, default=42)
-parser.add_argument("--replay-count", type=int, default=1)
+parser.add_argument(
+    "--replay-count", default="1",
+    help="number of fully-cached records to replay, or 'all' for every complete record",
+)
 parser.add_argument("--replay-selection-seed", type=int, default=20260722)
 args = parser.parse_args()
 

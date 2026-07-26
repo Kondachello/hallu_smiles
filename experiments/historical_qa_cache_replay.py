@@ -34,11 +34,22 @@ def _fully_cached(records: list[dict[str, Any]], coverage: Mapping[str, Any]) ->
 
 
 def _select_replay_records(
-    records: list[dict[str, Any]], coverage: Mapping[str, Any], *, replay_count: int, replay_selection_seed: int,
+    records: list[dict[str, Any]], coverage: Mapping[str, Any], *, replay_count: int | str, replay_selection_seed: int,
 ) -> list[dict[str, Any]]:
+    compatible = _fully_cached(records, coverage)
+    if str(replay_count) == "all":
+        # Replay every record whose response, context, and query graphs are all
+        # present in the historical cache.  Order is deterministic (by response_id)
+        # so the selection is reproducible without a sampling seed.
+        if not compatible:
+            raise RuntimeError(
+                "historical cache has no selected QA record with response, context, and query graphs: "
+                f"requested=all, available={len(compatible)}"
+            )
+        return sorted(compatible, key=lambda record: str(record["response_id"]))
+    replay_count = int(replay_count)
     if replay_count < 1:
         raise ValueError("replay_count must be positive")
-    compatible = _fully_cached(records, coverage)
     if len(compatible) < replay_count:
         raise RuntimeError(
             "historical cache has no selected QA record with response, context, and query graphs: "
@@ -59,7 +70,7 @@ def run_historical_qa_cache_controlled_replay(
     qa_sample_size: int = 100,
     qa_test_fraction: str = "0.2",
     sample_seed: int = 42,
-    replay_count: int = 1,
+    replay_count: int | str = 1,
     replay_selection_seed: int = 20260722,
     detector_factory: Callable[..., Any] | None = None,
 ) -> tuple[RunArchive, dict[str, Any]]:
@@ -186,7 +197,8 @@ def run_historical_qa_cache_controlled_replay(
         "selected_response_id": selected_records[0]["response_id"],
         "selected_source_id": selected_records[0]["source_id"],
         "selected_response_ids": selected_ids,
-        "replay_count": replay_count,
+        "replay_count": len(selected_ids),
+        "replay_count_requested": replay_count,
         "replay_selection_seed": replay_selection_seed,
         "historical_cache_root": str(source.root),
         "historical_lineage_id": lineage.get("lineage_id"),

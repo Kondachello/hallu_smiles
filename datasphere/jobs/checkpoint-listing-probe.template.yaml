@@ -28,6 +28,26 @@ cmd: >-
     done;
     echo "=== depth 3 (e.g. support-critical/<namespace>) ===";
     find "$PARENT" -mindepth 3 -maxdepth 3 -type d 2>&1 | sort;
+    echo;
+    echo "=== file counts and sample filenames in each baseline-v1-*/kg ===";
+    for kgdir in $(find "$PARENT" -mindepth 3 -maxdepth 3 -type d -name kg 2>/dev/null | sort); do
+      echo "--- $kgdir ---";
+      echo "file count: $(find "$kgdir" -type f 2>/dev/null | wc -l)";
+      find "$kgdir" -type f 2>/dev/null | head -5;
+    done;
+    echo;
+    echo "=== EVERY checkpoint-identity.json anywhere under $PARENT ===";
+    for idf in $(find "$PARENT" -type f -name checkpoint-identity.json 2>/dev/null | sort); do
+      echo "--- $idf ---"; cat "$idf" 2>&1; echo;
+    done;
+    echo "=== EVERY run_metadata.json anywhere under $PARENT ===";
+    for rmf in $(find "$PARENT" -type f -name run_metadata.json 2>/dev/null | sort); do
+      echo "--- $rmf ---"; cat "$rmf" 2>&1; echo;
+    done;
+    echo "=== all top-level files (not dirs) directly inside qa-750-test-150-cv-5/baseline-v1-* ===";
+    find "$PARENT/qa-750-test-150-cv-5" -mindepth 2 -maxdepth 2 -type f 2>&1 | sort;
+    echo "=== all top-level files directly inside qa-750-test-150-cv-5/support-critical/support-critical-v1-* ===";
+    find "$PARENT/qa-750-test-150-cv-5/support-critical" -mindepth 2 -maxdepth 2 -type f 2>&1 | sort;
   } > "$RUN_ROOT/checkpoint-listing.txt" 2>&1 || true;
   cat "$RUN_ROOT/checkpoint-listing.txt"'
 env:
