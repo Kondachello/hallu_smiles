@@ -756,6 +756,14 @@ class AtomicClaimExtractor(_CachedComponent):
             for chunk in _answer_chunks(response, self.chunk_chars):
                 claims.extend(self._extract_chunk(chunk))
         except Exception as exc:  # noqa: BLE001
+            if is_retryable_llm_exception(exc):
+                # A transport failure can occur while recursively handling a
+                # preceding output-limit exception.  Do not let that unusual
+                # exception context discard the whole experiment: preserve
+                # all answer spans in an explicit, cacheable fallback.
+                claims = _sentence_fallback_claims(response, "atomic_fallback_sentence")
+                self._save_claims(key, claims)
+                return claims
             raise CriticalProtocolError("atomic claim extraction failed") from exc
         merged = merge_claims(claims)
         # Index the deterministic leaf artifacts under the historical
@@ -942,6 +950,13 @@ class FullContextReviewer(_CachedComponent):
             for chunk in _answer_chunks(response, self.chunk_chars):
                 claims.extend(self._review_chunk(chunk, context, query, known_claims))
         except Exception as exc:  # noqa: BLE001
+            if is_retryable_llm_exception(exc):
+                # Keep the coverage layer restartable when a provider outage
+                # interrupts recursive output-limit segmentation.  The
+                # fallback remains explicit and cache-only replayable.
+                claims = _sentence_fallback_claims(response, "global_review_fallback_sentence")
+                self._save_claims(key, claims)
+                return claims
             raise CriticalProtocolError("full-context coverage review failed") from exc
         merged = merge_claims(claims)
         self._save_claims(key, merged)

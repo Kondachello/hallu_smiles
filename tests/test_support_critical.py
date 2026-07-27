@@ -478,6 +478,40 @@ def test_transient_claim_extraction_and_coverage_preserve_sentence_candidates(tm
     assert FullContextReviewer(cfg, cache_only=True).review(response, "", None, []) == reviewed
 
 
+def test_recursive_claim_and_coverage_rate_limit_context_preserves_replayable_candidates(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.support_critical.claim_extractor.chunk_chars = 5
+    cfg.support_critical.coverage_reviewer.chunk_chars = 5
+    response = "Alpha has one. Beta has two."
+
+    class RateLimitError(Exception):
+        pass
+
+    class InterruptedAtomic(AtomicClaimExtractor):
+        def _extract_chunk(self, chunk):  # noqa: ARG002
+            try:
+                raise CriticalOutputLimitError("previous segment hit output ceiling")
+            except CriticalOutputLimitError:
+                raise RateLimitError("Vertex capacity is temporarily exhausted")
+
+    extracted = InterruptedAtomic(cfg).extract(response)
+    assert extracted
+    assert all(claim.sources == ("atomic_fallback_sentence",) for claim in extracted)
+    assert AtomicClaimExtractor(cfg, cache_only=True).extract(response) == extracted
+
+    class InterruptedCoverage(FullContextReviewer):
+        def _review_chunk(self, chunk, context, query, known_claims):  # noqa: ARG002
+            try:
+                raise CriticalOutputLimitError("previous segment hit output ceiling")
+            except CriticalOutputLimitError:
+                raise RateLimitError("Vertex capacity is temporarily exhausted")
+
+    reviewed = InterruptedCoverage(cfg).review(response, "", None, [])
+    assert reviewed
+    assert all(claim.sources == ("global_review_fallback_sentence",) for claim in reviewed)
+    assert FullContextReviewer(cfg, cache_only=True).review(response, "", None, []) == reviewed
+
+
 def test_corrupt_live_claim_cache_is_recomputed_but_cache_only_stays_strict(tmp_path):
     cfg = _cfg(tmp_path)
     response = "Alpha has one."

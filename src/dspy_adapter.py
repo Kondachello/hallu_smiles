@@ -876,28 +876,7 @@ def is_retryable_llm_exception(exc: BaseException) -> bool:
         "SchemaError",
         "ValidationError",
     }
-    if any(
-        isinstance(item, StructuredOutputError)
-        or type(item).__name__ in deterministic_names
-        for item in chain
-    ):
-        return False
-
     retry_statuses = {408, 409, 425, 429}
-    for item in chain:
-        response = getattr(item, "response", None)
-        status = getattr(item, "status_code", None)
-        if status is None and response is not None:
-            status = getattr(response, "status_code", None)
-        if status is not None:
-            try:
-                numeric_status = int(status)
-                return numeric_status in retry_statuses or 500 <= numeric_status < 600
-            except (TypeError, ValueError):
-                return False
-
-    if any(isinstance(item, (TimeoutError, ConnectionError)) for item in chain):
-        return True
     transient_names = {
         "APIConnectionError",
         "APITimeoutError",
@@ -917,8 +896,34 @@ def is_retryable_llm_exception(exc: BaseException) -> bool:
         "ClientConnectorError",
         "ClientOSError",
     }
-    if any(type(item).__name__ in transient_names for item in chain):
-        return True
+
+    # Inspect the exception chain from the current failure outwards.  A
+    # transient exception raised while handling an older parse/limit error
+    # receives that older error as ``__context__`` in Python.  Looking for a
+    # deterministic exception anywhere in the chain would therefore turn a
+    # fresh 429 into a hard failure.  The first recognizable cause wins:
+    # deterministic structured output stays fail-fast, while a newer
+    # transport/provider failure retains its retry/fallback policy.
+    for item in chain:
+        if (
+            isinstance(item, StructuredOutputError)
+            or type(item).__name__ in deterministic_names
+        ):
+            return False
+        response = getattr(item, "response", None)
+        status = getattr(item, "status_code", None)
+        if status is None and response is not None:
+            status = getattr(response, "status_code", None)
+        if status is not None:
+            try:
+                numeric_status = int(status)
+                return numeric_status in retry_statuses or 500 <= numeric_status < 600
+            except (TypeError, ValueError):
+                return False
+        if isinstance(item, (TimeoutError, ConnectionError)):
+            return True
+        if type(item).__name__ in transient_names:
+            return True
 
     # Some LiteLLM/OpenAI compatibility layers discard ``response`` and
     # ``status_code`` while wrapping an otherwise ordinary Exception.  Do not

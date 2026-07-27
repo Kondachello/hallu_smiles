@@ -21,6 +21,7 @@ from src.dspy_adapter import (
     structured_output_settings,
     validate_json_document,
 )
+from src.critical import CriticalOutputLimitError
 from src.retry import (
     StopAfterAttemptsExceptRateLimit,
     WaitRetryAfterOrExponentialJitter,
@@ -565,6 +566,22 @@ def test_retry_classifier_retries_only_transient_failures():
     assert is_retryable_llm_exception(RemoteProtocolError("HTTP2 framing error")) is True
     assert is_retryable_llm_exception(BadRequest()) is False
     assert is_retryable_llm_exception(StructuredOutputSchemaError("bad root")) is False
+
+
+def test_retry_classifier_keeps_newer_rate_limit_when_parse_error_is_only_context():
+    class RateLimitError(Exception):
+        pass
+
+    with pytest.raises(RateLimitError) as raised:
+        try:
+            raise CriticalOutputLimitError("previous response was truncated")
+        except CriticalOutputLimitError:
+            # This mirrors recursive claim segmentation: a fresh provider
+            # rejection receives the handled output-limit error as Python
+            # exception context, but must still be treated as transient.
+            raise RateLimitError("Vertex capacity is temporarily exhausted")
+
+    assert is_retryable_llm_exception(raised.value) is True
 
 
 def test_retry_after_is_read_from_a_wrapped_gateway_response():
