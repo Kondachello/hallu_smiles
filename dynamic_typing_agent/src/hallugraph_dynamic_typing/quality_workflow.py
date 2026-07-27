@@ -28,7 +28,18 @@ from .models import (
 
 
 ROOT_TYPE_ID = "T-ENTITY"
-ALGORITHM_VERSION = "entity-by-entity-nli-v3"
+ALGORITHM_VERSION = "entity-by-entity-nli-v4-best-effort"
+
+# When no proposed semantic type is NLI-confirmed within the attempt budget, the
+# entity would otherwise collapse to the structural root ("entity"), a useless
+# service type. Instead we keep the most plausible proposal ranked by NLI verdict
+# (entailed > neutral > contradicted) and then evidence strength.
+_VERDICT_RANK = {"entailed": 3, "neutral": 2, "contradicted": 1}
+_EVIDENCE_RANK = {
+    EvidenceLevel.SOURCE_ENTAILED: 3,
+    EvidenceLevel.DEFINITION_ONLY: 2,
+    EvidenceLevel.UNKNOWN: 1,
+}
 
 
 def root_type() -> TypeDefinition:
@@ -137,13 +148,17 @@ class QualityTypingWorkflow:
         model: Any,
         invoke_model_nodes: bool,
         verify_nli: Callable[..., NliResult],
-        max_entity_attempts: int = 2,
+        max_entity_attempts: int = 3,
+        retry_on_neutral: bool = True,
     ):
         self.prompts = prompts
         self.model = model
         self.invoke_model_nodes = invoke_model_nodes
         self.verify_nli = verify_nli
         self.max_entity_attempts = max(1, max_entity_attempts)
+        # When True a purely-neutral attempt still triggers another proposal to
+        # seek an entailed type before falling back to the best-effort choice.
+        self.retry_on_neutral = retry_on_neutral
 
     def type_source(
         self,
@@ -171,6 +186,10 @@ class QualityTypingWorkflow:
             accepted_new: dict[str, TypeDefinition] = {}
             previous_attempt: dict[str, Any] | None = None
             last_reason = ""
+            # Every semantic (non-root) type NLI-checked across all attempts, kept so
+            # that an entity with no confirmed type can still fall back to the most
+            # plausible proposal rather than to the useless structural root.
+            best_effort_pool: list[dict[str, Any]] = []
             for attempt in range(1, self.max_entity_attempts + 1):
                 decision, model_event = self._source_decision(
                     source=source,
@@ -311,6 +330,20 @@ class QualityTypingWorkflow:
                     )
                     nli_results.append(result)
                     attempt_results.append(result.model_dump(mode="json"))
+                    if type_id != ROOT_TYPE_ID:
+                        candidate_def = (
+                            proposed[target_ref][1] if target_ref in proposed else types.get(type_id)
+                        )
+                        best_effort_pool.append(
+                            {
+                                "type_id": type_id,
+                                "label": label,
+                                "verdict": result.verdict,
+                                "evidence_level": result.evidence_level,
+                                "definition": candidate_def,
+                                "attempt": attempt,
+                            }
+                        )
                     if type_id == ROOT_TYPE_ID or result.verdict != "contradicted":
                         accepted_ids.append(type_id)
                         if target_ref in proposed:
@@ -336,20 +369,88 @@ class QualityTypingWorkflow:
                     }
                 )
                 semantic_targets = [item for item in targets if item[1] != ROOT_TYPE_ID]
-                semantic_accepted = [item for item in accepted_ids if item != ROOT_TYPE_ID]
+                this_attempt = [item for item in best_effort_pool if item["attempt"] == attempt]
+                attempt_entailed = [item for item in this_attempt if item["verdict"] == "entailed"]
+                attempt_neutral = [item for item in this_attempt if item["verdict"] == "neutral"]
                 last_reason = str(decision["reason"])
-                if semantic_accepted or not semantic_targets or attempt == self.max_entity_attempts:
+                # Stop as soon as a source-entailed type is found.
+                if attempt_entailed:
+                    break
+                # Nothing semantic to type this attempt: stop and let the fallback decide.
+                if not semantic_targets:
+                    break
+                # Neutral candidates exist: accept immediately unless we keep trying for entailed.
+                if attempt_neutral and not self.retry_on_neutral:
+                    break
+                if attempt == self.max_entity_attempts:
                     break
                 previous_attempt = {
                     "attempt": attempt,
                     "decision": decision,
                     "nli_results": attempt_results,
-                    "instruction": "Choose a broader source-supported reusable type; do not repeat a neutral or contradicted claim.",
+                    "instruction": (
+                        "NLI did not source-confirm the previous type. Propose a DIFFERENT, "
+                        "narrower reusable category supported by the evidence spans; do not repeat "
+                        "a neutral or contradicted claim and do not restate the entity name."
+                    ),
                 }
 
             for type_id, definition in accepted_new.items():
                 types.setdefault(type_id, definition)
             semantic_ids = tuple(sorted({type_id for type_id in accepted_ids if type_id != ROOT_TYPE_ID}))
+            if not semantic_ids and best_effort_pool:
+                # No NLI-confirmed type. Rather than collapse to the structural root
+                # ("entity"), keep the most plausible proposal by NLI verdict, then
+                # evidence strength. Ties keep the earliest (most specific) proposal.
+                ranked = sorted(
+                    best_effort_pool,
+                    key=lambda item: (
+                        _VERDICT_RANK.get(item["verdict"], 0),
+                        _EVIDENCE_RANK.get(item["evidence_level"], 0),
+                    ),
+                    reverse=True,
+                )
+                best = ranked[0]
+                chosen_id = str(best["type_id"])
+                definition_obj = best["definition"]
+                if definition_obj is not None:
+                    types.setdefault(
+                        chosen_id,
+                        definition_obj.model_copy(update={"evidence_level": EvidenceLevel.UNKNOWN}),
+                    )
+                if chosen_id in types:
+                    semantic_ids = (chosen_id,)
+                    last_reason = (
+                        f"Best-effort type '{best['label']}' kept after {self.max_entity_attempts} "
+                        f"attempt(s); highest NLI verdict was '{best['verdict']}' with no source-entailed "
+                        f"type. Chosen over the structural root 'entity'."
+                    )
+                    events.append(
+                        {
+                            "event": "node_completed",
+                            "node": "type_best_effort_fallback",
+                            "inputs": {
+                                "entity_id": profile["entity_id"],
+                                "surface_text": profile["surface_text"],
+                                "attempts": self.max_entity_attempts,
+                            },
+                            "outputs": {
+                                "chosen_type_id": chosen_id,
+                                "chosen_label": best["label"],
+                                "chosen_verdict": best["verdict"],
+                                "ranked_candidates": [
+                                    {
+                                        "type_id": item["type_id"],
+                                        "label": item["label"],
+                                        "verdict": item["verdict"],
+                                        "evidence_level": str(item["evidence_level"]),
+                                        "attempt": item["attempt"],
+                                    }
+                                    for item in ranked
+                                ],
+                            },
+                        }
+                    )
             final_ids = semantic_ids or (ROOT_TYPE_ID,)
             for occurrence in profile["occurrences"]:
                 assignments.append(

@@ -249,10 +249,13 @@ class _FixedNli:
     ("verdict", "expected_label", "expected_level"),
     [
         ("neutral", "organization", "definition_only"),
-        ("contradicted", "entity", "source_entailed"),
+        # Contradiction no longer collapses to the useless root "entity": the most
+        # plausible proposal is kept as a best-effort type (evidence level unknown)
+        # so the entity retains an informative label. See quality_workflow v4.
+        ("contradicted", "organization", "unknown"),
     ],
 )
-def test_source_neutral_can_finalize_but_contradiction_falls_back(
+def test_source_neutral_finalizes_and_contradiction_keeps_best_effort_type(
     tmp_path, verdict: str, expected_label: str, expected_level: str
 ) -> None:
     source = SourceInput(

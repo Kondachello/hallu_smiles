@@ -87,7 +87,8 @@ class DynamicTypingAgent:
         retry_jitter_seconds: float = 1.0,
         model_temperature: float = 0.0,
         structured_schema_profile: str = "native",
-        max_entity_attempts: int = 2,
+        max_entity_attempts: int = 3,
+        retry_on_neutral: bool = True,
     ):
         self.prompts = PromptRegistry(prompt_root)
         self.cache = JsonFileCache(cache_root)
@@ -126,6 +127,7 @@ class DynamicTypingAgent:
             raise InputContractError(f"unsupported nli.backend: {nli_backend}")
         self.nli_backend = nli_backend
         self.max_entity_attempts = max(1, max_entity_attempts)
+        self.retry_on_neutral = retry_on_neutral
         self.checkpointer = MemorySaver()
         self.source_graph = self._build_source_graph()
         self.answer_graph = self._build_answer_graph()
@@ -170,7 +172,8 @@ class DynamicTypingAgent:
             retry_jitter_seconds=float(model.get("retry_jitter_seconds", 1)),
             model_temperature=float(model.get("temperature", 0)),
             structured_schema_profile=str(model.get("structured_schema_profile", "native")),
-            max_entity_attempts=int(source_config.get("max_entity_attempts", source_config.get("max_repair_attempts", 2))),
+            max_entity_attempts=int(source_config.get("max_entity_attempts", source_config.get("max_repair_attempts", 3))),
+            retry_on_neutral=bool(source_config.get("retry_on_neutral", True)),
         )
 
     @staticmethod
@@ -198,6 +201,7 @@ class DynamicTypingAgent:
             invoke_model_nodes=self.invoke_model_nodes,
             verify_nli=self._verify_nli,
             max_entity_attempts=self.max_entity_attempts,
+            retry_on_neutral=self.retry_on_neutral,
         )
 
     def _build_source_graph(self):
