@@ -1,0 +1,26 @@
+Prepare a source-only overview for entity-by-entity typing.
+
+SOURCE ID
+{{ source_id }}
+
+POLICY
+{{ policy_json }}
+
+IMMUTABLE KNOWLEDGE GRAPH
+{{ graph_summary_json }}
+
+EVIDENCE SPANS
+{{ evidence_spans_json }}
+
+CONTEXT
+<context>
+{{ context_text }}
+</context>
+
+QUERY
+<query>
+{{ query_text }}
+</query>
+
+Return a concise source summary, reusable type hints, optional hierarchy hints, and
+warnings about relations that must not be interpreted as type assertions.

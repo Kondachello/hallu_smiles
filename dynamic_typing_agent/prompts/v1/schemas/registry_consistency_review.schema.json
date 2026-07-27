@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:registry-consistency-review:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "pair_decisions"],
+  "properties": {
+    "schema_version": {"const": "registry-consistency-review-v1"},
+    "pair_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pair_id", "first_type_id", "second_type_id", "relation", "evidence_span_ids", "evidence_level", "requires_nli", "directional_hypotheses"],
+        "properties": {
+          "pair_id": {"type": "string"},
+          "first_type_id": {"type": "string"},
+          "second_type_id": {"type": "string"},
+          "relation": {"enum": ["equivalent_labels", "first_child_of_second", "second_child_of_first", "siblings", "overlapping", "incompatible", "unknown"]},
+          "evidence_span_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "evidence_level": {"enum": ["source_entailed", "example_supported", "definition_only", "unknown"]},
+          "requires_nli": {"type": "boolean"},
+          "directional_hypotheses": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["direction", "text", "evidence_span_ids"],
+              "properties": {
+                "direction": {"enum": ["first_to_second", "second_to_first"]},
+                "text": {"type": "string", "minLength": 1},
+                "evidence_span_ids": {"type": "array", "items": {"type": "string"}}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

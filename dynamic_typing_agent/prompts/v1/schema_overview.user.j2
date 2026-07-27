@@ -1,0 +1,33 @@
+Analyze the following source-only input and draft a local type schema.
+
+SOURCE ID
+{{ source_id }}
+
+SOURCE LANGUAGE
+{{ source_language }}
+
+POLICY
+{{ policy_json }}
+
+SEED TYPES
+{{ seed_types_json }}
+
+IMMUTABLE GRAPH SUMMARY
+{{ graph_summary_json }}
+
+EVIDENCE SPANS
+{{ evidence_spans_json }}
+
+CONTEXT DATA
+<context>
+{{ context_text }}
+</context>
+
+QUERY DATA
+<query>
+{{ query_text }}
+</query>
+
+Return the smallest useful draft schema. Explain distinctions in structured fields only,
+cite span IDs, and list unresolved questions instead of guessing.
+

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+.cache/
+# Run artifacts are versioned for reproducibility and HTML inspection.
+env.local.ps1
+local_resources/
+.venv-local-live/

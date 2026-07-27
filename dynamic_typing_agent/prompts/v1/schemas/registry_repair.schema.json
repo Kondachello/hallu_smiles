@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:registry-repair:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "operations", "cannot_repair"],
+  "properties": {
+    "schema_version": {"const": "registry-repair-v1"},
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation_id", "operation", "target_ids", "replacement_value", "violation_ids", "evidence_span_ids", "reason"],
+        "properties": {
+          "operation_id": {"type": "string"},
+          "operation": {"enum": ["remove_parent_edge", "remove_alias_edge", "downgrade_status", "restore_unknown", "rename_duplicate_label", "reassign_to_existing_type"]},
+          "target_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "replacement_value": {"type": ["string", "null"]},
+          "violation_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "evidence_span_ids": {"type": "array", "items": {"type": "string"}},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "cannot_repair": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["violation_id", "affected_ids", "reason"],
+        "properties": {
+          "violation_id": {"type": "string"},
+          "affected_ids": {"type": "array", "items": {"type": "string"}},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}
+

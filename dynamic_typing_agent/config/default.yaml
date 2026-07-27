@@ -1,0 +1,65 @@
+contract_version: dynamic-typing-agent-contract-v3
+prompt_set:
+  version: v2
+  root: null
+
+seed_schema:
+  mode: root_only
+  universal_top_types: []
+
+source:
+  dominant_label_language: source
+  chunk_chars: 12000
+  chunk_overlap_chars: 500
+  entity_batch_size: 1
+  max_candidate_types_per_entity: 8
+  max_close_pairs_per_type: 8
+  max_repair_attempts: 2
+  max_entity_attempts: 2
+
+model:
+  backend: fake
+  model: null
+  api_base: null
+  api_key_env: HALLU_GATEWAY_API_KEY
+  temperature: 0.0
+  timeout_seconds: 90
+  max_attempts: 5
+  concurrency: 1
+  structured_output: response_format
+
+nli:
+  backend: fake
+  model: null
+  use_generation_model: true
+  record_correlated_verification: true
+  timeout_seconds: 90
+  max_attempts: 5
+  concurrency: 1
+  verify_every_semantic_assignment: true
+  verify_hierarchy_and_merge: true
+  confidence_threshold: 0.8
+
+persistence:
+  cache_mode: read_write
+  cache_root: .cache/dynamic-typing-agent
+  checkpointer: sqlite
+  checkpoint_path: .cache/dynamic-typing-agent/checkpoints.sqlite3
+  artifacts_root: runs
+
+policy:
+  query_fact_policy: provenance_only
+  allow_multiple_parents: true
+  allow_multi_assignment: true
+  answer_can_extend_registry: false
+  definition_only_can_confirm_alias: false
+  neutral_is_contradiction: false
+  type_can_prove_identity: false
+  frozen_registry_requires_full_coverage: true
+  frozen_registry_final_types_only: true
+
+observability:
+  log_level: INFO
+  log_raw_text: false
+  log_secrets: false
+  record_token_usage: true

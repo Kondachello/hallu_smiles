@@ -1,0 +1,36 @@
+"""Render a self-contained run dashboard and canvas case explorers for KGGen typing runs."""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+
+def read(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def case_html(case: Path) -> str:
+    pipeline = read(case / "pipeline_input.json")
+    source = read(case / "source_registry.json")
+    answer = read(case / "answer_annotations.json") if (case / "answer_annotations.json").is_file() else {"annotations": {"answer_assignments": [], "nli_results": []}}
+    trace = read(case / "execution_trace.json") if (case / "execution_trace.json").is_file() else {"source_events": source.get("artifacts", []), "answer_events": answer.get("artifacts", [])}
+    data = json.dumps({"pipeline":pipeline,"source":source,"answer":answer,"trace":trace}, ensure_ascii=False).replace("<", "\\u003c")
+    return f'''<!doctype html><meta charset="utf-8"><title>KGGen + типизация</title><style>
+body{{margin:0;background:#f5f7f6;color:#17221c;font:15px system-ui}}main{{max-width:1440px;margin:auto;padding:24px}}h1,h2,p{{margin:0 0 10px}}.grid{{display:grid;grid-template-columns:2fr 1fr;gap:18px}}.card{{background:#fff;border:1px solid #d9e4dd;border-radius:14px;padding:16px}}canvas{{width:100%;height:520px;border:1px solid #d9e4dd;border-radius:10px;background:#fbfdfb}}button{{border:1px solid #d9e4dd;background:#fff;padding:8px;border-radius:8px;text-align:left;cursor:pointer}}button:hover,.sel{{background:#e5f5ed;border-color:#176b4c}}#log{{display:grid;gap:7px;max-height:420px;overflow:auto}}pre{{white-space:pre-wrap;overflow:auto;background:#102019;color:#e8f5ed;padding:12px;border-radius:9px;max-height:380px}}.legend{{display:flex;gap:10px;flex-wrap:wrap}}.dot{{width:11px;height:11px;border-radius:50%;display:inline-block}}@media(max-width:850px){{.grid{{grid-template-columns:1fr}}}}
+</style><main><a href="index.html">← Все случаи</a><h1 id="title"></h1><p id="meta"></p><div class="grid"><section class="card"><h2>Граф KGGen и назначенные типы</h2><p>Кликните по вершине: справа появятся типы, доказательства и связанные события.</p><canvas id="graph" aria-label="Граф KGGen"></canvas><div class="legend" id="legend"></div></section><aside class="card"><h2 id="detailTitle">Выберите вершину</h2><div id="detail"></div></aside><section class="card"><h2>Понятный журнал работы</h2><div id="log"></div></section><section class="card"><h2>Подробности выбранного события</h2><pre id="raw">Выберите событие.</pre></section></div></main><script>const D={data};const R=D.source.registry,A=D.answer.annotations,P=D.pipeline;const ass=[...R.assignments,...A.answer_assignments],types=new Map(R.types.map(x=>[x.type_id,x]));const colors=['#176b4c','#2166a5','#a85d14','#8a3ea8','#b33c55','#167c84'];const typeColor=id=>colors[Math.max(0,[...types.keys()].indexOf(id))%colors.length];const graphData=P.kggen.graphs.context;document.querySelector('#title').textContent=P.case_id+' · KGGen → типизация';document.querySelector('#meta').textContent='Источник: '+R.source_id+' · '+graphData.entities.length+' вершин · '+graphData.relations.length+' троек';document.querySelector('#legend').innerHTML=R.types.filter(t=>t.type_id!=='T-ENTITY').map(t=>'<span><i class="dot" style="background:'+typeColor(t.type_id)+'"></i> '+t.label+'</span>').join('');const c=document.querySelector('#graph'),ctx=c.getContext('2d');function fit(){{c.width=c.clientWidth*devicePixelRatio;c.height=c.clientHeight*devicePixelRatio;ctx.scale(devicePixelRatio,devicePixelRatio)}}const nodes=graphData.entities.map((name,i)=>({{name,x:80+(i%4)*(c.clientWidth-160)/3,y:85+Math.floor(i/4)*110}}));function assignment(n){{return ass.find(x=>x.surface_text.toLocaleLowerCase()===n.name.toLocaleLowerCase())}}function draw(){{fit();let w=c.clientWidth,h=c.clientHeight;ctx.clearRect(0,0,w,h);graphData.relations.forEach(r=>{{let a=nodes.find(x=>x.name===r[0]),b=nodes.find(x=>x.name===r[2]);if(!a||!b)return;ctx.strokeStyle='#b7c6bc';ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.fillStyle='#68766e';ctx.fillText(r[1],(a.x+b.x)/2,(a.y+b.y)/2-5)}});nodes.forEach(n=>{{let a=assignment(n),id=a?.type_ids?.[0];ctx.fillStyle=id?typeColor(id):'#7d899f';ctx.beginPath();ctx.arc(n.x,n.y,21,0,Math.PI*2);ctx.fill();ctx.fillStyle='#17221c';ctx.font='12px system-ui';ctx.textAlign='center';ctx.fillText(n.name.length>22?n.name.slice(0,21)+'…':n.name,n.x,n.y+38)}})}}draw();addEventListener('resize',draw);c.onclick=e=>{{let r=c.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top,n=nodes.find(n=>Math.hypot(n.x-x,n.y-y)<27);if(n)selectNode(n)}};function selectNode(n){{let a=assignment(n),labels=(a?.type_ids||[]).map(id=>types.get(id)?.label).join(', ')||'Тип не назначен';document.querySelector('#detailTitle').textContent=n.name;document.querySelector('#detail').innerHTML='<p><b>Типы:</b> '+labels+'</p><p><b>Решение:</b> '+(a?.reason||'В графе KGGen эта вершина не сопоставлена с реестром.')+'</p><p><b>Доказательства:</b> '+((a?.evidence_span_ids||[]).join(', ')||'нет')+'</p>'}}const events=[...(D.trace.source_events||[]),...(D.trace.answer_events||[])];const phrase=e=>({{'schema_overview':'Модель предложила схему и кандидаты типов.','derive_registry':'Кандидаты типов объединены с явными типами графа.','annotate_answer':'Сущностям ответа назначены только типы из замороженного реестра.','nli_answer':'Новые утверждения проверены NLI.','source_cache':'Проверен кэш реестра источника.','segment_source':'Источник разбит на фрагменты-доказательства.','freeze_registry':'Реестр типов заморожен перед обработкой ответа.'}}[e.node]||'Выполнен этап '+e.node+'.');document.querySelector('#log').innerHTML=events.map((e,i)=>'<button data-i="'+i+'"><b>'+phrase(e)+'</b><small> '+e.node+'</small></button>').join('');document.querySelectorAll('#log button').forEach(b=>b.onclick=()=>{{document.querySelector('#raw').textContent=JSON.stringify(events[b.dataset.i],null,2)}});</script>'''
+
+
+def index_html(summary: dict) -> str:
+    rows = summary["cases"]
+    links = "".join(f'<a class="case" href="{x["case_id"]}/kggen-typing-viewer.html"><b>{x["case_id"]}</b><span>{x["status"]}</span></a>' for x in rows)
+    return f'''<!doctype html><meta charset="utf-8"><title>Запуск KGGen + типизация</title><style>body{{margin:0;background:#f5f7f6;color:#17221c;font:16px system-ui}}main{{max-width:1000px;margin:auto;padding:32px}}.case{{display:flex;justify-content:space-between;color:inherit;text-decoration:none;background:#fff;border:1px solid #d9e4dd;border-radius:12px;padding:15px;margin:8px 0}}.case:hover{{background:#e5f5ed;border-color:#176b4c}}span{{color:#176b4c}}</style><main><h1>KGGen → динамическая типизация</h1><p>Выберите пример, чтобы посмотреть исходный текст, граф KGGen, типы и журнал решений.</p>{links}</main>'''
+
+
+def main() -> int:
+    p=argparse.ArgumentParser();p.add_argument('--run',required=True);a=p.parse_args();root=Path(a.run);summary=read(root/'pipeline_summary.json');
+    for row in summary['cases']:
+        case=root/row['case_id']
+        if row['status']=='ok': (case/'kggen-typing-viewer.html').write_text(case_html(case),encoding='utf-8')
+    (root/'index.html').write_text(index_html(summary),encoding='utf-8');print(root/'index.html');return 0
+if __name__=='__main__':raise SystemExit(main())

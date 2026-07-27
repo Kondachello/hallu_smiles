@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:schema-overview:v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_summary", "type_hints", "hierarchy_hints", "unsafe_relation_warnings"],
+  "properties": {
+    "schema_version": {"const": "schema-overview-v2"},
+    "source_summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "type_hints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "definition", "example_entity_surfaces", "evidence_span_ids"],
+        "properties": {
+          "label": {"type": "string", "minLength": 1, "maxLength": 120},
+          "definition": {"type": "string", "minLength": 1, "maxLength": 800},
+          "example_entity_surfaces": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "evidence_span_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+        }
+      }
+    },
+    "hierarchy_hints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["child_label", "parent_label", "evidence_span_ids"],
+        "properties": {
+          "child_label": {"type": "string", "minLength": 1},
+          "parent_label": {"type": "string", "minLength": 1},
+          "evidence_span_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+        }
+      }
+    },
+    "unsafe_relation_warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["relation", "reason"],
+        "properties": {
+          "relation": {"type": "string"},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

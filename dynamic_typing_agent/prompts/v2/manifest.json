@@ -1,0 +1,46 @@
+{
+  "prompt_set": "hallugraph-dynamic-typing",
+  "version": "v2",
+  "entries": [
+    {
+      "prompt_id": "schema_overview",
+      "phase": "source",
+      "system": "schema_overview.system.md",
+      "user": "schema_overview.user.j2",
+      "schema": "schemas/schema_overview.schema.json",
+      "required_variables": ["context_text", "evidence_spans_json", "graph_summary_json", "policy_json", "query_text", "source_id"]
+    },
+    {
+      "prompt_id": "entity_type_decision",
+      "phase": "source",
+      "system": "entity_type_decision.system.md",
+      "user": "entity_type_decision.user.j2",
+      "schema": "schemas/entity_type_decision.schema.json",
+      "required_variables": ["current_registry_json", "entity_profile_json", "overview_json", "policy_json", "previous_attempt_json", "source_id"]
+    },
+    {
+      "prompt_id": "registry_consistency_review",
+      "phase": "source",
+      "system": "registry_consistency_review.system.md",
+      "user": "registry_consistency_review.user.j2",
+      "schema": "schemas/registry_consistency_review.schema.json",
+      "required_variables": ["assignment_examples_json", "overview_json", "policy_json", "registry_json", "source_evidence_json", "source_id"]
+    },
+    {
+      "prompt_id": "answer_typing",
+      "phase": "answer",
+      "system": "answer_typing.system.md",
+      "user": "answer_typing.user.j2",
+      "schema": "schemas/answer_typing.schema.json",
+      "required_variables": ["answer_entity_profile_json", "answer_text", "frozen_registry_json", "policy_json", "previous_attempt_json", "source_evidence_json"]
+    },
+    {
+      "prompt_id": "nli_verification",
+      "phase": "shared",
+      "system": "nli_verification.system.md",
+      "user": "nli_verification.user.j2",
+      "schema": "schemas/nli_verification.schema.json",
+      "required_variables": ["evidence_span_ids_json", "hypothesis", "hypothesis_kind", "policy_json", "premise"]
+    }
+  ]
+}

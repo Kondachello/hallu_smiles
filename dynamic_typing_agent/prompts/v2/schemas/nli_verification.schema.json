@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:nli-verification:v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "verdict", "evidence_level", "supporting_span_ids", "conflicting_span_ids", "confidence", "rationale"],
+  "properties": {
+    "schema_version": {"const": "nli-verification-v2"},
+    "verdict": {"enum": ["entailed", "contradicted", "neutral"]},
+    "evidence_level": {"enum": ["source_entailed", "example_supported", "definition_only", "unknown"]},
+    "supporting_span_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "conflicting_span_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "rationale": {"type": "string", "minLength": 1}
+  }
+}

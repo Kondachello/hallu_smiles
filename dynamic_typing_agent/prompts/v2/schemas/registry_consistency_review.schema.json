@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hallugraph:dynamic-typing:registry-consistency-review:v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "proposals"],
+  "properties": {
+    "schema_version": {"const": "registry-consistency-review-v2"},
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["proposal_id", "action", "first_type_id", "second_type_id", "hypotheses", "evidence_span_ids", "reason"],
+        "properties": {
+          "proposal_id": {"type": "string", "minLength": 1},
+          "action": {"enum": ["child_of", "merge", "keep_separate"]},
+          "first_type_id": {"type": "string", "minLength": 1},
+          "second_type_id": {"type": "string", "minLength": 1},
+          "hypotheses": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text", "evidence_span_ids"],
+              "properties": {
+                "text": {"type": "string", "minLength": 1, "maxLength": 500},
+                "evidence_span_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+              }
+            }
+          },
+          "evidence_span_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
+        }
+      }
+    }
+  }
+}
