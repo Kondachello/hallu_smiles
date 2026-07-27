@@ -14,6 +14,9 @@ llm:
   retry_backoff_base_s: 2
   retry_backoff_max_s: 60
   rate_limit_cooldown_max_s: 900
+  # A prolonged 429 streak is a provider-capacity outage, not useful progress.
+  # Preserve durable caches and end the Job explicitly after this per-request budget.
+  rate_limit_retry_deadline_s: 1800
   concurrency: 4                      # baseline; CPU gateway probe derives 1 in its local config
   structured_output_transport: "none" # gateway job sets native response_format
   structured_output_backend: "vertex"

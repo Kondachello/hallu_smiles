@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence, TypeVar
 
 import numpy as np
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never
+from tenacity import Retrying, retry_if_exception, stop_after_attempt
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .config import resolve_api_key
@@ -33,7 +33,7 @@ from .dspy_adapter import (
     validate_json_document,
 )
 from .matching import Embedder, normalize
-from .retry import StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
+from .retry import RetryHeartbeat, StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
 from .verifier import EvidenceSpan, _sentences
 
 
@@ -383,6 +383,9 @@ class _CachedComponent:
         self.rate_limit_cooldown_max_s = float(
             getattr(cfg.llm, "rate_limit_cooldown_max_s", 900)
         )
+        self.rate_limit_retry_deadline_s = float(
+            getattr(cfg.llm, "rate_limit_retry_deadline_s", 1800)
+        )
         self.prompt_version = str(config_value(section, "prompt_version", "v1"))
         self.cache_dir = Path(str(config_value(section, "cache_dir")))
         raw_read_dirs = config_value(section, "cache_read_dirs", []) or []
@@ -394,6 +397,7 @@ class _CachedComponent:
             or self.max_retries < 0
             or self.request_timeout_s <= 0
             or self.rate_limit_cooldown_max_s < self.backoff_max
+            or self.rate_limit_retry_deadline_s <= 0
         ):
             raise ValueError(f"invalid {self.component} runtime limits")
         if self.max_protocol_retries <= 0:
@@ -528,24 +532,24 @@ class _CachedComponent:
             return isinstance(exc, CriticalRetryableTruncation) or is_retryable_llm_exception(exc)
 
         for attempt in Retrying(
-            # ``0`` keeps retrying only transient 429/5xx/network failures
-            # until the outer DataSphere wall-time deadline. Each completed
-            # artifact is atomically cached before the next claim begins.
+            # ``0`` leaves non-capacity transient retries to the enclosing
+            # Job, while a continuous 429 streak has its own explicit limit.
+            # Each completed artifact is atomically cached before the next
+            # claim begins.
             stop=(
-                stop_never if self.max_retries == 0
-                else StopAfterAttemptsExceptRateLimit(self.max_retries)
+                StopAfterAttemptsExceptRateLimit(
+                    None if self.max_retries == 0 else self.max_retries,
+                    rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
+                )
             ),
             wait=WaitRetryAfterOrExponentialJitter(
                 self.backoff_base,
                 self.backoff_max,
                 rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
+                rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
             ),
             retry=retry_if_exception(should_retry),
-            before_sleep=(
-                (lambda state: self.usage.record_retry(
-                    self.component, state.outcome.exception()
-                )) if self.usage is not None else (lambda state: None)
-            ),
+            before_sleep=RetryHeartbeat(self.component, self.usage),
             reraise=True,
         ):
             with attempt:

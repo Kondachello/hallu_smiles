@@ -875,6 +875,7 @@ def is_retryable_llm_exception(exc: BaseException) -> bool:
         "JSONDecodeError",
         "SchemaError",
         "ValidationError",
+        "RateLimitRetryDeadlineExceeded",
     }
     retry_statuses = {408, 409, 425, 429}
     transient_names = {

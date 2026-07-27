@@ -23,6 +23,8 @@ from src.dspy_adapter import (
 )
 from src.critical import CriticalOutputLimitError
 from src.retry import (
+    RateLimitRetryDeadlineExceeded,
+    RetryHeartbeat,
     StopAfterAttemptsExceptRateLimit,
     WaitRetryAfterOrExponentialJitter,
     is_rate_limit_error,
@@ -615,3 +617,35 @@ def test_rate_limit_waits_past_timeout_budget_but_timeout_does_not():
         5, 60, rate_limit_cooldown_max_seconds=900
     )(state(rate_limit))
     assert 180.0 <= delay <= 185.0
+
+
+def test_rate_limit_deadline_emits_redacted_heartbeat_and_stops_request(capsys):
+    class RateLimitError(Exception):
+        status_code = 429
+
+    class Usage:
+        calls = []
+
+        def record_retry(self, component, exception):
+            self.calls.append((component, exception))
+
+    rate_limit = RateLimitError("do not emit provider details")
+    state = SimpleNamespace(
+        attempt_number=9,
+        outcome=SimpleNamespace(failed=True, exception=lambda: rate_limit),
+        next_action=SimpleNamespace(sleep=17.5),
+    )
+    state._hallu_rate_limit_started_at = __import__("time").monotonic() - 31
+    usage = Usage()
+    RetryHeartbeat("critical_claim_extractor", usage)(state)
+    emitted = capsys.readouterr().out
+    assert '"event": "llm_retry_wait"' in emitted
+    assert '"reason": "http_429"' in emitted
+    assert "do not emit provider details" not in emitted
+    assert usage.calls == [("critical_claim_extractor", rate_limit)]
+
+    with pytest.raises(RateLimitRetryDeadlineExceeded):
+        StopAfterAttemptsExceptRateLimit(
+            12, rate_limit_retry_deadline_seconds=30
+        )(state)
+    assert is_retryable_llm_exception(RateLimitRetryDeadlineExceeded("capacity wait")) is False

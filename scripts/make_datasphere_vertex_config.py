@@ -161,6 +161,15 @@ def main() -> None:
         config = yaml.safe_load(handle)
     if not isinstance(config, dict) or not isinstance(config.get("llm"), dict):
         raise ValueError("base config has no llm mapping")
+    try:
+        rate_limit_retry_deadline_s = float(
+            config["llm"].get("rate_limit_retry_deadline_s", 1800)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("llm.rate_limit_retry_deadline_s must be numeric") from exc
+    if rate_limit_retry_deadline_s <= 0:
+        raise ValueError("llm.rate_limit_retry_deadline_s must be positive")
+    config["llm"]["rate_limit_retry_deadline_s"] = rate_limit_retry_deadline_s
     logical_model = str(config["llm"].get("model", ""))
     manifest = _read_json(Path(args.gateway_manifest))
     _validate_manifest(manifest, logical_model)

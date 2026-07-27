@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never
+from tenacity import Retrying, retry_if_exception, stop_after_attempt
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .dspy_adapter import (
@@ -37,7 +37,7 @@ from .dspy_adapter import (
     is_retryable_llm_exception,
     structured_output_settings,
 )
-from .retry import StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
+from .retry import RetryHeartbeat, StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
 
 
 # --------------------------------------------------------------------------------------
@@ -310,6 +310,13 @@ class KGExtractor:
             raise ValueError(
                 "llm.rate_limit_cooldown_max_s must be at least retry_backoff_max_s"
             )
+        self.rate_limit_retry_deadline_s = float(
+            cfg.llm.get("rate_limit_retry_deadline_s", 1800)
+            if hasattr(cfg.llm, "get")
+            else getattr(cfg.llm, "rate_limit_retry_deadline_s", 1800)
+        )
+        if self.rate_limit_retry_deadline_s <= 0:
+            raise ValueError("llm.rate_limit_retry_deadline_s must be positive")
         self.max_protocol_retries = int(
             config_value(cfg.extraction, "max_protocol_retries", 0)
         )
@@ -928,12 +935,14 @@ class KGExtractor:
         """
         graph: Graph | None = None
         for attempt in Retrying(
-            # ``0`` means retry transient provider failures until the outer
-            # DataSphere wall-time limit.  Completed graph calls are flushed
-            # atomically, so an interrupted Job resumes from cache.
+            # ``0`` leaves non-capacity transient retries to the enclosing
+            # DataSphere Job. A continuous 429 streak has an explicit local
+            # deadline; completed graph calls remain atomic and resumable.
             stop=(
-                stop_never if self.max_retries == 0
-                else StopAfterAttemptsExceptRateLimit(self.max_retries)
+                StopAfterAttemptsExceptRateLimit(
+                    None if self.max_retries == 0 else self.max_retries,
+                    rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
+                )
             ),
             # Honour gateway Retry-After where supplied and otherwise use
             # bounded full-jitter exponential backoff to avoid a quota herd.
@@ -941,11 +950,10 @@ class KGExtractor:
                 self.backoff_base,
                 self.backoff_max,
                 rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
+                rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
             ),
             retry=retry_if_exception(is_retryable_llm_exception),
-            before_sleep=lambda state: self.usage.record_retry(
-                kind, state.outcome.exception()
-            ),
+            before_sleep=RetryHeartbeat(kind, self.usage),
             reraise=True,
         ):
             with attempt:

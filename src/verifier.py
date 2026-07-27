@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from tenacity import Retrying, retry_if_exception, stop_after_attempt, stop_never
+from tenacity import Retrying, retry_if_exception, stop_after_attempt
 
 from .cache import CacheOnlyMissError, config_value, llm_runtime_fingerprint
 from .config import resolve_api_key
@@ -34,7 +34,7 @@ from .dspy_adapter import (
     validate_json_document,
 )
 from .matching import normalize
-from .retry import StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
+from .retry import RetryHeartbeat, StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
 
 
 VERDICTS = frozenset({"entailed", "contradicted", "unknown"})
@@ -194,10 +194,15 @@ class RelationVerifier:
         self.rate_limit_cooldown_max_s = float(
             getattr(cfg.llm, "rate_limit_cooldown_max_s", 900)
         )
+        self.rate_limit_retry_deadline_s = float(
+            getattr(cfg.llm, "rate_limit_retry_deadline_s", 1800)
+        )
         if self.rate_limit_cooldown_max_s < self.backoff_max:
             raise ValueError(
                 "llm.rate_limit_cooldown_max_s must be at least retry_backoff_max_s"
             )
+        if self.rate_limit_retry_deadline_s <= 0:
+            raise ValueError("llm.rate_limit_retry_deadline_s must be positive")
         self.request_timeout_s = float(getattr(cfg.llm, "request_timeout_s", 90))
         if self.request_timeout_s <= 0:
             raise ValueError("llm.request_timeout_s must be positive")
@@ -328,23 +333,22 @@ class RelationVerifier:
     ) -> str:
         verdict: str | None = None
         for attempt in Retrying(
-            # ``0`` delegates the final deadline to the enclosing Job and
-            # keeps polling Vertex after transient 429/5xx responses.
+            # ``0`` delegates non-capacity transient retries to the enclosing
+            # Job; a continuous 429 streak has an explicit local deadline.
             stop=(
-                stop_never if self.max_retries == 0
-                else StopAfterAttemptsExceptRateLimit(self.max_retries)
+                StopAfterAttemptsExceptRateLimit(
+                    None if self.max_retries == 0 else self.max_retries,
+                    rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
+                )
             ),
             wait=WaitRetryAfterOrExponentialJitter(
                 self.backoff_base,
                 self.backoff_max,
                 rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
+                rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
             ),
             retry=retry_if_exception(is_retryable_llm_exception),
-            before_sleep=(
-                (lambda state: self.usage.record_retry(
-                    "relation_verifier", state.outcome.exception()
-                )) if self.usage is not None else (lambda state: None)
-            ),
+            before_sleep=RetryHeartbeat("relation_verifier", self.usage),
             reraise=True,
         ):
             with attempt:
