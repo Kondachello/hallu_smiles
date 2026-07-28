@@ -11,7 +11,7 @@ cmd: >-
   git init source; git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
   git -C source fetch --depth 1 origin __GIT_COMMIT__; git -C source checkout --detach FETCH_HEAD;
   test "$(git -C source rev-parse HEAD)" = "__GIT_COMMIT__";
-  export EXPECTED_SOURCE_COMMIT="__GIT_COMMIT__" DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
+  export EXPECTED_SOURCE_COMMIT="__IMAGE_SOURCE_COMMIT__" DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
   export CHECKPOINT_PARENT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa";
   export QA_SAMPLE_SIZE="__QA_SAMPLE_SIZE__";

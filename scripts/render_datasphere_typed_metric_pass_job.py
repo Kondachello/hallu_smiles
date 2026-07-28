@@ -20,7 +20,12 @@ TEMPLATE = ROOT / "datasphere/jobs/historical-qa-typed-metric-pass.template.yaml
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--commit", required=True)
+    parser.add_argument("--commit", required=True,
+                        help="commit to git-checkout (our code, may differ from the image build commit)")
+    parser.add_argument("--image-source-commit", required=True,
+                        help="commit baked into the pinned runtime image's /opt/hallu/runtime-manifest.json "
+                             "(check_datasphere_vertex_cpu_runtime.py requires exact equality); pass --commit "
+                             "here only if the image was actually rebuilt from that same commit")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--gateway-url", required=True)
     parser.add_argument("--docker-image", required=True)
@@ -37,6 +42,8 @@ def main() -> None:
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", args.run_id):
         raise SystemExit("invalid commit or run id")
+    if not re.fullmatch(r"[0-9a-f]{40}", args.image_source_commit):
+        raise SystemExit("invalid --image-source-commit")
     gateway = urlparse(args.gateway_url)
     if gateway.scheme != "https" or not gateway.netloc or gateway.path.rstrip("/") or gateway.query or gateway.fragment:
         raise SystemExit("--gateway-url must be an HTTPS origin")
@@ -55,7 +62,9 @@ def main() -> None:
     if args.timeout_seconds < 60:
         raise SystemExit("--timeout-seconds must be at least 60")
     rendered = TEMPLATE.read_text(encoding="utf-8")
-    rendered = (rendered.replace("__GIT_COMMIT__", args.commit).replace("__RUN_ID__", args.run_id)
+    rendered = (rendered.replace("__GIT_COMMIT__", args.commit)
+        .replace("__IMAGE_SOURCE_COMMIT__", args.image_source_commit)
+        .replace("__RUN_ID__", args.run_id)
         .replace("__GATEWAY_URL__", f"https://{gateway.netloc}").replace("__DOCKER_IMAGE__", image)
         .replace("__QA_SAMPLE_SIZE__", str(args.qa_sample_size))
         .replace("__REPLAY_COUNT__", str(args.replay_count))

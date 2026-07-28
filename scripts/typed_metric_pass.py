@@ -33,6 +33,8 @@ def main() -> int:
     parser.add_argument("--replay-selection-seed", type=int, default=20260722)
     parser.add_argument("--alpha", type=float, default=0.5,
                         help="CFI_type = alpha*EG_type + (1-alpha)*RP")
+    parser.add_argument("--batch-size", type=int, default=15,
+                        help="flush a batch file every N records (partial results survive crashes)")
     args = parser.parse_args()
 
     summary = run_typed_metric_pass(
@@ -50,6 +52,7 @@ def main() -> int:
         replay_count=args.replay_count,
         replay_selection_seed=args.replay_selection_seed,
         alpha=args.alpha,
+        batch_size=args.batch_size,
     )
     import json
 
