@@ -17,6 +17,10 @@ llm:
   # A prolonged 429 streak is a provider-capacity outage, not useful progress.
   # Preserve durable caches and end the Job explicitly after this per-request budget.
   rate_limit_retry_deadline_s: 1800
+  # The recovery budget also covers alternating 429/5xx/truncation responses.
+  # On expiry components store their explicit conservative fallback instead of
+  # letting one source hold the outer progress counter indefinitely.
+  retry_deadline_s: 90
   concurrency: 4                      # baseline; CPU gateway probe derives 1 in its local config
   structured_output_transport: "none" # gateway job sets native response_format
   structured_output_backend: "vertex"

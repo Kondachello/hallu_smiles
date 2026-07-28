@@ -386,6 +386,7 @@ class _CachedComponent:
         self.rate_limit_retry_deadline_s = float(
             getattr(cfg.llm, "rate_limit_retry_deadline_s", 1800)
         )
+        self.retry_deadline_s = float(getattr(cfg.llm, "retry_deadline_s", 90))
         self.prompt_version = str(config_value(section, "prompt_version", "v1"))
         self.cache_dir = Path(str(config_value(section, "cache_dir")))
         raw_read_dirs = config_value(section, "cache_read_dirs", []) or []
@@ -398,6 +399,7 @@ class _CachedComponent:
             or self.request_timeout_s <= 0
             or self.rate_limit_cooldown_max_s < self.backoff_max
             or self.rate_limit_retry_deadline_s <= 0
+            or self.retry_deadline_s <= 0
         ):
             raise ValueError(f"invalid {self.component} runtime limits")
         if self.max_protocol_retries <= 0:
@@ -540,6 +542,7 @@ class _CachedComponent:
                 StopAfterAttemptsExceptRateLimit(
                     None if self.max_retries == 0 else self.max_retries,
                     rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
+                    retry_deadline_seconds=self.retry_deadline_s,
                 )
             ),
             wait=WaitRetryAfterOrExponentialJitter(
@@ -547,6 +550,7 @@ class _CachedComponent:
                 self.backoff_max,
                 rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
                 rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
+                retry_deadline_seconds=self.retry_deadline_s,
             ),
             retry=retry_if_exception(should_retry),
             before_sleep=RetryHeartbeat(self.component, self.usage),

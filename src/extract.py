@@ -315,8 +315,15 @@ class KGExtractor:
             if hasattr(cfg.llm, "get")
             else getattr(cfg.llm, "rate_limit_retry_deadline_s", 1800)
         )
+        self.retry_deadline_s = float(
+            cfg.llm.get("retry_deadline_s", 90)
+            if hasattr(cfg.llm, "get")
+            else getattr(cfg.llm, "retry_deadline_s", 90)
+        )
         if self.rate_limit_retry_deadline_s <= 0:
             raise ValueError("llm.rate_limit_retry_deadline_s must be positive")
+        if self.retry_deadline_s <= 0:
+            raise ValueError("llm.retry_deadline_s must be positive")
         self.max_protocol_retries = int(
             config_value(cfg.extraction, "max_protocol_retries", 0)
         )
@@ -942,6 +949,7 @@ class KGExtractor:
                 StopAfterAttemptsExceptRateLimit(
                     None if self.max_retries == 0 else self.max_retries,
                     rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
+                    retry_deadline_seconds=self.retry_deadline_s,
                 )
             ),
             # Honour gateway Retry-After where supplied and otherwise use
@@ -951,6 +959,7 @@ class KGExtractor:
                 self.backoff_max,
                 rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
                 rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
+                retry_deadline_seconds=self.retry_deadline_s,
             ),
             retry=retry_if_exception(is_retryable_llm_exception),
             before_sleep=RetryHeartbeat(kind, self.usage),

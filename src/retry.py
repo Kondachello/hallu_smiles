@@ -19,6 +19,16 @@ class RateLimitRetryDeadlineExceeded(RuntimeError):
     """A single request remained capacity-blocked beyond its safe wait budget."""
 
 
+class RetryDeadlineExceeded(RuntimeError):
+    """A retryable request exceeded its total safe recovery budget.
+
+    This differs from :class:`RateLimitRetryDeadlineExceeded`: alternating
+    429, 5xx, and truncated-response failures are still one unavailable
+    request from the experiment's perspective.  They must not reset the
+    budget and pin a source-level progress counter indefinitely.
+    """
+
+
 def transient_http_status(exc: BaseException | None) -> int | None:
     """Return an explicit HTTP status from a wrapped transient exception."""
     for item in _exception_chain(exc):
@@ -97,6 +107,7 @@ class WaitRetryAfterOrExponentialJitter:
         *,
         rate_limit_cooldown_max_seconds: float | None = None,
         rate_limit_retry_deadline_seconds: float | None = None,
+        retry_deadline_seconds: float | None = None,
     ):
         self.base_seconds = max(0.0, float(base_seconds))
         self.max_seconds = max(0.0, float(max_seconds))
@@ -111,11 +122,16 @@ class WaitRetryAfterOrExponentialJitter:
             if rate_limit_retry_deadline_seconds is None
             else float(rate_limit_retry_deadline_seconds)
         )
+        self.retry_deadline_seconds = (
+            None if retry_deadline_seconds is None else float(retry_deadline_seconds)
+        )
         if (
             self.rate_limit_retry_deadline_seconds is not None
             and self.rate_limit_retry_deadline_seconds <= 0
         ):
             raise ValueError("rate_limit_retry_deadline_seconds must be positive when set")
+        if self.retry_deadline_seconds is not None and self.retry_deadline_seconds <= 0:
+            raise ValueError("retry_deadline_seconds must be positive when set")
 
     @staticmethod
     def _rate_limit_started_at(retry_state: Any, now: float) -> float:
@@ -123,6 +139,14 @@ class WaitRetryAfterOrExponentialJitter:
         if started is None:
             started = now
             setattr(retry_state, "_hallu_rate_limit_started_at", started)
+        return float(started)
+
+    @staticmethod
+    def _retry_started_at(retry_state: Any, now: float) -> float:
+        started = getattr(retry_state, "_hallu_retry_started_at", None)
+        if started is None:
+            started = now
+            setattr(retry_state, "_hallu_retry_started_at", started)
         return float(started)
 
     def __call__(self, retry_state: Any) -> float:
@@ -135,8 +159,13 @@ class WaitRetryAfterOrExponentialJitter:
             if is_rate_limited
             else self.max_seconds
         )
+        now = time.monotonic()
+        if self.retry_deadline_seconds is not None:
+            remaining = self.retry_deadline_seconds - (
+                now - self._retry_started_at(retry_state, now)
+            )
+            cap_limit = min(cap_limit, max(0.0, remaining))
         if is_rate_limited and self.rate_limit_retry_deadline_seconds is not None:
-            now = time.monotonic()
             remaining = self.rate_limit_retry_deadline_seconds - (
                 now - self._rate_limit_started_at(retry_state, now)
             )
@@ -171,6 +200,7 @@ class StopAfterAttemptsExceptRateLimit:
         max_attempts: int | None,
         *,
         rate_limit_retry_deadline_seconds: float | None = None,
+        retry_deadline_seconds: float | None = None,
     ):
         if max_attempts is not None and int(max_attempts) < 1:
             raise ValueError("max_attempts must be positive")
@@ -180,17 +210,34 @@ class StopAfterAttemptsExceptRateLimit:
             if rate_limit_retry_deadline_seconds is None
             else float(rate_limit_retry_deadline_seconds)
         )
+        self.retry_deadline_seconds = (
+            None if retry_deadline_seconds is None else float(retry_deadline_seconds)
+        )
         if (
             self.rate_limit_retry_deadline_seconds is not None
             and self.rate_limit_retry_deadline_seconds <= 0
         ):
             raise ValueError("rate_limit_retry_deadline_seconds must be positive when set")
+        if self.retry_deadline_seconds is not None and self.retry_deadline_seconds <= 0:
+            raise ValueError("retry_deadline_seconds must be positive when set")
 
     def __call__(self, retry_state: Any) -> bool:
         outcome = getattr(retry_state, "outcome", None)
         exception = outcome.exception() if outcome is not None and outcome.failed else None
+        now = time.monotonic()
+        started = getattr(retry_state, "_hallu_retry_started_at", None)
+        if started is None:
+            started = now
+            setattr(retry_state, "_hallu_retry_started_at", started)
+        if (
+            self.retry_deadline_seconds is not None
+            and now - float(started) >= self.retry_deadline_seconds
+        ):
+            raise RetryDeadlineExceeded(
+                "retryable request recovery exceeded "
+                f"{self.retry_deadline_seconds:.0f}s"
+            )
         if is_rate_limit_error(exception):
-            now = time.monotonic()
             started = getattr(retry_state, "_hallu_rate_limit_started_at", None)
             if started is None:
                 started = now
@@ -235,6 +282,9 @@ class RetryHeartbeat:
             "attempt": int(getattr(retry_state, "attempt_number", 0)),
             "sleep_seconds": round(float(delay or 0.0), 3),
         }
+        retry_started = getattr(retry_state, "_hallu_retry_started_at", None)
+        if retry_started is not None:
+            payload["retry_seconds"] = round(max(0.0, time.monotonic() - float(retry_started)), 3)
         started = getattr(retry_state, "_hallu_rate_limit_started_at", None)
         if started is not None:
             payload["continuous_429_seconds"] = round(max(0.0, time.monotonic() - float(started)), 3)

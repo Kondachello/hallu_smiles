@@ -170,6 +170,13 @@ def main() -> None:
     if rate_limit_retry_deadline_s <= 0:
         raise ValueError("llm.rate_limit_retry_deadline_s must be positive")
     config["llm"]["rate_limit_retry_deadline_s"] = rate_limit_retry_deadline_s
+    try:
+        retry_deadline_s = float(config["llm"].get("retry_deadline_s", 90))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("llm.retry_deadline_s must be numeric") from exc
+    if retry_deadline_s <= 0:
+        raise ValueError("llm.retry_deadline_s must be positive")
+    config["llm"]["retry_deadline_s"] = retry_deadline_s
     logical_model = str(config["llm"].get("model", ""))
     manifest = _read_json(Path(args.gateway_manifest))
     _validate_manifest(manifest, logical_model)

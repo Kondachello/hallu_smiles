@@ -197,12 +197,15 @@ class RelationVerifier:
         self.rate_limit_retry_deadline_s = float(
             getattr(cfg.llm, "rate_limit_retry_deadline_s", 1800)
         )
+        self.retry_deadline_s = float(getattr(cfg.llm, "retry_deadline_s", 90))
         if self.rate_limit_cooldown_max_s < self.backoff_max:
             raise ValueError(
                 "llm.rate_limit_cooldown_max_s must be at least retry_backoff_max_s"
             )
         if self.rate_limit_retry_deadline_s <= 0:
             raise ValueError("llm.rate_limit_retry_deadline_s must be positive")
+        if self.retry_deadline_s <= 0:
+            raise ValueError("llm.retry_deadline_s must be positive")
         self.request_timeout_s = float(getattr(cfg.llm, "request_timeout_s", 90))
         if self.request_timeout_s <= 0:
             raise ValueError("llm.request_timeout_s must be positive")
@@ -339,6 +342,7 @@ class RelationVerifier:
                 StopAfterAttemptsExceptRateLimit(
                     None if self.max_retries == 0 else self.max_retries,
                     rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
+                    retry_deadline_seconds=self.retry_deadline_s,
                 )
             ),
             wait=WaitRetryAfterOrExponentialJitter(
@@ -346,6 +350,7 @@ class RelationVerifier:
                 self.backoff_max,
                 rate_limit_cooldown_max_seconds=self.rate_limit_cooldown_max_s,
                 rate_limit_retry_deadline_seconds=self.rate_limit_retry_deadline_s,
+                retry_deadline_seconds=self.retry_deadline_s,
             ),
             retry=retry_if_exception(is_retryable_llm_exception),
             before_sleep=RetryHeartbeat("relation_verifier", self.usage),

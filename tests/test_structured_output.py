@@ -24,6 +24,7 @@ from src.dspy_adapter import (
 from src.critical import CriticalOutputLimitError
 from src.retry import (
     RateLimitRetryDeadlineExceeded,
+    RetryDeadlineExceeded,
     RetryHeartbeat,
     StopAfterAttemptsExceptRateLimit,
     WaitRetryAfterOrExponentialJitter,
@@ -649,3 +650,20 @@ def test_rate_limit_deadline_emits_redacted_heartbeat_and_stops_request(capsys):
             12, rate_limit_retry_deadline_seconds=30
         )(state)
     assert is_retryable_llm_exception(RateLimitRetryDeadlineExceeded("capacity wait")) is False
+
+
+def test_total_retry_deadline_does_not_reset_when_errors_alternate():
+    class TimedOut(Exception):
+        status_code = 500
+
+    state = SimpleNamespace(
+        attempt_number=4,
+        outcome=SimpleNamespace(failed=True, exception=lambda: TimedOut("temporary")),
+    )
+    state._hallu_retry_started_at = __import__("time").monotonic() - 31
+
+    with pytest.raises(RetryDeadlineExceeded):
+        StopAfterAttemptsExceptRateLimit(
+            12, rate_limit_retry_deadline_seconds=1800, retry_deadline_seconds=30
+        )(state)
+    assert is_retryable_llm_exception(RetryDeadlineExceeded("retry budget")) is False
