@@ -14,7 +14,10 @@ the strict/support numbers are compared post-hoc, not here.
 """
 from __future__ import annotations
 
+import concurrent.futures as _futures
 import json
+import sys
+import threading
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -45,8 +48,31 @@ def _build_embedder(hallu: Mapping[str, Any]) -> Any | None:
     )
 
 
+_PROGRESS_LOCK = threading.Lock()
+
+
+class _FailedResult:
+    """Stand-in DetectionResult for the defensive case where a worker's
+    detector.predict() raises outside its own guard (keeps the run going)."""
+
+    status = "failed"
+    raw_score = None
+    components: dict[str, Any] = {}
+
+    def __init__(self, response_id: str, source_id: str, method: str, exc: BaseException) -> None:
+        self.response_id = response_id
+        self.source_id = source_id
+        self.method = method
+        self.failure = {"error": f"predict_exception: {exc!r}"}
+
+
 def _progress(payload: Mapping[str, Any]) -> None:
-    print("TYPED_METRIC_PROGRESS " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+    # One atomic write per event so concurrent worker threads cannot interleave
+    # partial lines on stdout.
+    line = "TYPED_METRIC_PROGRESS " + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+    with _PROGRESS_LOCK:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 def run_typed_metric_pass(
@@ -66,6 +92,8 @@ def run_typed_metric_pass(
     replay_selection_seed: int = 20260722,
     alpha: float = 0.5,
     batch_size: int = 15,
+    live_mirror_dir: str | Path | None = None,
+    max_workers: int = 1,
 ) -> dict[str, Any]:
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -151,9 +179,37 @@ def run_typed_metric_pass(
     metrics_path = output_root / "typed_metrics.jsonl"
     batch_dir = output_root / "batches"
     batch_dir.mkdir(parents=True, exist_ok=True)
+    # Optional live mirror onto the (writable) Project disk so a read-only probe
+    # can tail progress while the job runs -- only the small summaries + a
+    # cumulative progress.json are mirrored, never the heavy per-record jsonl.
+    live_dir: Path | None = None
+    if live_mirror_dir:
+        live_dir = Path(live_mirror_dir)
+        try:
+            live_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            live_dir = None
     ok = failed = empty = 0
+    all_egs: list[float] = []
     batch_no = 0
     current: list[dict[str, Any]] = []
+
+    def _mirror_progress() -> None:
+        if live_dir is None:
+            return
+        try:
+            (live_dir / "progress.json").write_text(
+                json.dumps({
+                    "protocol": "typed-vertex-metric-pass-live-v1", "run": output_root.name,
+                    "selected": len(selected), "done": ok + failed + empty,
+                    "ok": ok, "failed": failed, "empty_graph": empty, "batches": batch_no,
+                    "mean_eg_type": (sum(all_egs) / len(all_egs)) if all_egs else None,
+                    "updated_utc": utc_now(),
+                }, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
 
     def _flush_batch() -> None:
         nonlocal batch_no, current
@@ -181,33 +237,87 @@ def run_typed_metric_pass(
         (batch_dir / f"batch-{tag}.summary.json").write_text(
             json.dumps(b_summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8",
         )
+        all_egs.extend(e for e in b_egs if e is not None)
+        if live_dir is not None:
+            try:
+                (live_dir / f"batch-{tag}.summary.json").write_text(
+                    json.dumps(b_summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+        _mirror_progress()
         _progress({"event": "batch_flushed", **b_summary})
         current = []
 
+    method_name = getattr(detector, "method_name", "typed_vertex")
+    total = len(selected)
+    workers = max(1, int(max_workers))
+    if workers > 1:
+        # Record-level threads carry the concurrency; keep each HHEM forward pass
+        # single-threaded so torch intra-op parallelism does not oversubscribe cores.
+        try:
+            import torch
+
+            torch.set_num_threads(1)
+        except Exception:
+            pass
+
+    def _row(result: Any) -> dict[str, Any]:
+        return {
+            "response_id": result.response_id, "source_id": result.source_id,
+            "method": result.method, "status": result.status,
+            "raw_score": result.raw_score, "components": dict(result.components),
+            "failure": dict(result.failure) if result.failure else None,
+        }
+
     with metrics_path.open("w", encoding="utf-8") as handle:
-        for index, record in enumerate(selected, start=1):
-            item = make_detection_input(record)
-            _progress({"event": "record_started", "index": index, "total": len(selected),
-                       "response_id": item.response_id})
-            result = detector.predict(item)
-            row = {
-                "response_id": result.response_id, "source_id": result.source_id,
-                "method": result.method, "status": result.status,
-                "raw_score": result.raw_score, "components": dict(result.components),
-                "failure": dict(result.failure) if result.failure else None,
-            }
+        # Emission is confined to the main thread and driven in strict record order,
+        # so metrics.jsonl, batch files and counters need no locking -- only
+        # detector.predict() (gateway + HHEM, the slow part) runs on worker threads.
+        def _emit(index: int, item: Any, result: Any) -> None:
+            nonlocal ok, failed, empty
+            row = _row(result)
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
             handle.flush()
             current.append(row)
             ok += result.status == "ok"
             failed += result.status == "failed"
             empty += result.status == "empty_graph"
-            _progress({"event": "record_finished", "index": index, "total": len(selected),
+            _progress({"event": "record_finished", "index": index, "total": total,
                        "response_id": item.response_id, "status": result.status,
                        "raw_score": result.raw_score,
                        "eg_type": result.components.get("eg_type") if result.components else None})
             if len(current) >= batch_size:
                 _flush_batch()
+
+        def _predict(index: int, item: Any) -> Any:
+            _progress({"event": "record_started", "index": index, "total": total,
+                       "response_id": item.response_id})
+            try:
+                return detector.predict(item)
+            except Exception as exc:  # pragma: no cover - defensive; predict is self-guarding
+                return _FailedResult(item.response_id, item.source_id, method_name, exc)
+
+        items = [(i, make_detection_input(rec)) for i, rec in enumerate(selected, start=1)]
+        if workers <= 1:
+            for index, item in items:
+                _emit(index, item, _predict(index, item))
+        else:
+            # Bounded out-of-order window: submit all, buffer completed results and
+            # emit them in index order so batches stay deterministic and contiguous.
+            with _futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                fut_map = {pool.submit(_predict, index, item): (index, item)
+                           for index, item in items}
+                pending: dict[int, tuple[Any, Any]] = {}
+                next_index = 1
+                for fut in _futures.as_completed(fut_map):
+                    index, item = fut_map[fut]
+                    pending[index] = (item, fut.result())
+                    while next_index in pending:
+                        emit_item, emit_result = pending.pop(next_index)
+                        _emit(next_index, emit_item, emit_result)
+                        next_index += 1
         _flush_batch()  # remaining partial batch
 
     summary = {

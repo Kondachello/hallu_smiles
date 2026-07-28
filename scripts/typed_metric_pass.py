@@ -35,6 +35,9 @@ def main() -> int:
                         help="CFI_type = alpha*EG_type + (1-alpha)*RP")
     parser.add_argument("--batch-size", type=int, default=15,
                         help="flush a batch file every N records (partial results survive crashes)")
+    parser.add_argument("--max-workers", type=int, default=1,
+                        help="record-level typing concurrency; >1 overlaps gateway+HHEM calls "
+                             "(results are identical, emitted in strict record order)")
     args = parser.parse_args()
 
     summary = run_typed_metric_pass(
@@ -53,6 +56,7 @@ def main() -> int:
         replay_selection_seed=args.replay_selection_seed,
         alpha=args.alpha,
         batch_size=args.batch_size,
+        max_workers=args.max_workers,
     )
     import json
 

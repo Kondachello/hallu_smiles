@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -170,6 +171,9 @@ class SharedKGGraphProvider:
         self.writable_source_id = writable_source_id
         self._artifacts: dict[str, SharedGraphArtifact] = {}
         self._resolutions: list[dict[str, Any]] = []
+        # Guards the in-memory memo + resolution log so record-level parallel
+        # typing cannot race (RAGTruth responses share source docs -> same key).
+        self._lock = threading.Lock()
 
     def inspection(self) -> dict[str, Any]:
         return inspect_cache_sources(self.sources)
@@ -219,6 +223,13 @@ class SharedKGGraphProvider:
         return None
 
     def materialize(self, text: str, *, role: str) -> SharedGraphArtifact:
+        # Cache resolution is fast (cache-only reads); serializing it is cheap and
+        # keeps the shared memo/resolution log consistent under concurrent records.
+        # The heavy typing LLM work (build_source_registry) runs outside this lock.
+        with self._lock:
+            return self._materialize_impl(text, role=role)
+
+    def _materialize_impl(self, text: str, *, role: str) -> SharedGraphArtifact:
         normalized = (text or "").strip()
         input_sha = sha256_bytes(normalized.encode("utf-8"))
         key = None if not normalized else self.extractor._cache_key(normalized)
