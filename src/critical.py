@@ -33,7 +33,12 @@ from .dspy_adapter import (
     validate_json_document,
 )
 from .matching import Embedder, normalize
-from .retry import RetryHeartbeat, StopAfterAttemptsExceptRateLimit, WaitRetryAfterOrExponentialJitter
+from .retry import (
+    RequestPacer,
+    RetryHeartbeat,
+    StopAfterAttemptsExceptRateLimit,
+    WaitRetryAfterOrExponentialJitter,
+)
 from .verifier import EvidenceSpan, _sentences
 
 
@@ -355,7 +360,15 @@ class _CachedComponent:
     component: str = "critical_component"
     protocol: str = "support-critical-v1"
 
-    def __init__(self, cfg, section_name: str, usage=None, *, cache_only: bool = False):
+    def __init__(
+        self,
+        cfg,
+        section_name: str,
+        usage=None,
+        *,
+        cache_only: bool = False,
+        request_pacer: RequestPacer | None = None,
+    ):
         critical_cfg = getattr(cfg, "support_critical", None)
         if critical_cfg is None:
             raise ValueError("support_critical config is required")
@@ -386,7 +399,8 @@ class _CachedComponent:
         self.rate_limit_retry_deadline_s = float(
             getattr(cfg.llm, "rate_limit_retry_deadline_s", 1800)
         )
-        self.retry_deadline_s = float(getattr(cfg.llm, "retry_deadline_s", 90))
+        self.retry_deadline_s = float(getattr(cfg.llm, "retry_deadline_s", 1800))
+        self.request_min_interval_s = float(getattr(cfg.llm, "request_min_interval_s", 0))
         self.prompt_version = str(config_value(section, "prompt_version", "v1"))
         self.cache_dir = Path(str(config_value(section, "cache_dir")))
         raw_read_dirs = config_value(section, "cache_read_dirs", []) or []
@@ -400,6 +414,7 @@ class _CachedComponent:
             or self.rate_limit_cooldown_max_s < self.backoff_max
             or self.rate_limit_retry_deadline_s <= 0
             or self.retry_deadline_s <= 0
+            or self.request_min_interval_s < 0
         ):
             raise ValueError(f"invalid {self.component} runtime limits")
         if self.max_protocol_retries <= 0:
@@ -408,6 +423,7 @@ class _CachedComponent:
             raise ValueError(f"{self.component}.max_tokens_ceiling must be at least max_tokens")
         if self.backoff_max < self.backoff_base:
             raise ValueError("llm.retry_backoff_max_s must be at least retry_backoff_base_s")
+        self.request_pacer = request_pacer or RequestPacer(self.request_min_interval_s)
         if not self.cache_only:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -507,6 +523,7 @@ class _CachedComponent:
                 }
         elif self.structured_output.transport == "guided_json":
             kwargs["extra_body"] = {"guided_json": schema}
+        self.request_pacer.wait_for_turn()
         response = completion(**kwargs)
         choices = _response_field(response, "choices")
         if not isinstance(choices, (list, tuple)) or len(choices) != 1:
@@ -613,8 +630,12 @@ class AtomicClaimExtractor(_CachedComponent):
     component = "critical_claim_extractor"
     protocol = "support-critical-claims-v1"
 
-    def __init__(self, cfg, usage=None, *, cache_only: bool = False):
-        super().__init__(cfg, "claim_extractor", usage, cache_only=cache_only)
+    def __init__(
+        self, cfg, usage=None, *, cache_only: bool = False, request_pacer: RequestPacer | None = None
+    ):
+        super().__init__(
+            cfg, "claim_extractor", usage, cache_only=cache_only, request_pacer=request_pacer
+        )
         self.chunk_chars = int(config_value(self.section, "chunk_chars", 0))
         self.min_chunk_chars = int(config_value(self.section, "min_chunk_chars", 160))
         if self.chunk_chars < 0 or self.min_chunk_chars <= 0:
@@ -785,8 +806,12 @@ class FullContextReviewer(_CachedComponent):
     component = "critical_coverage_reviewer"
     protocol = "support-critical-coverage-v1"
 
-    def __init__(self, cfg, usage=None, *, cache_only: bool = False):
-        super().__init__(cfg, "coverage_reviewer", usage, cache_only=cache_only)
+    def __init__(
+        self, cfg, usage=None, *, cache_only: bool = False, request_pacer: RequestPacer | None = None
+    ):
+        super().__init__(
+            cfg, "coverage_reviewer", usage, cache_only=cache_only, request_pacer=request_pacer
+        )
         self.chunk_chars = int(config_value(self.section, "chunk_chars", 0))
         self.min_chunk_chars = int(config_value(self.section, "min_chunk_chars", 160))
         if self.chunk_chars < 0 or self.min_chunk_chars <= 0:
@@ -1022,8 +1047,18 @@ class CriticalClaimVerifier(_CachedComponent):
     component = "critical_claim_verifier"
     protocol = "support-critical-verdict-v1"
 
-    def __init__(self, cfg, usage=None, *, cache_only: bool = False, embedder: Embedder | None = None):
-        super().__init__(cfg, "claim_verifier", usage, cache_only=cache_only)
+    def __init__(
+        self,
+        cfg,
+        usage=None,
+        *,
+        cache_only: bool = False,
+        embedder: Embedder | None = None,
+        request_pacer: RequestPacer | None = None,
+    ):
+        super().__init__(
+            cfg, "claim_verifier", usage, cache_only=cache_only, request_pacer=request_pacer
+        )
         self.max_sentences = int(config_value(self.section, "max_evidence_sentences", 8))
         self.stopwords = set(getattr(cfg.matching, "stopwords", []) or [])
         self.embedder = embedder
@@ -1128,9 +1163,16 @@ class CriticalClaimPipeline:
     """Build, review, deduplicate, and verify response-level atomic claims."""
 
     def __init__(self, cfg, usage=None, *, cache_only: bool = False, embedder: Embedder | None = None):
-        self.extractor = AtomicClaimExtractor(cfg, usage, cache_only=cache_only)
-        self.reviewer = FullContextReviewer(cfg, usage, cache_only=cache_only)
-        self.verifier = CriticalClaimVerifier(cfg, usage, cache_only=cache_only, embedder=embedder)
+        pacer = RequestPacer(float(getattr(cfg.llm, "request_min_interval_s", 0)))
+        self.extractor = AtomicClaimExtractor(
+            cfg, usage, cache_only=cache_only, request_pacer=pacer
+        )
+        self.reviewer = FullContextReviewer(
+            cfg, usage, cache_only=cache_only, request_pacer=pacer
+        )
+        self.verifier = CriticalClaimVerifier(
+            cfg, usage, cache_only=cache_only, embedder=embedder, request_pacer=pacer
+        )
 
     def assess(self, response: str, context: str, query: str | None) -> list[dict[str, Any]]:
         atomic = self.extractor.extract(response)

@@ -18,9 +18,11 @@ llm:
   # Preserve durable caches and end the Job explicitly after this per-request budget.
   rate_limit_retry_deadline_s: 1800
   # The recovery budget also covers alternating 429/5xx/truncation responses.
-  # On expiry components store their explicit conservative fallback instead of
-  # letting one source hold the outer progress counter indefinitely.
-  retry_deadline_s: 90
+  # It remains generous; a short provider incident must not replace a real
+  # verdict with a fallback value.
+  retry_deadline_s: 1800
+  # ``concurrency=1`` alone does not impose an inter-request rate.
+  request_min_interval_s: 4
   concurrency: 4                      # baseline; CPU gateway probe derives 1 in its local config
   structured_output_transport: "none" # gateway job sets native response_format
   structured_output_backend: "vertex"

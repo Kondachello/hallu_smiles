@@ -24,6 +24,7 @@ from src.dspy_adapter import (
 from src.critical import CriticalOutputLimitError
 from src.retry import (
     RateLimitRetryDeadlineExceeded,
+    RequestPacer,
     RetryDeadlineExceeded,
     RetryHeartbeat,
     StopAfterAttemptsExceptRateLimit,
@@ -667,3 +668,9 @@ def test_total_retry_deadline_does_not_reset_when_errors_alternate():
             12, rate_limit_retry_deadline_seconds=1800, retry_deadline_seconds=30
         )(state)
     assert is_retryable_llm_exception(RetryDeadlineExceeded("retry budget")) is False
+
+
+def test_request_pacer_allows_an_unpaced_offline_mode():
+    RequestPacer(0).wait_for_turn()
+    with pytest.raises(ValueError, match="non-negative"):
+        RequestPacer(-0.1)

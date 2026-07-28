@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import random
+import threading
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -27,6 +28,31 @@ class RetryDeadlineExceeded(RuntimeError):
     request from the experiment's perspective.  They must not reset the
     budget and pin a source-level progress counter indefinitely.
     """
+
+
+class RequestPacer:
+    """Serialize request admission at a stable minimum interval.
+
+    ``concurrency=1`` prevents overlap but not an overly fast serial request
+    loop.  Reserving turns under a lock lets sibling components share one
+    sustainable request rate without changing prompts, caches, or semantics.
+    """
+
+    def __init__(self, minimum_interval_seconds: float = 0.0):
+        self.minimum_interval_seconds = float(minimum_interval_seconds)
+        if self.minimum_interval_seconds < 0:
+            raise ValueError("minimum_interval_seconds must be non-negative")
+        self._lock = threading.Lock()
+        self._next_permit_at = 0.0
+
+    def wait_for_turn(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            permit_at = max(now, self._next_permit_at)
+            self._next_permit_at = permit_at + self.minimum_interval_seconds
+        remaining = permit_at - time.monotonic()
+        if remaining > 0:
+            time.sleep(remaining)
 
 
 def transient_http_status(exc: BaseException | None) -> int | None:
