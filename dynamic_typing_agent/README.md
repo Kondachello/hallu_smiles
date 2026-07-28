@@ -32,6 +32,7 @@ Key documents:
 - [Interactive run viewer](docs/RUN_VIEWER.md)
 - [Test plan](docs/TEST_PLAN.md)
 - [Audit of the stopped 13-case historical run](docs/HISTORICAL_13_AUDIT.md)
+- [Best-effort typing: no more collapsing to `entity`](docs/BEST_EFFORT_TYPING.md) ([подробно](docs/best-effort-typing/README.md))
 
 Offline checks (from this directory):
 

@@ -6,7 +6,11 @@ prompt_set:
 
 source:
   entity_batch_size: 1
-  max_entity_attempts: 2
+  # Up to three type hypotheses per entity; a purely-neutral attempt re-proposes to
+  # seek a source-entailed type, and on exhaustion the most plausible proposal is
+  # kept instead of collapsing to the root 'entity'. See quality_workflow v4.
+  max_entity_attempts: 3
+  retry_on_neutral: true
 
 model:
   backend: live

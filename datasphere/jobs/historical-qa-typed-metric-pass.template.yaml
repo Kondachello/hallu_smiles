@@ -1,0 +1,37 @@
+# Typed-vertex metric pass over an immutable historical QA graph cache. HalluGraph/
+# GraphEval graphs are read cache-only; the dynamic typing agent assigns a type to
+# every vertex (permitted gateway LLM calls + local HHEM NLI) and we score the
+# type-aware EG + edge RP -> CFI_type. Strict/support results are compared post-hoc.
+name: historical-qa-typed-metric-pass-__RUN_ID__
+desc: "Typed-vertex CFI metric pass from a historical QA graph checkpoint; cache-only graphs, typing via gateway+HHEM."
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export RUN_ROOT="$PWD/historical-qa-typed-metric-pass-artifacts/__RUN_ID__";
+  mkdir -p "$RUN_ROOT";
+  git init source; git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
+  git -C source fetch --depth 1 origin __GIT_COMMIT__; git -C source checkout --detach FETCH_HEAD;
+  test "$(git -C source rev-parse HEAD)" = "__GIT_COMMIT__";
+  export EXPECTED_SOURCE_COMMIT="__GIT_COMMIT__" DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
+  export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";
+  export CHECKPOINT_PARENT="$DS_PROJECT_HOME/hallu_smiles/checkpoints/vertex-qa";
+  export QA_SAMPLE_SIZE="__QA_SAMPLE_SIZE__";
+  export RECORDED_GATEWAY_URL="__GATEWAY_URL__" REPLAY_COUNT="__REPLAY_COUNT__" REPLAY_SELECTION_SEED="__REPLAY_SELECTION_SEED__";
+  export TYPED_METRIC_PASS=1 TYPED_METRIC_ALPHA="__TYPED_METRIC_ALPHA__";
+  export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
+  trap "status=\$?; archive || status=1; exit \$status" EXIT;
+  timeout --signal=TERM --kill-after=60s __JOB_TIMEOUT_SECONDS__ bash source/scripts/run_datasphere_historical_qa_cache_replay.sh 2>&1 | tee "$RUN_ROOT/typed-metric-pass.console.log"'
+env:
+__DOCKER_ENV_BLOCK__
+outputs:
+  - historical-qa-typed-metric-pass-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+flags:
+  - attach-project-disk
+cloud-instance-types:
+  - c1.4
+working-storage:
+  type: SSD
+  size: 100Gb
+graceful-shutdown:
+  signal: SIGTERM
+  timeout: 60s

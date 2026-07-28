@@ -244,7 +244,26 @@ if [[ "$TARGET_MODE" == "direct" && -n "$LINEAGE_SOURCE_DIR" && -d "$LINEAGE_SOU
   LINEAGE_KG_DIR="$LINEAGE_SOURCE_DIR/kg"
 fi
 
-if [[ "${DIAGNOSTIC_ONLY:-0}" == "1" ]]; then
+if [[ "${TYPED_METRIC_PASS:-0}" == "1" ]]; then
+  # Typed-vertex metric pass: HalluGraph/GraphEval graphs stay cache-only (read
+  # through the resolved roots), but the dynamic typing agent assigns a type to
+  # every vertex (permitted gateway LLM calls + local HHEM NLI) and we score the
+  # type-aware EG + edge RP -> CFI_type. Reuses the full cache resolution above.
+  export HALLU_TYPING_MODEL="${HALLU_TYPING_MODEL:-openai/gemini-2.5-flash}"
+  export HALLU_GATEWAY_URL="${HALLU_GATEWAY_URL:-$RECORDED_GATEWAY_URL}"
+  export HALLU_HHEM_MODEL_PATH="${HALLU_HHEM_MODEL_PATH:-/opt/hallu/models/hhem-2.1-open}"
+  TYPED_KG_ARGS=(--historical-cache-root "$HISTORICAL_CACHE_ROOT")
+  [[ -n "$LINEAGE_KG_DIR" ]] && TYPED_KG_ARGS+=(--additional-cache-root "$LINEAGE_KG_DIR")
+  "$CLIENT_PYTHON" "$ROOT/scripts/typed_metric_pass.py" \
+    --data-dir "$DATA_DIR" --output-root "$RUN_ROOT" \
+    --hallugraph-config "$RUN_ROOT/historical-cache-runtime.yaml" \
+    --grapheval-config "$ROOT/graph_eval/config.datasphere.one-instance.shared-kggen.live.yaml" \
+    --typing-config "${HALLU_TYPING_CONFIG:-$ROOT/dynamic_typing_agent/config/live-gateway-hhem.yaml}" \
+    "${TYPED_KG_ARGS[@]}" --gateway-manifest-sha256 "$GATEWAY_MANIFEST_SHA256" \
+    --qa-sample-size "$QA_SAMPLE_SIZE" --qa-test-fraction "$QA_TEST_FRACTION" \
+    --replay-count "$REPLAY_COUNT" --replay-selection-seed "$REPLAY_SELECTION_SEED" \
+    --alpha "${TYPED_METRIC_ALPHA:-0.5}" | tee "$RUN_ROOT/typed-metric-pass-summary.log"
+elif [[ "${DIAGNOSTIC_ONLY:-0}" == "1" ]]; then
   # Read-only: check how many computed cache_keys for the selected QA texts
   # already exist as files in the chained read sources, using the exact same
   # config this replay would otherwise run with. No gateway call beyond the
