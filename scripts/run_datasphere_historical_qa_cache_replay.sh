@@ -252,6 +252,16 @@ if [[ "${TYPED_METRIC_PASS:-0}" == "1" ]]; then
   export HALLU_TYPING_MODEL="${HALLU_TYPING_MODEL:-openai/gemini-2.5-flash}"
   export HALLU_GATEWAY_URL="${HALLU_GATEWAY_URL:-$RECORDED_GATEWAY_URL}"
   export HALLU_HHEM_MODEL_PATH="${HALLU_HHEM_MODEL_PATH:-/opt/hallu/models/hhem-2.1-open}"
+  # The cache-only runtime image ships litellm/torch/transformers but not the typing
+  # agent's graph runtime (langgraph/langchain-core). Install the missing ones into a
+  # job-local target appended to PYTHONPATH (image deps such as pydantic keep priority).
+  if ! "$CLIENT_PYTHON" -c "import langgraph, langchain_core" >/dev/null 2>&1; then
+    TYPED_PYDEPS="$RUN_ROOT/pydeps"
+    "$CLIENT_PYTHON" -m pip install --quiet --disable-pip-version-check \
+      --target "$TYPED_PYDEPS" "langgraph>=1,<2" "langchain-core>=1,<2"
+    export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$TYPED_PYDEPS"
+    "$CLIENT_PYTHON" -c "import langgraph, langchain_core; print('typing deps ready')"
+  fi
   TYPED_KG_ARGS=(--historical-cache-root "$HISTORICAL_CACHE_ROOT")
   [[ -n "$LINEAGE_KG_DIR" ]] && TYPED_KG_ARGS+=(--additional-cache-root "$LINEAGE_KG_DIR")
   "$CLIENT_PYTHON" "$ROOT/scripts/typed_metric_pass.py" \
