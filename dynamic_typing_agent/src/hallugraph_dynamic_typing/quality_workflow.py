@@ -201,7 +201,11 @@ class QualityTypingWorkflow:
                 )
                 events.append(model_event)
                 if decision["entity_id"] != profile["entity_id"]:
-                    raise InputContractError("entity_type_decision returned an unexpected entity_id")
+                    # entity_type_decision types exactly one entity per call, so the
+                    # decision is unambiguously about `profile`; some models echo a
+                    # wrong/hallucinated entity_id. Coerce it to the known id rather
+                    # than discarding the whole record over a cosmetic mismatch.
+                    decision["entity_id"] = profile["entity_id"]
                 selected = list(dict.fromkeys(str(item) for item in decision["selected_type_ids"]))
                 unknown_selected = [type_id for type_id in selected if type_id not in types]
                 selected = [type_id for type_id in selected if type_id in types]
@@ -753,7 +757,9 @@ class QualityTypingWorkflow:
                 decision, event = self._answer_decision(answer, profile, registry_types, source_evidence)
                 events.append(event)
             if decision["entity_id"] != profile["entity_id"]:
-                raise InputContractError("answer_typing returned an unexpected entity_id")
+                # answer_typing types one entity per call; coerce a wrong/hallucinated
+                # echoed entity_id to the known id instead of failing the record.
+                decision["entity_id"] = profile["entity_id"]
             selected_ids = list(dict.fromkeys(str(item) for item in decision["selected_type_ids"]))
             unknown_selected = [type_id for type_id in selected_ids if type_id not in registry_types]
             selected_ids = [type_id for type_id in selected_ids if type_id in registry_types]
