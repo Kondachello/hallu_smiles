@@ -14,7 +14,7 @@ verdict.  It never substitutes ``RP_grounded`` for factual support:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .matching import RefGraph, normalize
 
@@ -220,6 +220,7 @@ def score_response(
     verifier_matching_params: dict[str, Any] | None = None,
     answer_text: str | None = None,
     critical_pipeline=None,
+    progress_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> ScoreResult:
     """Score one answer graph; verifier is optional so strict scoring stays LLM-free."""
     Va, Ea = len(g_a.entities), len(g_a.relations)
@@ -255,14 +256,21 @@ def score_response(
                 raise ValueError("support-critical scoring requires answer_text")
             res.critical = {
                 "protocol": "support-critical-v1",
-                "claim_audits": critical_pipeline.assess(answer_text, context, query),
+                "claim_audits": critical_pipeline.assess(
+                    answer_text, context, query, progress_hook=progress_hook
+                ),
             }
         return res
 
     strict_supported = 0
     grounded_edges = 0
     entailed_edges = 0
-    for edge in sorted(g_a.relations):
+    edges = sorted(g_a.relations)
+    edge_total = len(edges)
+    edge_interval = max(1, edge_total // 10) if edge_total else 1
+    if progress_hook is not None and verifier is not None:
+        progress_hook({"phase": "relation_audit", "completed": 0, "total": edge_total})
+    for edge_index, edge in enumerate(edges, start=1):
         subject, predicate, obj = (_norm(x) for x in edge)
         subj_match = refgraph.match_entity(edge[0])
         obj_match = refgraph.match_entity(edge[2])
@@ -337,6 +345,14 @@ def score_response(
                 else:
                     audit["status"] = "grounded_unknown"
         res.relation_audits.append(audit)
+        if (
+            progress_hook is not None
+            and verifier is not None
+            and (edge_index == 1 or edge_index == edge_total or edge_index % edge_interval == 0)
+        ):
+            progress_hook(
+                {"phase": "relation_audit", "completed": edge_index, "total": edge_total}
+            )
 
     # Strict fields and legacy aliases always preserve the historical formula.
     res.RP_strict = strict_supported / Ea
@@ -357,7 +373,9 @@ def score_response(
             raise ValueError("support-critical scoring requires answer_text")
         res.critical = {
             "protocol": "support-critical-v1",
-            "claim_audits": critical_pipeline.assess(answer_text, context, query),
+            "claim_audits": critical_pipeline.assess(
+                answer_text, context, query, progress_hook=progress_hook
+            ),
         }
     return res
 

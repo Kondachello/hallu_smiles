@@ -1174,12 +1174,28 @@ class CriticalClaimPipeline:
             cfg, usage, cache_only=cache_only, embedder=embedder, request_pacer=pacer
         )
 
-    def assess(self, response: str, context: str, query: str | None) -> list[dict[str, Any]]:
+    def assess(
+        self,
+        response: str,
+        context: str,
+        query: str | None,
+        *,
+        progress_hook: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[dict[str, Any]]:
+        def emit(phase: str, completed: int = 0, total: int = 0) -> None:
+            if progress_hook is not None:
+                progress_hook({"phase": phase, "completed": completed, "total": total})
+
+        emit("claim_extraction")
         atomic = self.extractor.extract(response)
+        emit("coverage_review", len(atomic), len(atomic))
         reviewed = self.reviewer.review(response, context, query, atomic)
         claims = merge_claims(atomic, reviewed)
+        claim_total = len(claims)
+        claim_interval = max(1, claim_total // 10) if claim_total else 1
+        emit("claim_verification", 0, claim_total)
         audits: list[dict[str, Any]] = []
-        for claim in claims:
+        for completed, claim in enumerate(claims, start=1):
             decision = self.verifier.verify_claim(claim.text, context, query)
             audits.append({
                 "claim": claim.to_dict(),
@@ -1189,6 +1205,9 @@ class CriticalClaimPipeline:
                 "verifier_protocol_fallback": decision.protocol_fallback,
                 "verifier_fallback_reason": decision.fallback_reason,
             })
+            if completed == 1 or completed == claim_total or completed % claim_interval == 0:
+                emit("claim_verification", completed, claim_total)
+        emit("claim_verification_done", claim_total, claim_total)
         return audits
 
 
@@ -1199,7 +1218,16 @@ class FakeCriticalClaimPipeline:
         self.claims = list(claims or [])
         self.verdicts = {normalize(k): v for k, v in (verdicts or {}).items()}
 
-    def assess(self, response: str, context: str, query: str | None) -> list[dict[str, Any]]:  # noqa: ARG002
+    def assess(
+        self,
+        response: str,
+        context: str,
+        query: str | None,
+        *,
+        progress_hook: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[dict[str, Any]]:  # noqa: ARG002
+        if progress_hook is not None:
+            progress_hook({"phase": "claim_verification_done", "completed": len(self.claims), "total": len(self.claims)})
         return [
             {
                 "claim": claim.to_dict(),

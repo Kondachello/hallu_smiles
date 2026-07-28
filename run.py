@@ -132,6 +132,26 @@ def _emit_progress(
     print("[progress] " + json.dumps(payload, sort_keys=True), flush=True)
 
 
+def _emit_inner_progress(
+    stage: str,
+    outer_index: int,
+    outer_total: int,
+    event: dict[str, Any],
+    usage: UsageLogger,
+) -> None:
+    """Emit redacted progress inside one expensive support-critical response."""
+    payload = {
+        "stage": stage,
+        "outer_index": int(outer_index),
+        "outer_total": int(outer_total),
+        "phase": str(event.get("phase", "unknown")),
+        "completed": int(event.get("completed", 0)),
+        "total": int(event.get("total", 0)),
+    }
+    payload.update(usage.summary())
+    print("[inner-progress] " + json.dumps(payload, sort_keys=True), flush=True)
+
+
 # --------------------------------------------------------------------------------------
 # Stage: extract
 # --------------------------------------------------------------------------------------
@@ -457,6 +477,10 @@ def score_all(
         if refgraph is None:
             refgraph = build_refgraph(cfg, gc, gq, embedder, tau_e, tau_r)
             refgraph_cache[inst.source_id] = refgraph
+        def inner_progress(event: dict[str, Any]) -> None:
+            if usage is not None and progress_stage is not None:
+                _emit_inner_progress(progress_stage, completed, len(instances), event, usage)
+
         results[inst.response_id] = score_response(
             resp_graphs[inst.response_id], refgraph, gc, gq,
             context=inst.context, query=inst.query,
@@ -470,6 +494,7 @@ def score_all(
             },
             answer_text=inst.response if relation_mode == "support-critical" else None,
             critical_pipeline=critical_pipeline if relation_mode == "support-critical" else None,
+            progress_hook=inner_progress if relation_mode == "support-critical" else None,
         )
         if usage is not None and progress_stage is not None:
             _emit_progress(progress_stage, completed, len(instances), usage)

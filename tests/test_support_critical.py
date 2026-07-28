@@ -163,6 +163,19 @@ def test_critical_pipeline_records_claim_audit_even_when_answer_graph_is_empty()
     assert result.critical["claim_audits"][0]["verdict"] == "unsupported"
 
 
+def test_critical_progress_hook_reports_only_counts_and_phase():
+    pipeline = FakeCriticalClaimPipeline(
+        [AtomicClaim("Paris has 2 museums", 0, 19, ("atomic",))],
+        {"Paris has 2 museums": "unsupported"},
+    )
+    events = []
+    pipeline.assess("Paris has 2 museums.", "", None, progress_hook=events.append)
+
+    assert events == [
+        {"phase": "claim_verification_done", "completed": 1, "total": 1}
+    ]
+
+
 def test_critical_cv_uses_only_supplied_train_scores():
     scores = [_critical_score(), _critical_score(), _critical_score(), _critical_score()]
     scores[0].critical["claim_audits"] = [{"verdict": "entailed"}]
