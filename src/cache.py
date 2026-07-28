@@ -58,6 +58,25 @@ def _structured_output_request_backend(llm: Any) -> str | None:
 
 @lru_cache(maxsize=1)
 def _installed_versions() -> dict[str, str]:
+    # A cache-only replay may need to bootstrap extra runtime deps (e.g. the
+    # typing agent pulls langchain-core/pydantic>=2.11) that shadow the pinned
+    # image versions on sys.path. Those live versions feed the cache key, so an
+    # unpinned bootstrap silently invalidates every historical graph. When
+    # HALLU_CACHE_KEY_PACKAGE_VERSIONS (a JSON object) is present, use it as the
+    # authoritative per-distribution snapshot so the key stays reproducible;
+    # iteration order is preserved so the serialized key is byte-identical to a
+    # native run. Default (unset) behaviour is unchanged.
+    override: dict[str, Any] = {}
+    raw = os.environ.get("HALLU_CACHE_KEY_PACKAGE_VERSIONS")
+    if raw:
+        import json
+
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            override = parsed
     versions: dict[str, str] = {}
     for distribution in (
         "kg-gen",
@@ -71,6 +90,9 @@ def _installed_versions() -> dict[str, str]:
         "torch",
         "numpy",
     ):
+        if distribution in override:
+            versions[distribution] = str(override[distribution])
+            continue
         try:
             versions[distribution] = metadata.version(distribution)
         except metadata.PackageNotFoundError:

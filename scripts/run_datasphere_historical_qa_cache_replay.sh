@@ -256,6 +256,26 @@ if [[ "${TYPED_METRIC_PASS:-0}" == "1" ]]; then
   # agent's graph runtime (langgraph/langchain-core). Install the missing ones into a
   # job-local target appended to PYTHONPATH (image deps such as pydantic keep priority).
   if ! "$CLIENT_PYTHON" -c "import langgraph, langchain_core" >/dev/null 2>&1; then
+    # Pin the cache-key package snapshot to the pinned IMAGE versions BEFORE the
+    # bootstrap: langchain-core>=1 drags in pydantic>=2.11 (and a newer tenacity)
+    # which would otherwise shadow the image's pydantic 2.10.6 / tenacity 9.0.0 on
+    # sys.path and, since those versions feed the cache key, make every historical
+    # graph miss. The typing agent still runs against the newer libs; only the key
+    # snapshot is frozen to the image. See src.cache._installed_versions.
+    export HALLU_CACHE_KEY_PACKAGE_VERSIONS="$("$CLIENT_PYTHON" - <<'PY'
+import json
+from importlib import metadata
+out = {}
+for p in ("kg-gen","dspy","litellm","pydantic","jsonschema","tenacity",
+          "sentence-transformers","transformers","torch","numpy"):
+    try:
+        out[p] = metadata.version(p)
+    except metadata.PackageNotFoundError:
+        out[p] = "not-installed"
+print(json.dumps(out))
+PY
+)"
+    echo "pinned cache-key packages: $HALLU_CACHE_KEY_PACKAGE_VERSIONS"
     TYPED_PYDEPS="$RUN_ROOT/pydeps"
     "$CLIENT_PYTHON" -m pip install --quiet --disable-pip-version-check \
       --target "$TYPED_PYDEPS" "langgraph>=1,<2" "langchain-core>=1,<2"
