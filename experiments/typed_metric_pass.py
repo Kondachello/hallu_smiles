@@ -136,7 +136,7 @@ def run_typed_metric_pass(
                "available_complete": len(_fully_cached(records, coverage))})
 
     typer = AgentTyper.from_config(
-        typing, cache_root=str(output_root / "typing-cache"),
+        typing_config, cache_root=str(output_root / "typing-cache"),
         artifacts_root=str(output_root / "typing-runs"),
     )
     detector = TypedVertexDetector(

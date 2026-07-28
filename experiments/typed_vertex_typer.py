@@ -58,7 +58,7 @@ class AgentTyper:
     @classmethod
     def from_config(
         cls,
-        config: Mapping[str, Any],
+        config_path: str | Path,
         *,
         cache_root: str | Path,
         artifacts_root: str | Path,
@@ -66,8 +66,11 @@ class AgentTyper:
         ensure_agent_importable()
         from hallugraph_dynamic_typing.agent import DynamicTypingAgent
 
-        agent = DynamicTypingAgent.from_config(
-            dict(config), cache_root=cache_root, artifacts_root=artifacts_root
+        # DynamicTypingAgent parses its YAML directly (model/nli/persistence
+        # sections + env-var resolution), so hand it the config path rather than
+        # a pre-loaded mapping.
+        agent = DynamicTypingAgent.from_yaml(
+            config_path, cache_root=cache_root, artifacts_root=artifacts_root
         )
         return cls(agent)
 
