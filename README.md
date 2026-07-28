@@ -60,6 +60,9 @@ For replaying detectors over a historical QA cache with zero LLM calls (how the
 cache is discovered, the two-source read-through chain, and every `available=0`
 pitfall), see the [historical QA cache-only replay runbook](docs/datasphere-historical-qa-cache-replay.md)
 and the [750-QA replay results](docs/vertex-750qa-cache-replay-results.md).
+For the type-aware vertex metric (EG_type by assigned type + edge RP → CFI_type)
+run over the same cache — graphs cache-only, typing via gateway+HHEM — see the
+[typed-vertex metric pass](docs/typed-vertex-metric-pass.md).
 
 **OpenRouter (alternative local profile)**
 ```bash
