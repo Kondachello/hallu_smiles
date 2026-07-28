@@ -122,9 +122,11 @@ class AgentTyper:
             context_raw=context_raw or " ",
             query_raw=query_raw or "",
             context_graph=GraphInput(
+                graph_id=f"{record_id}:context",
                 role="context", entities=ctx_ents, relations=_clean_relations(context_relations)
             ),
             query_graph=GraphInput(
+                graph_id=f"{record_id}:query",
                 role="query", entities=qry_ents, relations=_clean_relations(query_relations)
             ),
         )
@@ -142,6 +144,7 @@ class AgentTyper:
                 response_id=str(record_id),
                 response_raw=response_raw or " ",
                 answer_graph=GraphInput(
+                    graph_id=f"{record_id}:answer",
                     role="answer", entities=resp_ents, relations=_clean_relations(response_relations)
                 ),
                 registry=registry,
