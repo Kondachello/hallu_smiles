@@ -108,10 +108,24 @@ def run_typed_metric_pass(
         except Exception:  # pragma: no cover - diagnostic only
             fp = rev = "<unavailable>"
         sample = [r for r in rows if str(r.get("response_id")) == "16121"][:3] or rows[:3]
+        import hashlib
+        try:
+            key_params = provider.extractor._cache_key_params()
+        except Exception as exc:  # pragma: no cover - diagnostic only
+            key_params = {"error": repr(exc)}
+        rec16121 = next((r for r in records if str(r.get("response_id")) == "16121"), None)
+        text_probe = {}
+        if rec16121 is not None:
+            for role, field in (("response", "response_raw"), ("context", "context_raw"), ("query", "query_raw")):
+                t = rec16121.get(field) or rec16121.get(role) or ""
+                text_probe[role] = {"len": len(t), "sha8": hashlib.sha256(t.encode("utf-8")).hexdigest()[:8]}
         _progress({
             "event": "coverage_debug", "record_count": len(records),
             "row_count": len(rows), "status_counts": dict(status_counts),
             "extractor_runtime_fingerprint": fp, "extractor_model_revision": rev,
+            "cache_key_params": key_params,
+            "record_16121_fields": sorted(rec16121.keys()) if rec16121 else None,
+            "record_16121_text": text_probe,
             "sample_rows": sample,
             "source_ids": [getattr(s, "source_id", None) for s in sources],
         })
