@@ -278,6 +278,16 @@ class SharedKGGraphProvider:
     def prepare_response(self, item: Any) -> SharedGraphArtifact:
         return self.materialize(item.response, role="response")
 
+    def extract_reference(self, context: str, query: str | None) -> tuple[Graph, Graph]:
+        # Reference (context + query) graphs pulled from the same cache-only
+        # sources. Mirrors SharedKGExtractorProxy.extract_reference so a detector
+        # handed the provider directly (e.g. TypedVertexDetector) can resolve
+        # both the response and the reference graphs without the proxy.
+        return (
+            self.materialize(context, role="context").graph,
+            self.materialize(query or "", role="query").graph,
+        )
+
     def response_reference(self, item: Any) -> dict[str, str]:
         artifact = self.prepare_response(item)
         return artifact.reference()
