@@ -94,6 +94,27 @@ def run_typed_metric_pass(
         cache_sources=tuple(sources), cache_mode="cache_only",
     )
     coverage = provider.preflight(records, roles=("response", "context", "query"), require_complete=False)
+    if not _fully_cached(records, coverage):
+        # Cache is proven intact by the read-only diagnostic (2247/2250 legacy
+        # hits) yet preflight sees nothing: dump exactly what the provider
+        # computed so the mismatch (fingerprint / key schema / source) is visible.
+        from collections import Counter
+        rows = list(coverage.get("rows", []))
+        status_counts = Counter(str(r.get("status")) for r in rows)
+        try:
+            cfg = getattr(provider.extractor, "cfg", None)
+            fp = getattr(getattr(cfg, "llm", None), "runtime_fingerprint", None)
+            rev = getattr(getattr(cfg, "llm", None), "model_revision", None)
+        except Exception:  # pragma: no cover - diagnostic only
+            fp = rev = "<unavailable>"
+        sample = [r for r in rows if str(r.get("response_id")) == "16121"][:3] or rows[:3]
+        _progress({
+            "event": "coverage_debug", "record_count": len(records),
+            "row_count": len(rows), "status_counts": dict(status_counts),
+            "extractor_runtime_fingerprint": fp, "extractor_model_revision": rev,
+            "sample_rows": sample,
+            "source_ids": [getattr(s, "source_id", None) for s in sources],
+        })
     selected = _select_replay_records(
         records, coverage, replay_count=replay_count, replay_selection_seed=replay_selection_seed,
     )
