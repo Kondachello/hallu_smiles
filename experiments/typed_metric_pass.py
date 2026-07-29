@@ -254,12 +254,20 @@ def run_typed_metric_pass(
     total = len(selected)
     workers = max(1, int(max_workers))
     if workers > 1:
-        # Record-level threads carry the concurrency; keep each HHEM forward pass
-        # single-threaded so torch intra-op parallelism does not oversubscribe cores.
+        # Balance HHEM (torch) intra-op threads against record-level concurrency:
+        # give each worker cores/workers threads so total ~= cores. Forcing 1 thread
+        # cripples the CPU HHEM NLI (the dominant per-record cost); leaving the
+        # default oversubscribes cores across workers -- both stall throughput.
         try:
+            import os as _os
+
             import torch
 
-            torch.set_num_threads(1)
+            cores = _os.cpu_count() or workers
+            per_worker = max(1, cores // workers)
+            torch.set_num_threads(per_worker)
+            _progress({"event": "thread_plan", "cpu_count": cores,
+                       "workers": workers, "torch_threads_per_worker": per_worker})
         except Exception:
             pass
 
@@ -304,20 +312,17 @@ def run_typed_metric_pass(
             for index, item in items:
                 _emit(index, item, _predict(index, item))
         else:
-            # Bounded out-of-order window: submit all, buffer completed results and
-            # emit them in index order so batches stay deterministic and contiguous.
+            # Emit each record the moment it completes (completion order, NOT index
+            # order): with a thread pool + unbounded 429 retries one slow record must
+            # never block persisting/emitting the others. Each row is keyed by
+            # response_id, so order is irrelevant for downstream analysis; batches
+            # simply group every `batch_size` completed records.
             with _futures.ThreadPoolExecutor(max_workers=workers) as pool:
                 fut_map = {pool.submit(_predict, index, item): (index, item)
                            for index, item in items}
-                pending: dict[int, tuple[Any, Any]] = {}
-                next_index = 1
                 for fut in _futures.as_completed(fut_map):
                     index, item = fut_map[fut]
-                    pending[index] = (item, fut.result())
-                    while next_index in pending:
-                        emit_item, emit_result = pending.pop(next_index)
-                        _emit(next_index, emit_item, emit_result)
-                        next_index += 1
+                    _emit(index, item, fut.result())
         _flush_batch()  # remaining partial batch
 
     summary = {
