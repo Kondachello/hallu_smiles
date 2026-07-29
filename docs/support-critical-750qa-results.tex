@@ -1,0 +1,140 @@
+% !TEX program = xelatex
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=2.25cm]{geometry}
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{english}
+\setotherlanguage{russian}
+\setmainfont{Times New Roman}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,booktabs,tabularx}
+\usepackage{caption}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=black}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\renewcommand{\arraystretch}{1.12}
+
+\newcommand{\EG}{\mathrm{EG}}
+\newcommand{\RP}{\mathrm{RP}}
+\newcommand{\Hc}{H_{\mathrm{critical}}}
+\newcommand{\Htop}{H_{\mathrm{top}\text{-}k}}
+
+\title{\vspace{-1.2em}\textbf{Support-critical for Hallucination Detection in RAGTruth QA:}\\[-0.25em]
+Archive-Verified Results on a Fixed Sample of 750 Responses}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.7em}
+
+\begin{abstract}
+This report records an archive-verified evaluation of response-level hallucination detection on a fixed RAGTruth QA manifest of 750 responses.  The held-out set contains 150 responses; three have an empty answer graph and are excluded from the paired headline denominator, leaving $n=147$.  Support-critical obtained held-out ROC-AUC $0.849$ (bootstrap 95\% interval $[0.784,0.909]$) and F1 $0.798$ ($[0.726,0.862]$), versus $0.755/0.721$ for strict and $0.730/0.695$ for support.  The archive also verifies complete extraction of all 749 non-quarantined sources and a zero-live-call cache-only replay.  These are encouraging point estimates, but they are one fixed-manifest result and do not by themselves establish statistical superiority over strict.
+\end{abstract}
+
+\section{Problem Setting}
+For each context, query, and answer triple $(C,Q,A)$, the system extracts knowledge graphs $G_c,G_q,G_a$ and defines $G_{\mathrm{ref}}=G_c\cup G_q$.  RAGTruth label $y=1$ denotes a response containing at least one annotated hallucination span.  Higher $H$ always means higher hallucination risk.
+
+The shared entity-grounding term is
+\begin{equation}
+\EG=\frac{\#\{v\in V_a:\;v\text{ matches an entity in }G_{\mathrm{ref}}\}}{|V_a|}.
+\end{equation}
+An entity is matched by normalized equality, permitted token-boundary matching, or local semantic similarity.
+
+\textbf{Strict} requires directed subject--relation--object alignment:
+\begin{equation}
+\RP_{\mathrm{strict}}=\frac{\#\{\text{aligned answer edges}\}}{|E_a|},\qquad
+H_{\mathrm{strict}}=1-[\alpha\EG+(1-\alpha)\RP_{\mathrm{strict}}].
+\end{equation}
+\textbf{Support} replaces relation alignment with textual support of answer-graph relations:
+\begin{equation}
+\RP_{\mathrm{support}}=\frac{\#\{\text{text-entailed answer edges}\}}{|E_a|},\qquad
+H_{\mathrm{support}}=1-[\alpha\EG+(1-\alpha)\RP_{\mathrm{support}}].
+\end{equation}
+
+\textbf{Support-critical} additionally extracts atomic answer claims and adds claims discovered by a full-context review.  A claim verdict maps to risk as follows:
+\begin{equation}
+r(c)=
+\begin{cases}
+0, & \text{entailed},\\
+\lambda, & \text{unknown},\\
+1, & \text{unsupported or contradicted}.
+\end{cases}
+\end{equation}
+For the $k$ highest-risk claims, the final score is
+\begin{equation}
+\Hc=(1-\beta)H_{\mathrm{graph}}+\beta\Htop,
+\quad
+H_{\mathrm{graph}}=1-[\alpha\EG+(1-\alpha)\RP_{\mathrm{critical}}].
+\end{equation}
+Here $\alpha$ is an entity--relation weight inside the graph term, whereas $\beta$ balances graph and claim risk; neither is a language-model parameter.
+
+\section{Fixed Manifest and Isolation}
+The archived deterministic manifest contains 750 responses: 600 train and 150 held-out test responses, with balanced labels in the complete manifest (375 positive and 375 negative).  Five-fold CV, parameter selection, and threshold selection were performed only on the training partition.  The test labels were used once, after parameters were frozen.
+
+Source \texttt{12448} was explicitly quarantined before extraction.  Consequently 749 sources enter analysis.  All 749 were completed with no extraction failures.  Three held-out responses have $|V_a|=0$ and are unscorable under the shared graph policy; the strict, support, and support-critical headline metrics therefore use the same 147 scorable test responses (75 positive, 72 negative).
+
+\section{Selected Train-only Parameters}
+Table~\ref{tab:parameters} gives parameters selected using the 600-response training partition.  The reported train CV AUC is the mean and sample standard deviation over the deterministic five stratified train folds, recomputed from the archived final scores; its mean agrees with the archived tuning record.
+
+\begin{table}[h]
+\centering
+\caption{Parameters selected on train only.}
+\label{tab:parameters}
+\small
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+Method & $\alpha$ & $\beta$ & $k$ & $\lambda$ & $\tau_e$ / $\tau_r$ & $\theta$ & Train CV AUC \\
+\midrule
+strict & 0.70 & -- & -- & -- & 0.85 / 0.65 & 0.3213 & $0.705\pm0.048$ \\
+support & 0.70 & -- & -- & -- & 0.85 / 0.75 & 0.2012 & $0.704\pm0.063$ \\
+support-critical & 1.00 & 0.50 & 3 & 0.00 & 0.85 / 0.75 & 0.2468 & $0.769\pm0.052$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The selected support-critical configuration simplifies to
+\begin{equation}
+\Hc=0.5(1-\EG)+0.5H_{\mathrm{top}\text{-}3}.
+\end{equation}
+Because $\alpha=1.0$, $\RP_{\mathrm{critical}}$ has no direct numerical weight in the selected graph term.  Graphs and relation audits were still computed and verified, but this result must not be interpreted as direct evidence that relation scoring itself improved detection.
+
+\section{Held-out Results}
+Table~\ref{tab:results} gives held-out estimates.  Intervals are the archive-reported nonparametric bootstrap 95\% intervals for ROC-AUC and F1.  Confusion counts use the threshold selected on train only.  Accuracy is the fixed held-out value; no bootstrap accuracy interval was stored in the archive.
+
+\begin{table}[h]
+\centering
+\caption{Held-out results on the shared $n=147$ scorable responses.  TP / FP / FN / TN use the train-selected threshold.}
+\label{tab:results}
+\scriptsize
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Method & \shortstack{Test ROC-AUC\\(bootstrap 95\% interval)} & \shortstack{Test F1\\(bootstrap 95\% interval)} & Precision / Recall & Accuracy & TP / FP / FN / TN \\
+\midrule
+strict & $0.755\;[0.676,0.835]$ & $0.721\;[0.639,0.793]$ & 0.639 / 0.827 & 67.3\% & 62 / 35 / 13 / 37 \\
+support & $0.730\;[0.648,0.816]$ & $0.695\;[0.611,0.773]$ & 0.640 / 0.760 & 66.0\% & 57 / 32 / 18 / 40 \\
+support-critical & $0.849\;[0.784,0.909]$ & $0.798\;[0.726,0.862]$ & 0.704 / 0.920 & 76.2\% & 69 / 29 / 6 / 43 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Relative to strict, support-critical increases ROC-AUC by $0.095$, F1 by $0.077$, and accuracy by $8.8$ percentage points.  It has seven more true positives and six fewer false positives on the fixed held-out set.  Relative to support, the ROC-AUC gain is $0.120$ and the F1 gain is $0.103$.
+
+Across all 749 analysed responses, the support-critical diagnostic records 109 cases that change from a strict error to a support-critical correct decision and 67 changes in the opposite direction.  The claim-verdict inventory is 5,715 entailed, 1,893 unsupported, 380 contradicted, and 555 unknown verdicts.  These aggregate counts are diagnostic evidence, not a separate held-out significance test.
+
+\section{Archive and Cache Acceptance Evidence}
+The successful R12 job is an acceptance recovery, not a second independent live-inference experiment.  It reused the persistent project-disk cache lineage and made zero live API calls, zero API attempts, and zero retries in every strict, support, support-critical, and replay stage.  The critical stage served 65,029 cached requests; the strict and support stages served 2,247 and 30,674 cached requests, respectively.
+
+The pre- and post-replay cache inventories are byte-identical.  For every mode, the metric table, summary table, and tuning record are byte-identical between the cached main pass and cache-only replay.  The job's acceptance checker also compared every scored record after removing only the diagnostic cache-hit field: it is false when an entry is initially written and true when that same entry is read during replay, while all scientific score content remains equal.  Thus the former R11 terminal error was an acceptance-comparison defect, not a change in the experimental result.
+
+\section{Interpretation and Limitations}
+The fixed-manifest point estimates favour support-critical, especially its recall and reduction in false positives relative to strict.  However, the per-method bootstrap intervals do not constitute a paired significance test for the difference, and one held-out manifest is not independent replication.  The explicit source quarantine and three graph-unscorable test responses should remain visible in any comparison or follow-up aggregation.
+
+The current claim branch audits graph edges separately, but it does not automatically inject every strict-unmatched graph edge into the $\Htop$ claim set.  Hence the present result is evidence for the implemented atomic-claim and full-context-review branch combined with entity grounding, not for that future merge.  A larger pre-registered fixed manifest and a paired comparison are needed before making a general performance claim.
+
+\smallskip
+\noindent\textbf{Conclusion.} On this archive-verified 750-response manifest, support-critical has the strongest held-out point estimates while preserving a strict train/test separation and a complete cache-only replay.  Its advantage is promising but should be treated as a single-manifest result requiring larger independent confirmation.
+
+\end{document}
