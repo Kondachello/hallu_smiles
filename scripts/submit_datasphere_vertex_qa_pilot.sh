@@ -14,6 +14,7 @@ Options:
   --qa-test-fraction F    Held-out test fraction, e.g. 0.2 (default: 0.2)
   --cv-folds N            Train-only stratified CV folds (default: 5)
   --concurrency N         Gateway requests in flight (default: 1)
+  --force-cache-only      Fail on every inference cache miss; never call Gemini
   --exclude-source-id ID  Explicit source-level quarantine recorded in metrics/audit (repeatable)
   --timeout-seconds N     Optional in-container wall-time ceiling; 0 uses the DataSphere deadline (default: 0)
   --commit SHA            Pushed source commit (default: HEAD)
@@ -24,7 +25,7 @@ Options:
 EOF
 }
 PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; IMAGE=""; PROFILE="default"; SKIP_ORIGIN_FETCH=0
-QA_SAMPLE_SIZE=100; QA_TEST_FRACTION="0.2"; CV_FOLDS=5; CONCURRENCY=1; TIMEOUT_SECONDS=0; EXCLUDE_SOURCE_ARGS=()
+QA_SAMPLE_SIZE=100; QA_TEST_FRACTION="0.2"; CV_FOLDS=5; CONCURRENCY=1; TIMEOUT_SECONDS=0; FORCE_CACHE_ONLY=0; EXCLUDE_SOURCE_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-id) PROJECT_ID="$2"; shift 2 ;;
@@ -40,6 +41,7 @@ while [[ $# -gt 0 ]]; do
     --qa-test-fraction) QA_TEST_FRACTION="$2"; shift 2 ;;
     --cv-folds) CV_FOLDS="$2"; shift 2 ;;
     --concurrency) CONCURRENCY="$2"; shift 2 ;;
+    --force-cache-only) FORCE_CACHE_ONLY=1; shift ;;
     --exclude-source-id) EXCLUDE_SOURCE_ARGS+=(--exclude-source-id "$2"); shift 2 ;;
     --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -48,6 +50,10 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$PROJECT_ID" && -n "$RUN_ID" && -n "$GATEWAY_URL" && -n "$GATE_ARTIFACT" ]] || { usage >&2; exit 2; }
 test -f "$GATE_ARTIFACT" || { echo "3-QA gate artifact is missing: $GATE_ARTIFACT" >&2; exit 2; }
+FORCE_CACHE_ONLY_ARGS=()
+if [[ "$FORCE_CACHE_ONLY" -eq 1 ]]; then
+  FORCE_CACHE_ONLY_ARGS=(--force-cache-only)
+fi
 if [[ "$SKIP_ORIGIN_FETCH" -eq 1 ]]; then
   REMOTE_REF="refs/remotes/origin/$BRANCH"
   git show-ref --verify --quiet "$REMOTE_REF" || {
@@ -80,6 +86,7 @@ python3 scripts/render_datasphere_vertex_qa_pilot_job.py --commit "$COMMIT" --ru
   --docker-image "$IMAGE" --qa-sample-size "$QA_SAMPLE_SIZE" \
   --qa-test-fraction "$QA_TEST_FRACTION" --cv-folds "$CV_FOLDS" \
   --concurrency "$CONCURRENCY" --timeout-seconds "$TIMEOUT_SECONDS" \
+  "${FORCE_CACHE_ONLY_ARGS[@]}" \
   "${EXCLUDE_SOURCE_ARGS[@]}" --output "$RENDERED"
 python3 scripts/validate_datasphere_job.py --job "$RENDERED" --repo-root .
 datasphere --profile "$PROFILE" project get --id "$PROJECT_ID" >/dev/null

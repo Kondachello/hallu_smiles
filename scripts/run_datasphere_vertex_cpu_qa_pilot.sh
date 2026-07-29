@@ -17,6 +17,7 @@ QA_SAMPLE_SIZE="${QA_SAMPLE_SIZE:-20}"
 QA_TEST_FRACTION="${QA_TEST_FRACTION:-0.2}"
 QA_CV_FOLDS="${QA_CV_FOLDS:-5}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
+QA_FORCE_CACHE_ONLY="${QA_FORCE_CACHE_ONLY:-0}"
 # A DataSphere Job must not spend days repeating one 408/429.  This is a
 # per-request circuit breaker (not a Job watchdog): completed entries remain
 # atomic on project disk, and a retry can resume them.  Twelve 90-second
@@ -93,6 +94,10 @@ read -r QA_TRAIN_SOURCES QA_TEST_SOURCES <<< "$QA_QUOTAS"
 }
 [[ "$LLM_MAX_RETRIES" =~ ^[0-9]+$ ]] && (( LLM_MAX_RETRIES >= 1 )) || {
   echo "LLM_MAX_RETRIES must be a positive integer" >&2
+  exit 2
+}
+[[ "$QA_FORCE_CACHE_ONLY" == "0" || "$QA_FORCE_CACHE_ONLY" == "1" ]] || {
+  echo "QA_FORCE_CACHE_ONLY must be 0 or 1" >&2
   exit 2
 }
 EXCLUDE_SOURCE_ARGS=()
@@ -304,8 +309,17 @@ PY
 # Probe the exact three new schemas before baseline reports/tuning. It does
 # not require a particular semantic answer, and its cache-only replay proves
 # the critical namespace is writable and resumable before the 100-QA loop.
+GATEWAY_PROBE_ARGS=()
+BASELINE_RUN_ARGS=()
+CRITICAL_RUN_ARGS=(--kg-cache-only)
+if [[ "$QA_FORCE_CACHE_ONLY" == "1" ]]; then
+  GATEWAY_PROBE_ARGS+=(--cache-only)
+  BASELINE_RUN_ARGS+=(--cache-only)
+  CRITICAL_RUN_ARGS=(--cache-only)
+  echo "[cache-only] force mode enabled: any missing inference entry is a hard failure"
+fi
 "$CLIENT_PYTHON" "$ROOT/scripts/check_support_critical_gateway_probe.py" \
-  --config "$CRITICAL_CONFIG" --report "$CRITICAL_GATEWAY_PROBE"
+  --config "$CRITICAL_CONFIG" --report "$CRITICAL_GATEWAY_PROBE" "${GATEWAY_PROBE_ARGS[@]}"
 
 require_complete_extraction() {
   "$CLIENT_PYTHON" - "$1/extraction_summary.json" "$2" <<'PY'
@@ -341,7 +355,7 @@ PY
 find "$HISTORICAL_BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-before.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode strict --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$STRICT_OUT" "${EXCLUDE_SOURCE_ARGS[@]}"
+  --output-dir "$STRICT_OUT" "${BASELINE_RUN_ARGS[@]}" "${EXCLUDE_SOURCE_ARGS[@]}"
 require_complete_extraction "$STRICT_OUT" "$QA_SAMPLE_SIZE"
 mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-cache-fill-usage.jsonl"
 
@@ -349,7 +363,7 @@ mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-cache-fill-usage.jsonl"
 # are written only to the primary 1000-QA namespace.
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode support --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$SUPPORT_OUT" "${EXCLUDE_SOURCE_ARGS[@]}"
+  --output-dir "$SUPPORT_OUT" "${BASELINE_RUN_ARGS[@]}" "${EXCLUDE_SOURCE_ARGS[@]}"
 require_complete_extraction "$SUPPORT_OUT" "$QA_SAMPLE_SIZE"
 mv "$SUPPORT_OUT/usage.jsonl" "$RUN_ROOT/support-cache-fill-usage.jsonl"
 find "$HISTORICAL_BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-after-baseline.sha256"
@@ -360,7 +374,7 @@ cmp "$RUN_ROOT/historical-cache-before.sha256" "$RUN_ROOT/historical-cache-after
 # evidence components to make live gateway calls.
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$CRITICAL_CONFIG" --stage all \
   --relation-mode support-critical --qa-manifest "$QA_MANIFEST" \
-  --output-dir "$CRITICAL_OUT" --kg-cache-only "${EXCLUDE_SOURCE_ARGS[@]}"
+  --output-dir "$CRITICAL_OUT" "${CRITICAL_RUN_ARGS[@]}" "${EXCLUDE_SOURCE_ARGS[@]}"
 require_complete_extraction "$CRITICAL_OUT" "$QA_SAMPLE_SIZE"
 mv "$CRITICAL_OUT/usage.jsonl" "$RUN_ROOT/support-critical-live-usage.jsonl"
 "$CLIENT_PYTHON" "$ROOT/scripts/compare_qa_pilot_results.py" \

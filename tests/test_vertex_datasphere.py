@@ -245,6 +245,7 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert 'QA_SAMPLE_SIZE="100"' in command
     assert 'QA_TEST_FRACTION="0.2"' in command
     assert 'QA_CV_FOLDS="5"' in command
+    assert 'QA_FORCE_CACHE_ONLY="0"' in command
     assert 'QA_EXCLUDE_SOURCE_IDS="12448"' in command
     assert 'tee "$RUN_ROOT/qa.stdout.log"' in command
     assert "timeout --signal=TERM --kill-after=60s 43200" in command
@@ -263,6 +264,8 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "--kg-cache-only" in runner
     assert "--cache-only" in runner
     assert "LLM_MAX_RETRIES=\"${LLM_MAX_RETRIES:-12}\"" in runner
+    assert "QA_FORCE_CACHE_ONLY=\"${QA_FORCE_CACHE_ONLY:-0}\"" in runner
+    assert "force mode enabled: any missing inference entry is a hard failure" in runner
     assert "--max-tokens 16384 --concurrency \"$LLM_CONCURRENCY\" --max-retries \"$LLM_MAX_RETRIES\"" in runner
     assert "--cv-folds \"$QA_CV_FOLDS\"" in runner
     assert "--cache-root \"$BASELINE_CACHE_ROOT\"" in runner
@@ -301,6 +304,25 @@ def test_cpu_vertex_qa_job_defaults_to_platform_deadline_for_resumable_long_runs
     assert "timeout --signal=TERM" not in command
     assert "bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh" in command
     assert "#" not in command
+
+
+def test_cpu_vertex_qa_job_can_forbid_inference_cache_misses(tmp_path):
+    rendered = tmp_path / "vertex-750qa-cache-only.yaml"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_qa_pilot_job.py"),
+        "--commit", "f" * 40, "--run-id", "vertex-750qa-cache-only",
+        "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--docker-image", IMAGE,
+        "--qa-sample-size", "750", "--qa-test-fraction", "0.2", "--cv-folds", "5",
+        "--concurrency", "1", "--exclude-source-id", "12448", "--force-cache-only",
+        "--output", str(rendered),
+    ], check=True)
+    job = yaml.safe_load(rendered.read_text(encoding="utf-8"))
+    assert 'QA_FORCE_CACHE_ONLY="1"' in str(job["cmd"])
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "validate_datasphere_job.py"),
+        "--job", str(rendered), "--repo-root", str(ROOT),
+    ], check=True)
 
 
 def test_cpu_dockerfile_is_pinned_and_has_no_llama_or_vllm(tmp_path):

@@ -34,6 +34,11 @@ def main() -> None:
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument(
+        "--force-cache-only",
+        action="store_true",
+        help="forbid all inference cache misses during a recovery-only Job",
+    )
+    parser.add_argument(
         "--exclude-source-id",
         action="append",
         default=[],
@@ -97,6 +102,7 @@ def main() -> None:
         .replace("__QA_TEST_FRACTION__", str(args.qa_test_fraction))
         .replace("__QA_CV_FOLDS__", str(args.cv_folds))
         .replace("__LLM_CONCURRENCY__", str(args.concurrency))
+        .replace("__QA_FORCE_CACHE_ONLY__", "1" if args.force_cache_only else "0")
         .replace("__QA_EXCLUDE_SOURCE_IDS__", ",".join(excluded_source_ids))
         .replace("__JOB_RUN_COMMAND__", run_command)
         .replace("__DOCKER_ENV_BLOCK__", docker_block))

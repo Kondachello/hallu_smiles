@@ -22,6 +22,7 @@ cmd: >-
   export QA_TEST_FRACTION="__QA_TEST_FRACTION__";
   export QA_CV_FOLDS="__QA_CV_FOLDS__";
   export LLM_CONCURRENCY="__LLM_CONCURRENCY__";
+  export QA_FORCE_CACHE_ONLY="__QA_FORCE_CACHE_ONLY__";
   export QA_EXCLUDE_SOURCE_IDS="__QA_EXCLUDE_SOURCE_IDS__";
   export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
   printf "[artifact] output=%s\\n" "$ARCHIVE_PATH";
