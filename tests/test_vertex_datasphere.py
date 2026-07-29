@@ -281,6 +281,7 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "cache-before-replay.sha256" in runner
     assert "summary_metrics.csv" in runner
     assert "scored.jsonl" in runner
+    assert "verify_cache_replay.py" in runner
     assert "vllm" not in runner.lower()
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh")], check=True)
 

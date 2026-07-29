@@ -388,10 +388,11 @@ require_complete_extraction "$REPLAY_CRITICAL" "$QA_SAMPLE_SIZE"
 for name in strict support support-critical; do
   live_dir="$RUN_ROOT/$name"
   replay_dir="$RUN_ROOT/cache-replay/$name"
-  cmp "$live_dir/metrics.csv" "$replay_dir/metrics.csv"
-  cmp "$live_dir/summary_metrics.csv" "$replay_dir/summary_metrics.csv"
-  cmp "$live_dir/scored.jsonl" "$replay_dir/scored.jsonl"
-  cmp "$live_dir/tuning.json" "$replay_dir/tuning.json"
+  # The verifier keeps metrics.csv, summary_metrics.csv, and tuning.json byte
+  # identical; it compares scored.jsonl semantically while excluding only its
+  # cache-observability flag.
+  "$CLIENT_PYTHON" "$ROOT/scripts/verify_cache_replay.py" \
+    --live-dir "$live_dir" --replay-dir "$replay_dir"
 done
 find "$BASELINE_CACHE_ROOT" "$CRITICAL_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/cache-after-replay.sha256"
 cmp "$RUN_ROOT/cache-before-replay.sha256" "$RUN_ROOT/cache-after-replay.sha256"
