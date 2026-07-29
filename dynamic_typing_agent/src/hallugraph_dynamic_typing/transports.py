@@ -6,6 +6,7 @@ import json
 import os
 import random
 import re
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -21,6 +22,49 @@ from .models import EvidenceLevel, NliResult, stable_id
 
 _VERTEX_UNSUPPORTED_SCHEMA_KEYS = frozenset({"$schema", "pattern", "minLength", "maxLength", "uniqueItems"})
 _MARKDOWN_JSON_FENCE = re.compile(r"^```(?:json)?\s*\n(?P<body>[\s\S]*?)\n```\s*$", re.IGNORECASE)
+
+
+class _RateLimiter:
+    """Process-wide minimum-interval throttle shared by every typing worker.
+
+    Typing fans out into dozens of gateway calls per record; unpaced under
+    record-level concurrency this trips the Vertex QPM quota ("capacity
+    temporarily exhausted", HTTP 429), which then burns the whole retry budget.
+    Pacing calls just under the quota avoids the 429 storm entirely -- fewer
+    failures AND faster overall (no wasted back-off).
+    """
+
+    def __init__(self, qps: float) -> None:
+        self._min_interval = (1.0 / qps) if qps and qps > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def acquire(self) -> None:
+        if self._min_interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            start = self._next if self._next > now else now
+            wait = start - now
+            self._next = start + self._min_interval
+        if wait > 0:
+            time.sleep(wait)
+
+
+_RATE_LIMITER: "_RateLimiter | None" = None
+
+
+def _typing_rate_limiter() -> _RateLimiter:
+    # Rate is read once from HALLU_TYPING_QPS (requests/sec across the process);
+    # 0/unset means unlimited (legacy behaviour).
+    global _RATE_LIMITER
+    if _RATE_LIMITER is None:
+        try:
+            qps = float(os.environ.get("HALLU_TYPING_QPS", "0") or 0)
+        except ValueError:
+            qps = 0.0
+        _RATE_LIMITER = _RateLimiter(qps)
+    return _RATE_LIMITER
 
 
 def vertex_compatible_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -244,6 +288,7 @@ class LiteLLMStructuredModel:
                         "type": "json_schema",
                         "json_schema": {"name": operation, "strict": True, "schema": wire_schema},
                     }
+                _typing_rate_limiter().acquire()
                 response = completion(
                     **request,
                 )

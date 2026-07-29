@@ -41,6 +41,9 @@ def main() -> None:
     parser.add_argument("--max-workers", type=int, default=1,
                         help="record-level typing concurrency (overlaps gateway+HHEM calls; "
                              "identical results, ~N x faster). 1 = sequential.")
+    parser.add_argument("--typing-qps", type=float, default=0.0,
+                        help="process-wide gateway request rate cap (req/sec) to stay under the "
+                             "Vertex quota and avoid 429 storms. 0 = unlimited.")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.commit) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", args.run_id):
@@ -74,6 +77,7 @@ def main() -> None:
         .replace("__REPLAY_SELECTION_SEED__", str(args.replay_selection_seed))
         .replace("__TYPED_METRIC_ALPHA__", str(args.alpha))
         .replace("__TYPED_METRIC_MAX_WORKERS__", str(args.max_workers))
+        .replace("__TYPED_METRIC_QPS__", str(args.typing_qps))
         .replace("__JOB_TIMEOUT_SECONDS__", str(args.timeout_seconds))
         .replace("__DOCKER_ENV_BLOCK__", f"  docker:\n    image: {image}"))
     if "__" in rendered:
