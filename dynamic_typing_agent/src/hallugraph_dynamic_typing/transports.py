@@ -223,6 +223,18 @@ class LiteLLMStructuredModel:
         match = re.search(r"(?:status(?:[_ ]code)?|http)\D{0,12}(\d{3})", str(exc), flags=re.IGNORECASE)
         return int(match.group(1)) if match else None
 
+    def _is_rate_limit(self, exc: Exception) -> bool:
+        if self._status_code(exc) == 429:
+            return True
+        text = str(exc).casefold()
+        return any(
+            marker in text
+            for marker in (
+                "rate limit", "too many requests", "ratelimiterror",
+                "capacity is temporarily exhausted", "resource exhausted", "resource_exhausted",
+            )
+        )
+
     def _is_transient(self, exc: Exception) -> bool:
         status = self._status_code(exc)
         if status == 429 or status in {408, 409, 425} or status is not None and 500 <= status <= 599:
@@ -271,7 +283,10 @@ class LiteLLMStructuredModel:
         wire_schema = vertex_compatible_schema(output_schema) if self.structured_schema_profile == "vertex" else dict(output_schema)
         completion = self._completion()
         response: Any = None
-        for attempt in range(1, self.max_attempts + 1):
+        attempt = 0
+        rate_limit_retries = 0
+        while True:
+            attempt += 1
             try:  # pragma: no cover - live-only
                 request: dict[str, Any] = {
                     "model": self.model,
@@ -293,6 +308,15 @@ class LiteLLMStructuredModel:
                     **request,
                 )
             except Exception as exc:
+                if self._is_rate_limit(exc):
+                    # 429 / "Vertex capacity temporarily exhausted": wait and retry
+                    # indefinitely so no record is dropped to a transient quota blip.
+                    # Backoff plateaus (capped exponent) and does NOT consume the
+                    # bounded transport-error budget below.
+                    rate_limit_retries += 1
+                    attempt -= 1
+                    self.sleep_callable(self._delay_seconds(min(rate_limit_retries, 6)))
+                    continue
                 if attempt >= self.max_attempts or not self._is_transient(exc):
                     raise TransportError(
                         f"{operation}: live completion failed after {attempt}/{self.max_attempts} attempt(s): "
