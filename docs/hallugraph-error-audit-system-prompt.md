@@ -82,6 +82,13 @@ HalluGraph, GraphEval, LLM или gateway. Не выдумывай отсутс�
 - сущность, ошибочно отмеченную незаземлённой;
 - реально незаземлённую сущность, пропущенную списком.
 
+Для каждой заземлённой сущности Response укажи источник заземления: граф Context,
+граф Query или оба. Отдельно пометь случаи, когда сущность «подтверждается»
+только графом Query: эхо формулировки вопроса не является фактическим
+основанием, и утверждение о такой сущности может быть полностью выдуманным при
+формально заземлённых концах. Проверь по полям пакета, учитывает ли конвейер
+этот источник при подсчёте компонент.
+
 ## 4. Типы сущностей и роли
 
 Проверь, различает ли случай тождество сущности, постоянный тип и временную роль.
@@ -120,6 +127,13 @@ Grounding): скрытые типы самого типизатора не яв�
 есть ли strict-edge, подтверждает ли текст полную тройку (`entailed`,
 `contradicted`, `unknown`).
 
+Сопоставь каждый флаг (`ungrounded_entity`, `unsupported_relation`) с
+размеченными интервалами RAGTruth: попадает ли он в интервал, примыкает к нему
+или лежит полностью вне разметки. Для FN отдельно укажи, какие размеченные
+ошибки не имеют ни одного кандидата среди флагов. В сводном JSON заполни
+`flags_vs_gold_spans`: `FULL` — все флаги попадают в размеченные интервалы,
+`PARTIAL` — часть, `NONE` — ни один, `NO_FLAGS` — флагов нет.
+
 Восстанови цепочку:
 
 текст → KGGen graph → matching → ungrounded/unsupported status → ER/EG/RP →
@@ -153,18 +167,43 @@ CFI/итоговый балл → порог → решение.
 `INHERENT_AMBIGUITY`, `NEW_CATEGORY`.
 
 Используй стабильные детальные теги, например:
-`KGGEN_CONTEXT_OMISSION`, `KGGEN_RESPONSE_OMISSION`, `NUMERIC_DROPOUT`,
+`KGGEN_CONTEXT_OMISSION`, `KGGEN_RESPONSE_OMISSION`,
+`KGGEN_CONTEXT_FABRICATION`, `KGGEN_RESPONSE_NORMALIZATION`, `NUMERIC_DROPOUT`,
 `TEMPORAL_DROPOUT`, `NEGATION_DROPOUT`, `COREFERENCE_FAILURE`,
 `ENTITY_BOUNDARY_MISMATCH`, `ENTITY_CANONICALIZATION_FAILURE`,
-`ENTITY_GRANULARITY_MISMATCH`, `TYPE_HIERARCHY_MISMATCH`,
+`ENTITY_GRANULARITY_MISMATCH`, `QUERY_ONLY_GROUNDING`,
+`TYPE_HIERARCHY_MISMATCH`,
 `UNSUPPORTED_TYPE_SPECIALIZATION`, `CONTEXTUAL_ROLE_MISMATCH`,
-`PREDICATE_PARAPHRASE`, `PREDICATE_OVERMATCH`, `INVERSE_RELATION_MISSED`,
+`PREDICATE_PARAPHRASE`, `PREDICATE_OVERMATCH`, `LITERAL_VALUE_OVERMATCH`,
+`INVERSE_RELATION_MISSED`,
 `EDGE_DIRECTION_FAILURE`, `NARY_RELATION_LOSS`, `MODALITY_LOSS`,
 `CROSS_SENTENCE_COMPOSITION`, `CROSS_PASSAGE_COMPOSITION`,
 `MULTIHOP_SUPPORT_MISSED`, `SPURIOUS_PATH_SUPPORT`,
 `TEXT_ENTAILED_GRAPH_MISSING`, `LONG_RESPONSE_DILUTION`, `RP_COLLAPSE`,
+`SPARSE_GRAPH_INSTABILITY`,
 `CLAIM_WEIGHTING_FAILURE`, `COVERAGE_IGNORED`, `THRESHOLD_BORDERLINE`,
 `THRESHOLD_CALIBRATION`, `GOLD_LABEL_AMBIGUITY`.
+
+Определения тегов, которые легко спутать с соседними:
+
+- `KGGEN_CONTEXT_FABRICATION` — KGGen добавил в граф Context сущность или ребро,
+  отсутствующие в тексте Context, что дало ложную поддержку утверждению Response.
+- `KGGEN_RESPONSE_NORMALIZATION` — KGGen при экстракции «исправил» или
+  нормализовал галлюцинированную формулировку, и граф Response оказался вернее
+  текста Response, скрыв галлюцинацию. Применим только когда граф Response
+  противоречит тексту Response в фактической части, а не при простой
+  перефразировке.
+- `QUERY_ONLY_GROUNDING` — сущность или отношение Response «заземлены» лишь
+  графом Query, то есть эхом самого вопроса, без подтверждения в Context.
+- `LITERAL_VALUE_OVERMATCH` — близкое, но неверное значение (число, дата,
+  единица, диапазон) сопоставлено как заземлённое из-за мягкого сравнения строк
+  или эмбеддингов, и подмена значения не зафиксирована. В отличие от
+  `ENTITY_CANONICALIZATION_FAILURE` применим тогда, когда значения фактически
+  различны, а не когда одно значение записано по-разному.
+- `SPARSE_GRAPH_INSTABILITY` — граф Response или Context настолько мал, что один
+  узел или одно ребро сдвигает компонент метрики на большую долю: квантование
+  балла, нестабильный знаменатель, пустой или почти пустой граф. Ставь только
+  если малый размер графа реально повлиял на решение.
 
 Если нужен новый тег, дай ему краткое переносимое определение.
 
@@ -178,6 +217,11 @@ CFI/итоговый балл → порог → решение.
 Для последней гипотезы различай: заземлённость концов relation, strict graph
 alignment и поддержку полного утверждения текстом. Не считай любое соединение
 в графе доказательством.
+
+В сводном JSON формулируй каждый элемент `missing_signals` короткой англоязычной
+номинальной фразой из 2–6 слов (например, `numeric value comparison`,
+`query echo filtering`), одинаковой для одинакового сигнала в разных кейсах;
+полное описание сигнала оставляй в тексте отчёта.
 
 ## 9. Вторичный аудит GraphEval
 
@@ -211,8 +255,12 @@ alignment и поддержку полного утверждения текст
   "auditor_label": 0,
   "gold_agreement": "AGREE",
   "hallugraph_error_type": "FP",
+  "flags_vs_gold_spans": "NONE",
   "primary_root_cause": {"coarse_class": "", "fine_tag": "", "stage": "", "confidence": 0.0},
   "secondary_tags": [],
+  "atomic_claims_total": 0,
+  "atomic_claims_problematic": 0,
+  "max_claim_severity": null,
   "kggen_contribution": "NONE",
   "oracle_counterfactuals": {
     "perfect_graphs": "WOULD_NOT_FIX",
@@ -233,6 +281,26 @@ alignment и поддержку полного утверждения текст
   "new_error_category": null,
   "overall_confidence": 0.0
 }
+
+Конвенции полей: в `gold_label` и `auditor_label` значение 1 означает «в ответе
+есть галлюцинация», 0 — «галлюцинации нет». `gold_agreement` принимает `AGREE`,
+`DISAGREE` или `AMBIGUOUS`. `hallugraph_error_type` принимает `FP` (HalluGraph
+пометил галлюцинацию, которой, по твоей оценке, нет), `FN` (пропустил реальную
+галлюцинацию) или `NONE` (решение HalluGraph верно, а ошибочна разметка или
+постановка случая). `stage` в `primary_root_cause` принимает: `extraction`,
+`entity_alignment`, `relation_alignment`, `typing`, `scoring`, `threshold`,
+`gold`.
+
+`kggen_contribution` принимает: `NONE` — графы верны в релевантной части;
+`MINOR` — дефекты экстракции есть, но исход не изменили бы; `MAJOR` — дефекты
+внесли значимый вклад наряду с другой причиной; `SOLE_OR_DOMINANT` — ошибка
+объясняется преимущественно экстракцией. Значение должно быть согласовано с
+результатом `perfect_graphs` в контрфактиках: `WOULD_FIX` при `NONE` —
+противоречие.
+
+`atomic_claims_problematic` — число атомарных утверждений со статусом вне
+`ENTAILED`; `max_claim_severity` — наибольшая серьёзность среди них
+(`critical`, `major`, `minor` или null, если таких нет).
 ```
 
 Промпт самодостаточен: передавайте его вместе с JSON-пакетом, даже если у
