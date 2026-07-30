@@ -231,6 +231,7 @@ for (let w = 0; w < waves.length; w++) {
         label: `audit:${caseId}`,
         phase: phaseName,
         schema: WORKER_SCHEMA,
+        ...(cfg.workerModel ? { model: cfg.workerModel } : {}),
       })
     )
   )
@@ -248,10 +249,13 @@ for (let w = 0; w < waves.length; w++) {
 
   if (proposals.length) {
     // Single writer per wave — this is what keeps the append-only files consistent.
+    // The registrar gates what every later agent sees, so it can warrant a
+    // stronger model than the workers even when the workers are downgraded.
     const decision = await agent(registrarPrompt(proposals, waveNo), {
       label: `registrar:wave-${waveNo}`,
       phase: 'Реестр аспектов',
       schema: REGISTRAR_SCHEMA,
+      ...(cfg.registrarModel ? { model: cfg.registrarModel } : {}),
     })
     if (decision) {
       registryDecisions.push(...decision.decisions)
