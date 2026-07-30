@@ -21,7 +21,8 @@ export const meta = {
 // }
 // ---------------------------------------------------------------------------
 
-const cfg = args || {}
+// args may arrive as an object or as a JSON-encoded string depending on caller.
+const cfg = typeof args === 'string' ? JSON.parse(args) : (args || {})
 const caseIds = cfg.caseIds || []
 const waveSize = cfg.waveSize || 12
 
@@ -42,8 +43,11 @@ const WORKER_SCHEMA = {
         confidence: { type: 'number' },
       },
     },
-    hallugraph_error_type: { type: 'string', enum: ['FP', 'FN', 'LABEL_AMBIGUITY', 'NOT_CONFIRMED', 'UNDETERMINED'] },
-    kggen_contribution: { type: 'string', enum: ['NONE', 'PARTIAL', 'KGGEN_ONLY_OR_DOMINANT'] },
+    // These enums MUST stay in sync with the conventions block of the audit prompt;
+    // a mismatch silently overrides the prompt and desyncs the aggregation stage.
+    hallugraph_error_type: { type: 'string', enum: ['FP', 'FN', 'NONE', 'LABEL_AMBIGUITY', 'NOT_CONFIRMED', 'UNDETERMINED'] },
+    kggen_contribution: { type: 'string', enum: ['NONE', 'MINOR', 'MAJOR', 'SOLE_OR_DOMINANT'] },
+    flags_vs_gold_spans: { type: 'string', enum: ['FULL', 'PARTIAL', 'NONE', 'NO_FLAGS'] },
     registry_aspects_considered: {
       type: 'array',
       description: 'aspect_ids from the dynamic registry that this agent evaluated',
