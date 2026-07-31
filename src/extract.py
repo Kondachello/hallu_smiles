@@ -24,7 +24,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from tenacity import Retrying, retry_if_exception, stop_after_attempt
 
@@ -222,6 +222,7 @@ class KGExtractor:
         usage: UsageLogger | None = None,
         *,
         cache_only: bool = False,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.cfg = cfg
         self.model = cfg.llm.model
@@ -369,6 +370,14 @@ class KGExtractor:
             else f"{type(backend).__module__}.{type(backend).__qualname__}"
         )
         self.usage = usage or UsageLogger(None)
+        # Optional redacted instrumentation for long document-level jobs.  It
+        # receives counts and phase names only; callers must never pass source
+        # text, prompts, completions, cache keys, or credentials through it.
+        self.progress_callback = progress_callback
+
+    def _emit_progress(self, **payload: Any) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(dict(payload))
 
     # -- backend --------------------------------------------------------------
     def _get_backend(self):
@@ -882,11 +891,23 @@ class KGExtractor:
                 # response-level parallelism can deadlock a local vLLM client after
                 # some successful calls.  Preserve KGGen's algorithm (chunk,
                 # aggregate, then cluster) but schedule the chunks serially.
-                graphs = [
-                    backend.generate(input_data=chunk, cluster=False)
-                    for chunk in self._split_text(text, self.chunk_chars)
-                ]
+                chunks = self._split_text(text, self.chunk_chars)
+                graphs = []
+                for index, chunk in enumerate(chunks, start=1):
+                    self._emit_progress(
+                        event="kg_chunk", kind=kind, completed=index - 1,
+                        total=len(chunks), phase="extracting",
+                    )
+                    graphs.append(backend.generate(input_data=chunk, cluster=False))
+                    self._emit_progress(
+                        event="kg_chunk", kind=kind, completed=index,
+                        total=len(chunks), phase="extracting",
+                    )
                 g = backend.aggregate(graphs)
+                self._emit_progress(
+                    event="kg_cluster", kind=kind, completed=len(chunks),
+                    total=len(chunks), phase="clustering",
+                )
                 g = self._cluster_backend_graph(
                     backend,
                     g,
@@ -915,6 +936,10 @@ class KGExtractor:
                     gen_kwargs["chunk_size"] = self.chunk_chars
                 g = backend.generate(**gen_kwargs)
                 if explicit_cluster_phase:
+                    self._emit_progress(
+                        event="kg_cluster", kind=kind, completed=0, total=1,
+                        phase="clustering",
+                    )
                     g = self._cluster_backend_graph(
                         backend,
                         g,
@@ -941,6 +966,11 @@ class KGExtractor:
         429/5xx errors until the enclosing Job deadline.
         """
         graph: Graph | None = None
+        retry_heartbeat = RetryHeartbeat(
+            kind,
+            self.usage,
+            progress_callback=lambda payload: self._emit_progress(**payload),
+        )
         for attempt in Retrying(
             # ``0`` leaves non-capacity transient retries to the enclosing
             # DataSphere Job. A continuous 429 streak has an explicit local
@@ -962,7 +992,7 @@ class KGExtractor:
                 retry_deadline_seconds=self.retry_deadline_s,
             ),
             retry=retry_if_exception(is_retryable_llm_exception),
-            before_sleep=RetryHeartbeat(kind, self.usage),
+            before_sleep=retry_heartbeat,
             reraise=True,
         ):
             with attempt:

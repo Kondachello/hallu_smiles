@@ -113,6 +113,14 @@ def main() -> None:
     # ceiling.  Use a safe ceiling and one in-flight source for the bounded
     # on-demand capacity probe.
     parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument(
+        "--extraction-max-tokens-ceiling",
+        type=int,
+        default=None,
+        help=(
+            "optional bounded adaptive KG extraction ceiling; defaults to the base config value"
+        ),
+    )
     parser.add_argument("--concurrency", type=int, default=1)
     # Public/on-demand Vertex capacity can briefly return HTTP 429 even for a
     # single in-flight request.  ``0`` is deliberate: retry transient
@@ -134,6 +142,11 @@ def main() -> None:
     args = parser.parse_args()
     if args.max_tokens <= 0:
         raise ValueError("--max-tokens must be positive")
+    if (
+        args.extraction_max_tokens_ceiling is not None
+        and args.extraction_max_tokens_ceiling < args.max_tokens
+    ):
+        raise ValueError("--extraction-max-tokens-ceiling must be at least --max-tokens")
     if args.concurrency <= 0:
         raise ValueError("--concurrency must be positive")
     if args.max_retries < 0:
@@ -228,6 +241,8 @@ def main() -> None:
     llm["structured_output_request_backend"] = None
     llm["vllm_guided_json"] = False
     config["extraction"]["serial_chunking"] = False
+    if args.extraction_max_tokens_ceiling is not None:
+        config["extraction"]["max_tokens_ceiling"] = args.extraction_max_tokens_ceiling
     config["extraction"]["cluster_context_mode"] = "source_text"
     config["matching"]["embedding_model_path"] = "/opt/hallu/models/all-MiniLM-L6-v2"
     config["matching"]["embedding_device"] = "cpu"

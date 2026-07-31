@@ -130,6 +130,24 @@ def test_vertex_runtime_config_allows_unbounded_transient_retry_until_job_timeou
     assert yaml.safe_load(output.read_text(encoding="utf-8"))["llm"]["max_retries"] == 0
 
 
+def test_vertex_runtime_config_can_bound_docred_adaptive_extraction_output(tmp_path):
+    manifest = tmp_path / "gateway.json"
+    runtime = tmp_path / "runtime.json"
+    output = tmp_path / "runtime.yaml"
+    manifest.write_text(json.dumps(_manifest()), encoding="utf-8")
+    runtime.write_text(json.dumps({"runtime_fingerprint": "cpu-image-fingerprint"}), encoding="utf-8")
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "make_datasphere_vertex_config.py"),
+        "--base-config", str(ROOT / "config.yaml"), "--gateway-manifest", str(manifest),
+        "--gateway-url", "https://gateway.example.run.app", "--datasphere-runtime-manifest", str(runtime),
+        "--output", str(output), "--data-dir", "/docred", "--work-dir", str(tmp_path / "work"),
+        "--max-tokens", "4096", "--extraction-max-tokens-ceiling", "8192",
+    ], check=True)
+    cfg = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert cfg["llm"]["max_tokens"] == 4096
+    assert cfg["extraction"]["max_tokens_ceiling"] == 8192
+
+
 def test_historical_cache_lineage_requires_exact_checkpoint_gateway_and_client_runtime(tmp_path):
     registry = ROOT / "datasphere" / "historical_kg_cache_lineages.json"
     lineage = json.loads(registry.read_text(encoding="utf-8"))["lineages"][0]
@@ -323,6 +341,50 @@ def test_cpu_vertex_qa_job_can_forbid_inference_cache_misses(tmp_path):
         sys.executable, str(SCRIPTS / "validate_datasphere_job.py"),
         "--job", str(rendered), "--repo-root", str(ROOT),
     ], check=True)
+
+
+def test_cpu_vertex_docred_job_is_fixed_budgeted_and_redacted(tmp_path):
+    rendered = tmp_path / "docred.yaml"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_docred_kg_eval_job.py"),
+        "--commit", "f" * 40, "--run-id", "docred-250qa-20260731",
+        "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--budget-eur", "10.5",
+        "--docker-image", IMAGE, "--output", str(rendered),
+    ], check=True)
+    job = yaml.safe_load(rendered.read_text(encoding="utf-8"))
+    assert job["cloud-instance-types"] == ["c1.4"]
+    assert job["outputs"] == [{
+        "vertex-cpu-docred-kg-docred-250qa-20260731.tar.gz": "ARTIFACT_ARCHIVE"
+    }]
+    command = str(job["cmd"])
+    assert 'DOCRED_BUDGET_EUR="10.50"' in command
+    assert 'EXPECTED_GATEWAY_MANIFEST_SHA256="' + "a" * 64 + '"' in command
+    assert "--exclude=\"*/usage.jsonl\"" in command
+    assert "docred-live/graphs" in command
+    assert "timeout --signal=TERM" not in command
+    assert "HALLU_GATEWAY_API_KEY" not in rendered.read_text(encoding="utf-8")
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "validate_datasphere_job.py"),
+        "--job", str(rendered), "--repo-root", str(ROOT),
+    ], check=True)
+    runner = (SCRIPTS / "run_datasphere_vertex_cpu_docred_kg_eval.sh").read_text(encoding="utf-8")
+    assert "fetch_docred_data.py" in runner
+    assert "DOCRED_BUDGET_EUR" in runner
+    assert "--max-tokens 4096 --extraction-max-tokens-ceiling 8192" in runner
+    assert "--concurrency 1 --max-retries 0" in runner
+    assert "serial_chunking'] = True" in runner
+    assert "--stage replay --cache-only" in runner
+    assert "verify_docred_cache_replay.py" in runner
+    assert "cache-before-replay.json" in runner
+    assert "cache keys" in runner.lower()
+    assert "vllm" not in runner.lower()
+    subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_vertex_cpu_docred_kg_eval.sh")], check=True)
+    submitter = (SCRIPTS / "submit_datasphere_vertex_docred_kg_eval.sh").read_text(encoding="utf-8")
+    assert 'GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-ares}"' in submitter
+    assert "YC_CLI_INITIALIZATION_SILENCE" in submitter
+    assert "validate_datasphere_vertex_probe_artifact.py" in submitter
+    assert "yc init" not in submitter
 
 
 def test_cpu_dockerfile_is_pinned_and_has_no_llama_or_vllm(tmp_path):

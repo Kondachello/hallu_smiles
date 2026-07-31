@@ -287,9 +287,15 @@ class StopAfterAttemptsExceptRateLimit:
 class RetryHeartbeat:
     """Emit redacted, machine-readable retry progress to stdout and usage logs."""
 
-    def __init__(self, component: str, usage: Any | None = None):
+    def __init__(
+        self,
+        component: str,
+        usage: Any | None = None,
+        progress_callback: Any | None = None,
+    ):
         self.component = str(component)
         self.usage = usage
+        self.progress_callback = progress_callback
 
     def __call__(self, retry_state: Any) -> None:
         outcome = getattr(retry_state, "outcome", None)
@@ -315,3 +321,5 @@ class RetryHeartbeat:
         if started is not None:
             payload["continuous_429_seconds"] = round(max(0.0, time.monotonic() - float(started)), 3)
         print("[heartbeat] " + json.dumps(payload, sort_keys=True), flush=True)
+        if self.progress_callback is not None:
+            self.progress_callback(dict(payload))

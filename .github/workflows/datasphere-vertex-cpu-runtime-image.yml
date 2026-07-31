@@ -2,7 +2,7 @@ name: Build DataSphere Vertex CPU runtime image
 
 on:
   push:
-    branches: [new-metrics]
+    branches: [new-metrics, kggen-docred]
   workflow_dispatch:
 
 permissions:
@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 1
-      - run: python3 scripts/render_datasphere_cpu_vertex_dockerfile.py --commit "$GITHUB_SHA" --branch new-metrics --output datasphere/docker/rendered/Dockerfile.cpu-vertex
+      - run: python3 scripts/render_datasphere_cpu_vertex_dockerfile.py --commit "$GITHUB_SHA" --branch "$GITHUB_REF_NAME" --output datasphere/docker/rendered/Dockerfile.cpu-vertex
       - env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
