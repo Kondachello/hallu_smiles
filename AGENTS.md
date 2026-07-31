@@ -74,10 +74,13 @@ field. Never weaken this rule further to make a run pass.
 
 ## Next queued scientific task: DocRED KG-extraction evaluation
 
-This task is implemented on branch `kggen-docred`, but its first live DataSphere
-Job has not yet been submitted. It is a separate evaluation of the KGGen extraction
-component, not another hallucination-detection run and not a reason to modify the
-historical RAGTruth metrics.
+This task is implemented on branch `kggen-docred`. Its first submission was
+validated locally and reached DataSphere on 2026-08-01, but DataSphere rejected
+creation before allocating a Job ID with `community is blocked by billing`.
+Thus no DocRED live inference, cache mutation, or Gemini charge occurred, and there
+is no active DocRED Job to monitor. This is a separate evaluation of the KGGen
+extraction component, not another hallucination-detection run and not a reason to
+modify the historical RAGTruth metrics.
 
 For each DocRED document, extract a graph from the document text with the repository's
 KG extraction path, align predicted triples to DocRED's document-level entity IDs and
@@ -317,7 +320,9 @@ Use this safe, read-only authentication/status preflight from the repository roo
 
 ```bash
 source .venv/bin/activate
-PATH="$PWD/.venv/bin:/Users/maslovartemij/yandex-cloud:$PATH" \
+# The checked-in local YC utility is the working one.  Keep the historical
+# directory in PATH only as a harmless compatibility fallback; do not run yc init.
+PATH="$PWD/.venv/bin:$PWD/.tools/yc:/Users/maslovartemij/yandex-cloud:$PATH" \
   GRPC_DNS_RESOLVER=ares \
   YC_CLI_INITIALIZATION_SILENCE=true \
   datasphere --profile default project get --id bt1i64odluitglbaj5st
@@ -330,6 +335,15 @@ the first login page shown. If the expected federation/user-pool path is unavail
 stop rather than guessing parameters: ask the project administrator for the identity
 type and, when applicable, the federation ID or user-pool ID. Do not print tokens,
 subject identifiers, browser callbacks, credentials, or signed URLs in logs or chat.
+
+Interpret authentication and submission errors separately. A successful
+`project get` with this exact profile proves that the subject-id login and temporary
+IAM token work. If a subsequent `project job execute` returns a service-side
+`PERMISSION_DENIED` such as `community is blocked by billing`, do **not** run
+`yc init`, do not overwrite the profile, and do not repeatedly submit duplicate
+jobs: this is not an expired IAM token. Preserve the rendered Job and immutable
+image, report that no Job ID was allocated, and wait for the DataSphere community's
+billing state to be restored before the single intended submission is retried.
 
 Relevant commands/scripts:
 
