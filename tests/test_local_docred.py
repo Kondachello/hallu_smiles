@@ -97,6 +97,7 @@ def test_local_launcher_uses_keychain_caffeinate_replay_and_redacted_monitoring(
     launcher = (SCRIPTS / "run_local_docred_kg_eval.sh").read_text(encoding="utf-8")
     assert "security find-generic-password" in launcher
     assert '"gemini"' in launcher
+    assert "gateway_manifest_request_failed" in launcher
     assert "caffeinate -dimsu" in launcher
     assert "TMUX" in launcher
     assert "STY" in launcher

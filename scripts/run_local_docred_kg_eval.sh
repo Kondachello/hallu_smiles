@@ -140,6 +140,27 @@ AUTH_CONFIG="$(mktemp "$RUN_ROOT/.gateway-curl.XXXXXX")"
 chmod 600 "$AUTH_CONFIG"
 printf 'header = "Authorization: Bearer %s"\n' "$HALLU_GATEWAY_API_KEY" > "$AUTH_CONFIG"
 
+write_launch_failure() {
+  local error_type="$1"
+  local http_status="${2:-}"
+  "$PYTHON" - "$RUN_ROOT/run_metadata.json" "$error_type" "$http_status" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+payload = {
+    "protocol": "local-docred-launch-v1",
+    "state": "error",
+    "error_type": sys.argv[2],
+    "finished_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+if sys.argv[3].isdigit():
+    payload["gateway_manifest_http_status"] = int(sys.argv[3])
+Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
 DATASET_REVISION="7985b4e0371e6c61a756feb41b7b27becf71c666"
 DATA_DIR="$LOCAL_ROOT/data/thunlp-docred-$DATASET_REVISION"
 GATEWAY_RAW="$RUN_ROOT/gateway-manifest.raw.json"
@@ -149,9 +170,17 @@ RUNTIME_CONFIG="$RUN_ROOT/runtime-config.yaml"
 RUNTIME_IDENTITY="$RUN_ROOT/runtime-config-identity.json"
 
 # Authenticate and validate the gateway before materialising any data or
-# starting a paid stage.  The manifest is not a Gemini inference request.
-curl --fail --silent --show-error --config "$AUTH_CONFIG" \
-  --output "$GATEWAY_RAW" "$GATEWAY_URL/v1/hallu/manifest"
+# starting a paid stage. The manifest is not a Gemini inference request.
+set +e
+gateway_manifest_status="$(curl --fail --silent --show-error --config "$AUTH_CONFIG" \
+  --output "$GATEWAY_RAW" --write-out '%{http_code}' "$GATEWAY_URL/v1/hallu/manifest")"
+gateway_manifest_curl_status=$?
+set -e
+if [[ "$gateway_manifest_curl_status" -ne 0 ]]; then
+  write_launch_failure "gateway_manifest_request_failed" "$gateway_manifest_status"
+  echo "[local-docred] gateway manifest request failed (HTTP ${gateway_manifest_status:-unavailable}); no Gemini inference was started" >&2
+  exit "$gateway_manifest_curl_status"
+fi
 "$PYTHON" "$ROOT/scripts/validate_vertex_gateway_manifest.py" \
   --manifest "$GATEWAY_RAW" --logical-model "$("$PYTHON" - "$ROOT/config.yaml" <<'PY'
 import sys
