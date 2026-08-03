@@ -316,24 +316,35 @@ unrelated account type, and replace the subject-specific flow that owns this pro
 Never print the profile file, its refresh credential, IAM token, subject identifier,
 or a browser callback.
 
-Before any agent/monitor command, prove that the stored credential still works
-**without opening a browser**. Run this exact preflight from the repository root:
+Before any agent/monitor command, mint a short-lived IAM token through the stored
+credential **without opening a browser**, then let the DataSphere CLI read that token
+from its supported process-local environment variable. Run this exact preflight from
+the repository root:
 
 ```bash
 source .venv/bin/activate
 PATH="$PWD/.venv/bin:$PWD/.tools/yc:/Users/maslovartemij/yandex-cloud:$PATH"
-GRPC_DNS_RESOLVER=ares \
+export YC_IAM_TOKEN="$(GRPC_DNS_RESOLVER=ares \
   "$PWD/.tools/yc/yc" --profile default --no-browser --no-user-output \
-  iam create-token >/dev/null
+  iam create-token)"
 GRPC_DNS_RESOLVER=ares \
-  datasphere --profile default project get --id bt1i64odluitglbaj5st
+  datasphere project get --id bt1i64odluitglbaj5st
+unset YC_IAM_TOKEN
 ```
 
-The first command discards the short-lived IAM token and is only a readiness check;
-it is not `yc init` and does not alter the profile. `--no-browser` is essential: it
-makes an expired or unusable federated session fail closed rather than opening a
-login page. Only after it succeeds may the agent call `datasphere --profile default`
-for status, download, or submission. The normal working path therefore needs no
+`YC_IAM_TOKEN` is a short-lived IAM credential, never an OAuth token. It is created
+inside the running shell, is not put in the command line, must never be printed or
+written to a file, and must be unset after the command. The `datasphere` package
+checks this variable before its normal `yc` fallback. That distinction matters:
+`datasphere --profile default` internally invokes `yc iam create-token` again
+**without** `--no-browser`, which can reopen an unwanted subject-id page. For this
+repository, use the in-memory `YC_IAM_TOKEN` pattern above for `project get`, Job
+status/download, and Job submission; do not add `--profile` to the `datasphere`
+command after the token has been exported.
+
+The token-mint command is not `yc init` and does not alter the profile.
+`--no-browser` is essential: it makes an expired or unusable federated session fail
+closed rather than opening a login page. The normal working path therefore needs no
 browser and no token pasted into a command or chat.
 
 If this no-browser preflight fails, do not fall back to a personal Yandex ID, do not
@@ -342,8 +353,8 @@ Identity Hub session by the organisation's approved sign-in method, or the
 organisation must provide a service account with `datasphere.community-projects.developer`.
 Agents must not create accounts, keys, profiles, or an alternate OAuth flow.
 
-Interpret authentication and submission errors separately. A successful profile
-preflight and `project get` prove that the local refresh-to-IAM path works. If a subsequent
+Interpret authentication and submission errors separately. A successful no-browser
+mint and `project get` prove that the local refresh-to-IAM path works. If a subsequent
 `project job execute` returns a service-side
 `PERMISSION_DENIED` such as `community is blocked by billing`, do **not** run
 `yc init`, do not overwrite the profile, and do not repeatedly submit duplicate

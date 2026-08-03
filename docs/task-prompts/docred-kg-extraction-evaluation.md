@@ -129,11 +129,13 @@ conditioned-on-success диагностику, но нельзя выдават�
 5. Сохраняй только безопасные diagnostics: не логируй API key, OAuth/IAM token,
    `Authorization`, prompt, completion, signed URL или cache key. Для DataSphere
    используй существующий Identity Hub subject-id profile `default`, как в R11/R12.
-   До любой команды выполни проверку `yc --profile default --no-browser
-   --no-user-output iam create-token >/dev/null`; лишь после успеха допустимы
-   `datasphere --profile default ...`. Не используй `yc init`, личный Яндекс ID,
-   ручной OAuth token или browser fallback. Если проверка не проходит, остановись
-   до создания Job и сообщи о необходимости обновить именно организационную сессию.
+   До любой команды создай только в памяти процесса `YC_IAM_TOKEN` через
+   `yc --profile default --no-browser --no-user-output iam create-token`, а затем
+   запускай `datasphere ...` **без** `--profile`: CLI прочитает переменную и не
+   вызовет свой browser-capable fallback. Сразу после команды сделай `unset
+   YC_IAM_TOKEN`. Не используй `yc init`, личный Яндекс ID, ручной OAuth token или
+   browser fallback. Если mint не проходит, остановись до создания Job и сообщи о
+   необходимости обновить именно организационную сессию.
 6. Не увеличивай concurrency ради скорости. Для живого Gemini прогона оставь
    консервативную сериализацию, bounded retry/backoff/pacing и сохранение каждого
    завершённого cache entry. Не превращай настоящую extraction/review ошибку в

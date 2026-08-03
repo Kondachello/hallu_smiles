@@ -24,10 +24,11 @@ Options:
   --docker-image REF  Optional immutable image; must match the committed build
   --profile NAME      Established DataSphere subject-id profile (default: default)
 
-Authentication uses the existing local subject-id profile.  The script first runs
-the YC refresh check with --no-browser, so an expired session fails safely rather
-than opening a login page.  Do not reinitialise the YC configuration or pass
-credentials on the command line.
+Authentication uses the existing local subject-id profile. The script mints one
+short-lived IAM token with --no-browser and keeps it only in the process
+environment. An expired session therefore fails safely rather than opening a login
+page. Do not reinitialise the YC configuration or pass credentials on the command
+line.
 EOF
 }
 
@@ -54,9 +55,13 @@ done
 }
 YC_BIN="${YC_BIN:-$ROOT/.tools/yc/yc}"
 [[ -x "$YC_BIN" ]] || { echo "Missing the established YC CLI at $YC_BIN." >&2; exit 2; }
-# Discard the short-lived IAM token immediately.  This is only a no-browser
-# readiness check; `datasphere --profile` obtains its own token internally.
-"$YC_BIN" --profile "$PROFILE" --no-browser --no-user-output iam create-token >/dev/null
+# Do not give DataSphere a profile after this point: its profile fallback invokes
+# `yc` for a second token without `--no-browser`. The SDK consumes YC_IAM_TOKEN
+# before all other auth methods, so this token stays in-memory and cannot trigger
+# a browser flow.
+export YC_IAM_TOKEN="$("$YC_BIN" --profile "$PROFILE" --no-browser --no-user-output iam create-token)"
+[[ "$YC_IAM_TOKEN" =~ ^t1\. ]] || { echo "No valid IAM token was issued by the established profile." >&2; exit 2; }
+trap 'unset YC_IAM_TOKEN' EXIT
 test -f "$GATE_ARTIFACT" || { echo "gateway gate artifact is missing: $GATE_ARTIFACT" >&2; exit 2; }
 python3 - "$BUDGET_EUR" <<'PY'
 import sys
@@ -90,6 +95,6 @@ python3 scripts/render_datasphere_vertex_docred_kg_eval_job.py \
   --gateway-manifest-sha256 "$GATE_MANIFEST_SHA256" --budget-eur "$BUDGET_EUR" \
   --docker-image "$IMAGE" --output "$RENDERED"
 python3 scripts/validate_datasphere_job.py --job "$RENDERED" --repo-root .
-datasphere --profile "$PROFILE" project get --id "$PROJECT_ID" >/dev/null
-datasphere --profile "$PROFILE" project job execute --async -p "$PROJECT_ID" -c "$RENDERED" \
+datasphere project get --id "$PROJECT_ID" >/dev/null
+datasphere project job execute --async -p "$PROJECT_ID" -c "$RENDERED" \
   -o "${RENDERED%.yaml}.execution.json"

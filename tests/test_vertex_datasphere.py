@@ -383,7 +383,9 @@ def test_cpu_vertex_docred_job_is_fixed_budgeted_and_redacted(tmp_path):
     submitter = (SCRIPTS / "submit_datasphere_vertex_docred_kg_eval.sh").read_text(encoding="utf-8")
     assert 'GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-ares}"' in submitter
     assert "--profile \"$PROFILE\" --no-browser --no-user-output iam create-token" in submitter
-    assert "datasphere --profile \"$PROFILE\"" in submitter
+    assert 'export YC_IAM_TOKEN="$("$YC_BIN"' in submitter
+    assert "datasphere project get" in submitter
+    assert "datasphere --profile" not in submitter
     assert "validate_datasphere_vertex_probe_artifact.py" in submitter
     assert "yc init" not in submitter
 
