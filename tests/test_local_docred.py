@@ -108,6 +108,7 @@ def test_local_launcher_uses_keychain_caffeinate_replay_and_redacted_monitoring(
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_local_docred_kg_eval.sh")], check=True)
     fallback = (SCRIPTS / "start_local_docred_kg_eval.sh").read_text(encoding="utf-8")
     assert "screen -dmS" in fallback
+    assert 'HALLU_DOCRED_RUN_ID="$1"' in fallback
     assert "nohup" in fallback
     assert "HALLU_DOCRED_DETACHED=1" in fallback
     subprocess.run(["bash", "-n", str(SCRIPTS / "start_local_docred_kg_eval.sh")], check=True)

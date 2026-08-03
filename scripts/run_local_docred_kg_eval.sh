@@ -148,12 +148,8 @@ RUNTIME_MANIFEST="$RUN_ROOT/local-runtime-manifest.json"
 RUNTIME_CONFIG="$RUN_ROOT/runtime-config.yaml"
 RUNTIME_IDENTITY="$RUN_ROOT/runtime-config-identity.json"
 
-# DocRED files are a one-time public download. All subsequent data and S-BERT
-# reads are offline, and every KG cache is outside the repository.
-env -u HF_HUB_OFFLINE "$PYTHON" "$ROOT/scripts/fetch_docred_data.py" \
-  --output-dir "$DATA_DIR" > "$RUN_ROOT/dataset-materialization.json"
-export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=42
-
+# Authenticate and validate the gateway before materialising any data or
+# starting a paid stage.  The manifest is not a Gemini inference request.
 curl --fail --silent --show-error --config "$AUTH_CONFIG" \
   --output "$GATEWAY_RAW" "$GATEWAY_URL/v1/hallu/manifest"
 "$PYTHON" "$ROOT/scripts/validate_vertex_gateway_manifest.py" \
@@ -166,6 +162,12 @@ PY
 rm -f "$GATEWAY_RAW"
 AUTH_CONFIG=""
 rm -f "$RUN_ROOT/.gateway-curl."* || true
+
+# DocRED files are a one-time public download. All subsequent data and S-BERT
+# reads are offline, and every KG cache is outside the repository.
+env -u HF_HUB_OFFLINE "$PYTHON" "$ROOT/scripts/fetch_docred_data.py" \
+  --output-dir "$DATA_DIR" > "$RUN_ROOT/dataset-materialization.json"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=42
 
 GATEWAY_MANIFEST_SHA256="$("$PYTHON" - "$GATEWAY_MANIFEST" <<'PY'
 import json

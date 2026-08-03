@@ -21,8 +21,10 @@ fi
 
 if command -v screen >/dev/null; then
   session="docred-local-${RUN_ID}"
-  screen -dmS "$session" env HALLU_DOCRED_RUN_ID="$RUN_ID" bash "$RUNNER"
-  printf '[ok] started in detached screen session %s\n' "$session"
+  log="$LOG_DIR/${RUN_ID}.log"
+  screen -dmS "$session" bash -c 'exec env HALLU_DOCRED_RUN_ID="$1" bash "$2" > "$3" 2>&1' \
+    -- "$RUN_ID" "$RUNNER" "$log"
+  printf '[ok] started in detached screen session %s; log=%s\n' "$session" "$log"
   exit 0
 fi
 
