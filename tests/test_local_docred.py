@@ -10,6 +10,10 @@ from pathlib import Path
 
 import yaml
 
+from scripts.run_docred_kg_eval import ProgressReporter
+from src.docred import BudgetGuard
+from src.extract import UsageLogger
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -72,6 +76,20 @@ def test_local_monitor_redacts_unknown_progress_fields(tmp_path):
     payload = json.loads((run_root / "live-snapshots" / "latest.json").read_text(encoding="utf-8"))
     assert payload["progress"]["outer_completed"] == 1
     assert "prompt" not in payload["progress"]
+
+
+def test_inner_progress_does_not_overwrite_outer_stage(tmp_path):
+    usage = UsageLogger(tmp_path / "usage.jsonl")
+    reporter = ProgressReporter(tmp_path, usage, BudgetGuard(10.5))
+    reporter.update_context("smoke", 0, 10)
+    reporter.kg_callback({
+        "event": "live_request_reserved", "kind": "docred_kg", "phase": "generating",
+    })
+    progress = json.loads((tmp_path / "progress.json").read_text(encoding="utf-8"))
+    assert progress["event"] == "inner_progress"
+    assert progress["phase"] == "smoke"
+    assert progress["inner_event"] == "live_request_reserved"
+    assert progress["inner_phase"] == "generating"
 
 
 def test_local_archive_excludes_graphs_usage_and_logs(tmp_path):

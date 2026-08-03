@@ -96,14 +96,22 @@ class ProgressReporter:
                 )
                 if key in payload
             }
-            self.emit("retry_heartbeat", **safe)
+            self.emit("retry_heartbeat", inner_event="llm_retry_wait", **safe)
             return
         safe = {
             key: payload[key]
-            for key in ("event", "kind", "completed", "total", "phase")
+            for key in ("kind", "completed", "total")
             if key in payload
         }
-        self.emit("inner_progress", **safe)
+        # Keep the outer stage (smoke/calibration/heldout/replay) in ``phase``.
+        # The extractor's event/phase are nested fields; forwarding either name
+        # would overwrite ProgressReporter.emit's outer protocol fields.
+        self.emit(
+            "inner_progress",
+            inner_event=payload.get("event"),
+            inner_phase=payload.get("phase"),
+            **safe,
+        )
 
 
 def _graph_path(root: Path, document_id: str) -> Path:

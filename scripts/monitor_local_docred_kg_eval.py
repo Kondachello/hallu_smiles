@@ -17,6 +17,7 @@ SAFE_PROGRESS_FIELDS = {
     "estimated_spend_eur", "estimated_remaining_eur", "reserved_live_requests",
     "component", "reason", "attempt", "sleep_seconds", "retry_seconds",
     "continuous_429_seconds", "kind", "completed", "total",
+    "inner_event", "inner_phase",
     "cache_only", "remaining_live_documents", "reserved_requests_per_document",
     "selected_threshold",
 }
@@ -75,6 +76,7 @@ def _material_key(payload: dict[str, Any]) -> tuple[Any, ...]:
     return (
         payload["runner_alive"], progress.get("event"), progress.get("phase"),
         progress.get("outer_completed"), progress.get("outer_total"),
+        progress.get("inner_event"), progress.get("inner_phase"),
         progress.get("completed"), progress.get("total"), progress.get("retries"),
         progress.get("continuous_429_seconds"), progress.get("estimated_spend_eur"),
     )
