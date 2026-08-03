@@ -306,13 +306,21 @@ GitHub Actions only builds and publishes a reproducible Docker image. It does **
 
 R11/R12 were submitted through `datasphere --profile default`, using the existing
 **Yandex Identity Hub subject-id profile** in
-`~/.config/yandex-cloud/credentials/default`. That profile stores a renewable
-federated refresh credential locally. The `datasphere` CLI obtains a short-lived IAM
-token from it internally; do not invent or require a separate `YC_TOKEN`/
-`YC_OAUTH_TOKEN` environment secret.
+`~/.config/yandex-cloud/credentials/default`. Local metadata confirms that this is
+a SAML federation, not a user pool and not a personal Yandex ID. A DataSphere
+project account is an access grant to that identity; it is not an independent CLI
+login credential.
 
-Never run `yc init`: it can reinitialise the profile, ask for a cloud/folder or an
-unrelated account type, and replace the subject-specific flow that owns this project.
+On this host, the default profile currently has an empty `federation-id`, an empty
+refresh token, and an expired IAM token. It cannot renew unattended and does not
+know which organisation's SAML provider to use; a generic login page asking for a
+personal Yandex account is therefore an expected dead end. Do not invent or require
+a separate `YC_TOKEN`/`YC_OAUTH_TOKEN` environment secret.
+
+Never run bare `yc init` or reinitialise `default`: that can ask for a cloud/folder
+or an unrelated account type and replace the subject-specific flow that owns this
+project. The one exception is the explicitly named `datasphere-saml` profile below,
+and only after an administrator has supplied the federation ID.
 Never print the profile file, its refresh credential, IAM token, subject identifier,
 or a browser callback.
 
@@ -328,24 +336,40 @@ GRPC_DNS_RESOLVER=ares \
 This does not run `yc init` and does not change the profile. If the IAM session is
 still valid, it returns without a browser. If it says that an Identity Hub sign-in
 will be opened, the existing subject-id session has expired. Stop before a second
-submission and have the user complete **that existing organisational identity** flow;
-do not switch to a personal Yandex ID or guess federation parameters. The resulting
-IAM session lasts at most 12 hours.
+submission.
 
-There is no configured, unattended browserless renewal path on this host. The
-`--no-browser` flag can suppress browser launching for some YC operations, but cannot
-create a replacement identity session once the federation cookie expires. Do not add
-an invented `YC_TOKEN`, `YC_IAM_TOKEN`, or OAuth flow to bypass this condition.
-For genuinely unattended operation, the organisation must either enable refresh
-tokens and initialise DPoP protection for the federated profile, or provide a
-service account with `datasphere.community-projects.developer`. Those are
-administrator actions; agents must not create accounts, keys, or profiles.
+**What the user must do in this situation:** ask the DataSphere/organisation
+administrator for the SAML federation ID and the organisation's identity-provider
+sign-in route for the account that owns this project's membership. The user does
+not need, and should not try to create, a personal Yandex ID. Once those details
+are received, create a *new named* profile rather than reinitialising `default`:
+
+```bash
+# Only after the administrator supplies the real federation ID.
+yc init --federation-id=ADMIN_SUPPLIED_ID --profile datasphere-saml
+```
+
+Complete the organisation's SAML sign-in in that flow. Then use
+`datasphere --profile datasphere-saml ...` for preflight, submission, monitoring,
+and downloads. Never run bare `yc init`, and never choose the “re-initialize
+default” option. After the CLI returns successfully, the agent can submit and
+monitor Jobs for the temporary IAM session, which lasts at most 12 hours.
+
+There is no configured unattended browserless renewal path on this host: local
+credential metadata has no DPoP configuration, and attempts to mint a new token
+fall back to the expired subject-id sign-in. `--no-browser` cannot manufacture a
+replacement federation session. Do not add an invented `YC_TOKEN`, `YC_IAM_TOKEN`,
+or OAuth flow to bypass this condition. For genuinely unattended operation, the
+organisation must either enable refresh tokens and initialise DPoP protection for
+the federated profile, or provide a service account with
+`datasphere.community-projects.developer`. Those are administrator actions; agents
+must not create accounts, keys, or profiles without the supplied federation ID.
 
 Interpret authentication and submission errors separately. A successful profile
 `project get` proves that the local subject-id-to-IAM path works. If a subsequent
 `project job execute` returns a service-side
-`PERMISSION_DENIED` such as `community is blocked by billing`, do **not** run
-`yc init`, do not overwrite the profile, and do not repeatedly submit duplicate
+`PERMISSION_DENIED` such as `community is blocked by billing`, do **not** reinitialise
+the profile, and do not repeatedly submit duplicate
 jobs: this is not an expired IAM token. Preserve the rendered Job and immutable
 image, report that no Job ID was allocated, and wait for the DataSphere community's
 billing state to be restored before the single intended submission is retried.

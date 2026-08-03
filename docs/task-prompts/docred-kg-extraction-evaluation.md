@@ -128,13 +128,17 @@ conditioned-on-success диагностику, но нельзя выдават�
    запускай ещё один платный Job без указания пользователя.
 5. Сохраняй только безопасные diagnostics: не логируй API key, OAuth/IAM token,
    `Authorization`, prompt, completion, signed URL или cache key. Для DataSphere
-   используй существующий Identity Hub subject-id profile `default`, как в R11/R12:
-   `datasphere --profile default ...`. Не используй `yc init`, личный Яндекс ID,
-   ручной OAuth token или выдуманную переменную IAM token. При истечении сессии CLI
-   открывает только уже настроенный организационный subject-id flow; это требуется
-   подтвердить пользователю, а не менять cloud/folder или параметры федерации. Для
-   полностью безбраузерного режима организации нужны refresh tokens с DPoP либо
-   service account; агент их не создаёт.
+   используй существующий SAML Identity Hub subject-id profile `default`, как в
+   R11/R12: `datasphere --profile default ...`. «Аккаунт DataSphere» означает
+   доступ к проекту, но не отдельную CLI-учётную запись. Не используй bare `yc init`,
+   личный Яндекс ID, ручной OAuth token или выдуманную переменную IAM token. При
+   истечении сессии CLI требует вход в исходный организационный SAML-провайдер. Если
+   браузер показывает только обычный Яндекс ID, остановись: текущий профиль не имеет
+   federation ID. Администратор должен выдать federation ID и ссылку на
+   организационный вход; затем создай отдельный профиль только командой
+   `yc init --federation-id=ADMIN_SUPPLIED_ID --profile datasphere-saml`, без
+   переинициализации `default`. Для полностью безбраузерного режима организации нужны
+   refresh tokens с DPoP либо service account; агент их не создаёт.
 6. Не увеличивай concurrency ради скорости. Для живого Gemini прогона оставь
    консервативную сериализацию, bounded retry/backoff/pacing и сохранение каждого
    завершённого cache entry. Не превращай настоящую extraction/review ошибку в
