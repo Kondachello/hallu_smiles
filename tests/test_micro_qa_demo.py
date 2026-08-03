@@ -172,6 +172,41 @@ def test_kg_extractor_can_schedule_kggen_chunks_serially_for_local_vllm(tmp_path
     ]
 
 
+def test_kg_extractor_reserves_each_serial_generation_and_cluster(tmp_path, monkeypatch):
+    class RawGraph:
+        entities = {"source", "target"}
+        relations = {("source", "rel", "target")}
+        edges = {"rel"}
+
+    class Backend:
+        def generate(self, **kwargs):  # noqa: ARG002
+            return RawGraph()
+
+        def aggregate(self, graphs):  # noqa: ARG002
+            return RawGraph()
+
+        def cluster(self, graph, context=""):  # noqa: ARG002
+            graph.entity_clusters = {"source": {"source"}, "target": {"target"}}
+            graph.edge_clusters = {"rel": {"rel"}}
+            return graph
+
+    cfg = SimpleNamespace(
+        llm=SimpleNamespace(model="test", temperature=0.0, max_retries=1, retry_backoff_base_s=0.0),
+        extraction=SimpleNamespace(
+            cluster=True, cluster_context_mode="source_text", context_chunk_chars=8,
+            serial_chunking=True,
+        ),
+        cache_dir=str(tmp_path / "cache"),
+    )
+    reservations = []
+    extractor = KGExtractor(
+        cfg, backend=Backend(), before_live_request=reservations.append,
+    )
+    monkeypatch.setattr(extractor, "_split_text", lambda text, size: ["first", "second"])
+    extractor._call_backend("a context that exceeds eight characters")
+    assert reservations == ["generating", "generating", "clustering"]
+
+
 def test_micro_audit_uses_the_normal_eg_rp_audit_contract():
     cfg = SimpleNamespace(
         matching=SimpleNamespace(

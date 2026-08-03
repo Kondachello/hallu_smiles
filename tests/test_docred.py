@@ -177,6 +177,18 @@ def test_budget_guard_reserves_before_next_live_document():
     assert guard.estimate_eur({"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}) > 2.5
 
 
+def test_budget_guard_reserves_each_raw_live_operation_before_it_is_sent():
+    guard = BudgetGuard(0.06)
+    usage = {"api_calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+    guard.reserve_live_request(usage)
+    guard.reserve_live_request(usage)
+    guard.reserve_live_request(usage)
+    assert guard.reserved_live_requests == 3
+    assert guard.estimate_eur(usage) == 0.06
+    with pytest.raises(BudgetExceeded, match="before live request"):
+        guard.reserve_live_request(usage)
+
+
 def test_cache_replay_verifier_rejects_scientific_drift_but_allows_usage_drift(tmp_path):
     live = tmp_path / "live"
     replay = tmp_path / "replay"

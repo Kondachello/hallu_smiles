@@ -4,8 +4,8 @@
 текущей ветке `kggen-docred`. Не создавай ещё одну ветку, не удаляй кэши, архивы,
 рендеренные DataSphere Jobs или результаты предыдущих RAGTruth-прогонов. Сначала
 полностью прочитай `AGENTS.md`: в нём описаны обязательные научные и операционные
-инварианты, завершённый статус `new-metrics`, текущий DocRED path, безопасная аутентификация DataSphere и
-путь исполнения.
+инварианты, завершённый статус `new-metrics`, текущий DocRED path и локальный путь
+исполнения. DataSphere больше не является целью запуска для DocRED.
 
 ## Цель
 
@@ -121,24 +121,17 @@ conditioned-on-success диагностику, но нельзя выдават�
    prediction, extraction failure, relation threshold/tie, micro denominator и
    невозможность использовать held-out labels в calibration.
 4. Установи максимальный оценочный live-бюджет Gemini в EUR 10.5 из доступных
-   EUR 13. Зафиксируй price snapshot в manifest; перед каждым холодным документом
-   резервируй одну операцию, а после smoke не переходи к оставшимся 40/200,
-   если консервативного резерва не хватает. При `budget_exhausted` сохрани
+   EUR 13. Зафиксируй price snapshot в manifest; резервируй бюджет перед каждой
+   реальной generation/cluster/retry операцией, а после smoke не переходи к
+   оставшимся 40/200, если консервативного резерва не хватает. При `budget_exhausted` сохрани
    checkpoint и заверши эксперимент как неполный -- не расширяй бюджет и не
    запускай ещё один платный Job без указания пользователя.
 5. Сохраняй только безопасные diagnostics: не логируй API key, OAuth/IAM token,
-   `Authorization`, prompt, completion, signed URL или cache key. Для DataSphere
-   используй существующий SAML Identity Hub subject-id profile `default`, как в
-   R11/R12: `datasphere --profile default ...`. «Аккаунт DataSphere» означает
-   доступ к проекту, но не отдельную CLI-учётную запись. Не используй bare `yc init`,
-   личный Яндекс ID, ручной OAuth token или выдуманную переменную IAM token. При
-   истечении сессии CLI требует вход в исходный организационный SAML-провайдер. Если
-   браузер показывает только обычный Яндекс ID, остановись: текущий профиль не имеет
-   federation ID. Администратор должен выдать federation ID и ссылку на
-   организационный вход; затем создай отдельный профиль только командой
-   `yc init --federation-id=ADMIN_SUPPLIED_ID --profile datasphere-saml`, без
-   переинициализации `default`. Для полностью безбраузерного режима организации нужны
-   refresh tokens с DPoP либо service account; агент их не создаёт.
+   `Authorization`, prompt, completion, signed URL или cache key. Локальный
+   launcher получает `HALLU_GATEWAY_API_KEY` только из macOS Keychain и держит его
+   только в памяти процесса. Не передавай ключ в chat, файл, command line или log.
+   Не используй DataSphere CLI, `yc init`, браузерный вход, OAuth/IAM token или
+   Google private key: локальный запуск обращается только к Cloud Run gateway.
 6. Не увеличивай concurrency ради скорости. Для живого Gemini прогона оставь
    консервативную сериализацию, bounded retry/backoff/pacing и сохранение каждого
    завершённого cache entry. Не превращай настоящую extraction/review ошибку в
@@ -152,16 +145,14 @@ conditioned-on-success диагностику, но нельзя выдават�
    Выполни `pytest -q`, syntax checks и проверку рендеринга DataSphere Job, если он
    нужен. Не делай платный полный прогон до успешного малого smoke run и понятной
    оценки масштаба/стоимости для зафиксированного manifest.
-3. Для live запуска используй отдельные DocRED renderer/submitter/CPU template,
-   immutable image, existing gateway gate и `scripts/submit_datasphere_vertex_docred_kg_eval.sh`.
-   После submit создай монитор того же чата раз в 15 минут: проверяй status и
-   ограниченный redacted tail, собирай live snapshots в новый `outputs/docred-...`
-   каталог, различай outer/inner/retry progress. При terminal error сначала
-   скачай archive/logs/diagnostics, сделай только доказанное compatible fix и
-   не более одного serial cache-resume; jobs не должны пересекаться.
-4. После согласованного живого прогона скачай архив Job в новый недеструктивный
-   `outputs/docred-...` каталог; финальные числа бери только из архива, а не из
-   консольного лога.
+3. Для live запуска используй `scripts/start_local_docred_kg_eval.sh` с внешним
+   root `/Volumes/mySSD/hallu_smiles/docred-kggen`; сначала выполни network-free
+   `scripts/run_local_docred_kg_eval.sh --preflight`. Launcher валидирует gateway
+   manifest, запускает CPU-runner через `caffeinate`, сохраняет persistent cache и
+   включает redacted monitor каждые 15 минут. Не запускай overlapping процессы.
+4. После согласованного живого прогона используй созданный local archive под
+   `/Volumes/mySSD/hallu_smiles/docred-kggen/archives`; финальные числа бери только
+   из него, а не из консольного лога.
 5. Подготовь отдельный `docs/docred-kg-extraction-results.tex` с методом
    alignment, версиями данных/модели, manifest, coverage, всеми метриками и
    интервалами, caveat о неполной аннотации DocRED и limitations. Не переписывай

@@ -74,13 +74,13 @@ field. Never weaken this rule further to make a run pass.
 
 ## Next queued scientific task: DocRED KG-extraction evaluation
 
-This task is implemented on branch `kggen-docred`. Its first submission was
-validated locally and reached DataSphere on 2026-08-01, but DataSphere rejected
-creation before allocating a Job ID with `community is blocked by billing`.
-Thus no DocRED live inference, cache mutation, or Gemini charge occurred, and there
-is no active DocRED Job to monitor. This is a separate evaluation of the KGGen
-extraction component, not another hallucination-detection run and not a reason to
-modify the historical RAGTruth metrics.
+This task is implemented on branch `kggen-docred`. Its first submission reached
+DataSphere on 2026-08-01, but DataSphere rejected creation before allocating a Job
+ID with `community is blocked by billing`; no DocRED inference or cache mutation
+occurred there. DataSphere is no longer an execution target for this task. Use the
+local CPU runner described below; it is a separate evaluation of KGGen extraction,
+not another hallucination-detection run and not a reason to modify historical
+RAGTruth metrics.
 
 For each DocRED document, extract a graph from the document text with the repository's
 KG extraction path, align predicted triples to DocRED's document-level entity IDs and
@@ -120,16 +120,16 @@ The pre-registered first live run is fixed and budgeted:
 - The relation-description S-BERT threshold grid `{0.65, 0.75, 0.85}` is selected
   only from the 50 train documents, then frozen before the 200-document dev pass.
 - The maximum estimated live Gemini budget is EUR 10.5. The guard records its
-  pinned price snapshot, reserves each cold document, and after smoke verifies it
-  can reserve all still-cold documents. A `budget_exhausted` checkpoint is an
-  explicit non-result, not permission to extend the manifest or make another paid
-  attempt.
+  pinned price snapshot and reserves each raw live generation/cluster/retry before
+  it is sent; after smoke it also reserves the observed per-document request rate
+  for all still-cold documents. A `budget_exhausted` checkpoint is an explicit
+  non-result, not permission to extend the manifest or make another paid attempt.
 
 The implemented path is:
 
 ```text
 scripts/fetch_docred_data.py
-  → persistent project-disk DocRED namespace (pinned revision/checksums)
+  → local external-disk DocRED namespace (pinned revision/checksums)
   → scripts/run_docred_kg_eval.py (live 10/50/200, cache checkpoints, redacted progress)
   → train-only relation alignment freeze
   → held-out metrics
@@ -137,29 +137,35 @@ scripts/fetch_docred_data.py
   → scripts/write_docred_kg_results_tex.py (only from downloaded terminal archive)
 ```
 
-Use `scripts/submit_datasphere_vertex_docred_kg_eval.sh`, never a hand-edited
-rendered YAML. It validates the existing bounded gateway artifact, pushed source
-commit, immutable CPU image and rendered Job. The CPU runner has `concurrency=1`,
-four-second pacing, base output cap `4096`, adaptive extraction ceiling `8192`, and
-the existing 30-minute continuous-429 deadline. It emits atomic redacted
-`progress.json`/`progress.jsonl` and `[docred-progress]` lines. Persistent caches
-live under a DocRED-specific project-disk root keyed by the gateway manifest; they
-are incompatible with RAGTruth caches and must never be deleted. Archives deliberately
-exclude cache keys, raw graphs, prompts, completions, and raw usage rows while retaining
-aggregate cache inventories and scientific artifacts.
+Use `scripts/start_local_docred_kg_eval.sh`, never a rendered DataSphere YAML.
+The default local root is `/Volumes/mySSD/hallu_smiles/docred-kggen`; dataset,
+checkpoints, cache, snapshots, terminal archives, and TeX build output stay there,
+never in the repository. The runner reads `HALLU_GATEWAY_API_KEY` only from macOS
+Keychain (service may be selected by `HALLU_GATEWAY_KEYCHAIN_SERVICE`), validates the
+authenticated gateway manifest, and never uses `yc`, DataSphere authentication, a
+browser flow, or a Google private key. It runs with `concurrency=1`, four-second
+pacing, a 4096-token base cap, 8192-token adaptive ceiling, and the existing
+30-minute continuous-429 deadline.
 
-After a terminal completion, download into a new `outputs/docred-...` directory,
-validate archive metadata, full 200-document coverage, no live replay calls, and
-unchanged cache inventory, then write `docs/docred-kg-extraction-results.tex` with
-`scripts/write_docred_kg_results_tex.py` and build it with XeLaTeX. If the Job errors,
-first download and diagnose its archive. Only one compatible serial cache-resume is
-allowed automatically; do not submit overlapping Jobs or a second retry without user
-direction. A 15-minute monitor must treat redacted inner/retry heartbeats as work and
-must not cancel merely because the outer document counter is momentarily unchanged.
+`scripts/run_local_docred_kg_eval.sh --preflight` is network-free and checks the
+external disk, offline S-BERT snapshot, Keychain access, and XeLaTeX. The paid run
+uses `caffeinate`; `start_local...` prefers tmux and otherwise uses a detached
+`nohup` fallback. `scripts/monitor_local_docred_kg_eval.py` saves redacted snapshots
+every 15 minutes and treats inner/retry heartbeats as work. It never cancels a run.
+Persistent caches are DocRED-specific and incompatible with RAGTruth caches; never
+delete them. Terminal archives deliberately exclude cache keys, raw graphs, prompts,
+completions, raw usage rows, and unredacted logs.
+
+After a terminal completion, validate full 200-document coverage, no live replay
+calls, unchanged cache inventory, then generate
+`docs/docred-kg-extraction-results.tex` from the redacted local archive and build it
+with XeLaTeX. If the run errors, preserve its archive and cache, diagnose the exact
+cause, and permit at most one compatible serial cache-resume; do not start an
+overlapping process or another paid attempt without user direction.
 
 The detailed, copyable hand-off for this task is
 `docs/task-prompts/docred-kg-extraction-evaluation.md`. It carries the repository,
-cache, testing, DataSphere-authentication, and reporting constraints that a new chat
+cache, local execution, testing, and reporting constraints that a new chat
 must follow.
 
 ## Scientific object and fixed notation

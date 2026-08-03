@@ -223,6 +223,7 @@ class KGExtractor:
         *,
         cache_only: bool = False,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        before_live_request: Callable[[str], None] | None = None,
     ):
         self.cfg = cfg
         self.model = cfg.llm.model
@@ -374,10 +375,18 @@ class KGExtractor:
         # receives counts and phase names only; callers must never pass source
         # text, prompts, completions, cache keys, or credentials through it.
         self.progress_callback = progress_callback
+        # ``UsageLogger.record_call`` is document-level. A caller that needs a
+        # hard cost ceiling can reserve every raw KGGen operation here instead.
+        self.before_live_request = before_live_request
 
     def _emit_progress(self, **payload: Any) -> None:
         if self.progress_callback is not None:
             self.progress_callback(dict(payload))
+
+    def _reserve_live_request(self, kind: str, operation: str) -> None:
+        if self.before_live_request is not None:
+            self.before_live_request(operation)
+        self._emit_progress(event="live_request_reserved", kind=kind, phase=operation)
 
     # -- backend --------------------------------------------------------------
     def _get_backend(self):
@@ -685,6 +694,7 @@ class KGExtractor:
             flush=True,
         )
         cluster_context = self._cluster_context(source_text)
+        self._reserve_live_request(kind, "clustering")
         clustered = backend.cluster(graph, context=cluster_context)
         clustered_entities = getattr(clustered, "entities", set()) or set()
         clustered_relations = getattr(clustered, "relations", set()) or set()
@@ -898,6 +908,7 @@ class KGExtractor:
                         event="kg_chunk", kind=kind, completed=index - 1,
                         total=len(chunks), phase="extracting",
                     )
+                    self._reserve_live_request(kind, "generating")
                     graphs.append(backend.generate(input_data=chunk, cluster=False))
                     self._emit_progress(
                         event="kg_chunk", kind=kind, completed=index,
@@ -934,6 +945,7 @@ class KGExtractor:
                     gen_kwargs["context"] = self._cluster_context(text)
                 if len(text) > self.chunk_chars:
                     gen_kwargs["chunk_size"] = self.chunk_chars
+                self._reserve_live_request(kind, "generating")
                 g = backend.generate(**gen_kwargs)
                 if explicit_cluster_phase:
                     self._emit_progress(

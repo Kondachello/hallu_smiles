@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,6 +75,7 @@ class ProgressReporter:
             "completion_tokens": int(usage["completion_tokens"]),
             "estimated_spend_eur": self.budget.estimate_eur(usage),
             "estimated_remaining_eur": self.budget.remaining_eur(usage),
+            "reserved_live_requests": self.budget.reserved_live_requests,
         }
         payload.update({key: value for key, value in inner.items() if value is not None})
         write_json_atomic(self._path, payload)
@@ -230,6 +232,9 @@ def main() -> None:
     extractor = KGExtractor(
         cfg, usage=usage, cache_only=args.cache_only,
         progress_callback=progress.kg_callback,
+        before_live_request=(
+            None if args.cache_only else lambda _operation: budget.reserve_live_request(usage.summary())
+        ),
     )
     embedder = SBERTEmbedder(
         cfg.matching.embedding_model,
@@ -258,15 +263,27 @@ def main() -> None:
             )
             progress.emit("smoke_completed")
             # The smoke documents are part of calibration. Before permitting
-            # the remaining calibration/held-out work, reserve the configured
-            # worst-case document allowance for every still-cold item.
+            # the remaining calibration/held-out work, reserve the observed
+            # raw-operation rate (never less than generation + clustering) for
+            # every still-cold document. The per-operation guard still runs
+            # before every later chunk, cluster, or retry attempt.
             remaining_live = _uncached_document_count(
                 [*train_documents[10:], *dev_documents],
                 output_dir=output_dir,
                 extractor=extractor,
             )
-            budget.assert_can_reserve_documents(extractor.usage.summary(), remaining_live)
-            progress.emit("budget_reserve_confirmed", remaining_live_documents=remaining_live)
+            smoke_request_rate = max(
+                2,
+                math.ceil(budget.reserved_live_requests / len(train_documents[:10])),
+            )
+            budget.assert_can_reserve_documents(
+                extractor.usage.summary(), remaining_live,
+                requests_per_document=smoke_request_rate,
+            )
+            progress.emit(
+                "budget_reserve_confirmed", remaining_live_documents=remaining_live,
+                reserved_requests_per_document=smoke_request_rate,
+            )
             train_graphs = _process_documents(
                 train_documents, phase="calibration", output_dir=output_dir,
                 extractor=extractor, progress=progress, budget=budget, cache_only=False,
@@ -306,16 +323,25 @@ def main() -> None:
         })
         write_json_atomic(output_dir / "metrics.json", summary)
         _write_scores(output_dir / "document_scores.jsonl", scores)
-        metadata.update({"state": "completed", "finished_at_utc": _utc(), "usage": usage.summary()})
+        metadata.update({
+            "state": "completed", "finished_at_utc": _utc(), "usage": usage.summary(),
+            "budget": budget.manifest(),
+        })
         write_json_atomic(output_dir / "run_metadata.json", metadata)
         progress.emit("run_completed", selected_threshold=threshold)
     except BudgetExceeded as exc:
-        metadata.update({"state": "budget_exhausted", "finished_at_utc": _utc(), "error": str(exc), "usage": usage.summary()})
+        metadata.update({
+            "state": "budget_exhausted", "finished_at_utc": _utc(), "error": str(exc),
+            "usage": usage.summary(), "budget": budget.manifest(),
+        })
         write_json_atomic(output_dir / "run_metadata.json", metadata)
         progress.emit("budget_exhausted")
         raise SystemExit(75) from exc
     except Exception as exc:
-        metadata.update({"state": "error", "finished_at_utc": _utc(), "error_type": type(exc).__name__, "usage": usage.summary()})
+        metadata.update({
+            "state": "error", "finished_at_utc": _utc(), "error_type": type(exc).__name__,
+            "usage": usage.summary(), "budget": budget.manifest(),
+        })
         write_json_atomic(output_dir / "run_metadata.json", metadata)
         progress.emit("run_error", error_type=type(exc).__name__)
         raise

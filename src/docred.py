@@ -12,6 +12,7 @@ import json
 import math
 import os
 import tempfile
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from random import Random
@@ -508,13 +509,25 @@ class PriceSnapshot:
 
 
 class BudgetGuard:
-    """Fail-closed spending estimate when the gateway does not report tokens."""
+    """Fail-closed spending estimate when the gateway does not report tokens.
+
+    ``UsageLogger.api_calls`` is document-level: one KG extraction can issue
+    raw, chunk, cluster, and retry operations before it records a completed
+    document.  A strict live budget therefore reserves every backend operation.
+    """
 
     def __init__(self, max_eur: float, snapshot: PriceSnapshot = PriceSnapshot()):
         if max_eur <= 0:
             raise ValueError("max_eur must be positive")
         self.max_eur = float(max_eur)
         self.snapshot = snapshot
+        self._reserved_live_requests = 0
+        self._lock = threading.RLock()
+
+    @property
+    def reserved_live_requests(self) -> int:
+        with self._lock:
+            return self._reserved_live_requests
 
     def estimate_eur(self, usage: Mapping[str, Any]) -> float:
         prompt = max(0, int(usage.get("prompt_tokens", 0)))
@@ -525,7 +538,10 @@ class BudgetGuard:
             + completion * self.snapshot.output_usd_per_million / 1_000_000
         )
         token_eur = token_usd / self.snapshot.usd_per_eur
-        reserve_eur = calls * self.snapshot.per_live_call_reserve_eur
+        # The document-level fallback preserves compatibility for callers
+        # without raw-operation instrumentation.
+        reserve_count = max(calls, self.reserved_live_requests)
+        reserve_eur = reserve_count * self.snapshot.per_live_call_reserve_eur
         return round(max(token_eur, reserve_eur), 6)
 
     def remaining_eur(self, usage: Mapping[str, Any]) -> float:
@@ -539,12 +555,37 @@ class BudgetGuard:
                 f"reserve_eur={self.snapshot.per_document_reserve_eur:.4f} max_eur={self.max_eur:.4f}"
             )
 
-    def assert_can_reserve_documents(self, usage: Mapping[str, Any], documents: int) -> None:
+    def reserve_live_request(self, usage: Mapping[str, Any]) -> None:
+        """Reserve one real gateway operation immediately before it is sent.
+
+        Reservations are never released: a failed transport may still have
+        reached the provider. This makes the documented EUR limit a hard stop
+        across chunks, clustering, protocol retries, and transient retries.
+        """
+        with self._lock:
+            estimated = self.estimate_eur(usage)
+            reserve = self.snapshot.per_live_call_reserve_eur
+            if estimated + reserve > self.max_eur:
+                raise BudgetExceeded(
+                    f"budget exhausted before live request: estimated_eur={estimated:.4f} "
+                    f"reserve_eur={reserve:.4f} max_eur={self.max_eur:.4f}"
+                )
+            self._reserved_live_requests += 1
+
+    def assert_can_reserve_documents(
+        self, usage: Mapping[str, Any], documents: int, *, requests_per_document: int | None = None,
+    ) -> None:
         """Require a conservative reserve before leaving the live smoke stage."""
         if documents < 0:
             raise ValueError("documents must be non-negative")
+        if requests_per_document is not None and requests_per_document <= 0:
+            raise ValueError("requests_per_document must be positive when provided")
         estimated = self.estimate_eur(usage)
-        reserve = int(documents) * self.snapshot.per_document_reserve_eur
+        reserve = (
+            int(documents) * self.snapshot.per_document_reserve_eur
+            if requests_per_document is None
+            else int(documents) * int(requests_per_document) * self.snapshot.per_live_call_reserve_eur
+        )
         if estimated + reserve > self.max_eur:
             raise BudgetExceeded(
                 f"budget cannot reserve remaining live documents: estimated_eur={estimated:.4f} "
@@ -552,4 +593,8 @@ class BudgetGuard:
             )
 
     def manifest(self) -> dict[str, Any]:
-        return {"max_eur": self.max_eur, "price_snapshot": asdict(self.snapshot)}
+        return {
+            "max_eur": self.max_eur,
+            "price_snapshot": asdict(self.snapshot),
+            "reserved_live_requests": self.reserved_live_requests,
+        }
