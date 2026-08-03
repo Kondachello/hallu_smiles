@@ -4,10 +4,10 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-ares}"
-# Never fall back to the subject-id profile: it can open an interactive browser
-# login. DataSphere CLI consumes YC_TOKEN / YC_OAUTH_TOKEN directly and creates
-# its short-lived IAM token internally.
-export YC_AUTH=OAUTH
+# R11/R12 used the established Identity Hub subject-id profile.  Verify that its
+# locally stored refresh credential can mint an IAM token *without* opening a
+# browser before asking the DataSphere CLI to submit anything.
+export PATH="$ROOT/.tools/yc:$PATH"
 
 usage() {
   cat <<'EOF'
@@ -22,15 +22,18 @@ Options:
   --commit SHA        Pushed source commit (default: HEAD)
   --branch NAME       Remote branch containing the commit (default: current)
   --docker-image REF  Optional immutable image; must match the committed build
+  --profile NAME      Established DataSphere subject-id profile (default: default)
 
-Authentication is non-interactive. Set YC_TOKEN (or YC_OAUTH_TOKEN) through the
-host secret environment; the token is never accepted as a command-line argument.
+Authentication uses the existing local subject-id profile.  The script first runs
+the YC refresh check with --no-browser, so an expired session fails safely rather
+than opening a login page.  Do not reinitialise the YC configuration or pass
+credentials on the command line.
 EOF
 }
 
 PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""
 BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"
-IMAGE=""; BUDGET_EUR="10.5"
+IMAGE=""; BUDGET_EUR="10.5"; PROFILE="default"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-id) PROJECT_ID="$2"; shift 2 ;;
@@ -41,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --branch) BRANCH="$2"; shift 2 ;;
     --commit) COMMIT="$2"; shift 2 ;;
     --docker-image) IMAGE="$2"; shift 2 ;;
+    --profile) PROFILE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -48,7 +52,11 @@ done
 [[ -n "$PROJECT_ID" && -n "$RUN_ID" && -n "$GATEWAY_URL" && -n "$GATE_ARTIFACT" ]] || {
   usage >&2; exit 2;
 }
-: "${YC_TOKEN:=${YC_OAUTH_TOKEN:?Set secret YC_TOKEN or YC_OAUTH_TOKEN for non-interactive DataSphere authentication}}"
+YC_BIN="${YC_BIN:-$ROOT/.tools/yc/yc}"
+[[ -x "$YC_BIN" ]] || { echo "Missing the established YC CLI at $YC_BIN." >&2; exit 2; }
+# Discard the short-lived IAM token immediately.  This is only a no-browser
+# readiness check; `datasphere --profile` obtains its own token internally.
+"$YC_BIN" --profile "$PROFILE" --no-browser --no-user-output iam create-token >/dev/null
 test -f "$GATE_ARTIFACT" || { echo "gateway gate artifact is missing: $GATE_ARTIFACT" >&2; exit 2; }
 python3 - "$BUDGET_EUR" <<'PY'
 import sys
@@ -82,6 +90,6 @@ python3 scripts/render_datasphere_vertex_docred_kg_eval_job.py \
   --gateway-manifest-sha256 "$GATE_MANIFEST_SHA256" --budget-eur "$BUDGET_EUR" \
   --docker-image "$IMAGE" --output "$RENDERED"
 python3 scripts/validate_datasphere_job.py --job "$RENDERED" --repo-root .
-datasphere project get --id "$PROJECT_ID" >/dev/null
-datasphere project job execute --async -p "$PROJECT_ID" -c "$RENDERED" \
+datasphere --profile "$PROFILE" project get --id "$PROJECT_ID" >/dev/null
+datasphere --profile "$PROFILE" project job execute --async -p "$PROJECT_ID" -c "$RENDERED" \
   -o "${RENDERED%.yaml}.execution.json"

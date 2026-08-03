@@ -304,38 +304,46 @@ GitHub Actions only builds and publishes a reproducible Docker image. It does **
 
 ### DataSphere CLI authentication (mandatory)
 
-Use the existing `datasphere` CLI from `.venv` with an externally provisioned OAuth
-token for the existing Yandex Identity Hub account. This is the mandatory
-**non-interactive** path for agents and monitoring: it obtains a temporary IAM token
-from OAuth inside the CLI and never invokes `yc`, a subject-id browser redirect, or
-`yc init`.
+R11/R12 were submitted through `datasphere --profile default`, using the existing
+**Yandex Identity Hub subject-id profile** in
+`~/.config/yandex-cloud/credentials/default`. That profile stores a renewable
+federated refresh credential locally. The `datasphere` CLI obtains a short-lived IAM
+token from it internally; do not invent or require a separate `YC_TOKEN`/
+`YC_OAUTH_TOKEN` environment secret.
 
-The host must supply the OAuth token through its secret environment, under
-`YC_TOKEN` (or the equivalent `YC_OAUTH_TOKEN`). Do not write its value into the
-repository, a command argument, an artifact, a log, the shell history, or chat.
-`datasphere` reads those variables itself. The token is not a separate
-"DataSphere token": it is the renewable OAuth credential for the already authorised
-identity. If neither variable is present, fail closed with an authentication error;
-do **not** fall back to `datasphere --profile default`, `yc iam create-token`, or any
-browser flow.
+Never run `yc init`: it can reinitialise the profile, ask for a cloud/folder or an
+unrelated account type, and replace the subject-specific flow that owns this project.
+Never print the profile file, its refresh credential, IAM token, subject identifier,
+or a browser callback.
 
-Use this safe, read-only status preflight from the repository root:
+Before any agent/monitor command, prove that the stored credential still works
+**without opening a browser**. Run this exact preflight from the repository root:
 
 ```bash
 source .venv/bin/activate
-: "${YC_TOKEN:=${YC_OAUTH_TOKEN:?Set a secret YC_TOKEN or YC_OAUTH_TOKEN first}}"
-export YC_AUTH=OAUTH
+PATH="$PWD/.venv/bin:$PWD/.tools/yc:/Users/maslovartemij/yandex-cloud:$PATH"
 GRPC_DNS_RESOLVER=ares \
-  datasphere project get --id bt1i64odluitglbaj5st
+  "$PWD/.tools/yc/yc" --profile default --no-browser --no-user-output \
+  iam create-token >/dev/null
+GRPC_DNS_RESOLVER=ares \
+  datasphere --profile default project get --id bt1i64odluitglbaj5st
 ```
 
-For fully unattended long-term operation, the organisation can instead provision a
-dedicated service account, grant it `datasphere.community-projects.developer` on the
-project, and make its authorised key available only through an approved secret store.
-That is an administrator action; agents must not create accounts, keys, or profiles.
+The first command discards the short-lived IAM token and is only a readiness check;
+it is not `yc init` and does not alter the profile. `--no-browser` is essential: it
+makes an expired or unusable federated session fail closed rather than opening a
+login page. Only after it succeeds may the agent call `datasphere --profile default`
+for status, download, or submission. The normal working path therefore needs no
+browser and no token pasted into a command or chat.
 
-Interpret authentication and submission errors separately. A successful
-non-interactive `project get` proves that the OAuth-to-IAM path works. If a subsequent
+If this no-browser preflight fails, do not fall back to a personal Yandex ID, do not
+guess federation parameters, and do not submit a Job. A user must renew the existing
+Identity Hub session by the organisation's approved sign-in method, or the
+organisation must provide a service account with `datasphere.community-projects.developer`.
+Agents must not create accounts, keys, profiles, or an alternate OAuth flow.
+
+Interpret authentication and submission errors separately. A successful profile
+preflight and `project get` prove that the local refresh-to-IAM path works. If a subsequent
 `project job execute` returns a service-side
 `PERMISSION_DENIED` such as `community is blocked by billing`, do **not** run
 `yc init`, do not overwrite the profile, and do not repeatedly submit duplicate
