@@ -148,8 +148,9 @@ conditioned-on-success диагностику, но нельзя выдават�
 3. Для live запуска используй `scripts/start_local_docred_kg_eval.sh` с внешним
    root `/Volumes/mySSD/hallu_smiles/docred-kggen`; сначала выполни network-free
    `scripts/run_local_docred_kg_eval.sh --preflight`. Launcher валидирует gateway
-   manifest, запускает CPU-runner через `caffeinate`, сохраняет persistent cache и
-   включает redacted monitor каждые 15 минут. Не запускай overlapping процессы.
+   manifest, запускает CPU-runner через `caffeinate` в `tmux` (или `screen`, если
+   `tmux` отсутствует), сохраняет persistent cache и включает redacted monitor
+   каждые 15 минут. Не запускай overlapping процессы.
 4. После согласованного живого прогона используй созданный local archive под
    `/Volumes/mySSD/hallu_smiles/docred-kggen/archives`; финальные числа бери только
    из него, а не из консольного лога.

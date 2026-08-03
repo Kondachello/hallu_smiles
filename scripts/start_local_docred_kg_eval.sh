@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the local DocRED runner detached, preferring tmux when it is installed.
+# Start the local DocRED runner detached, preferring tmux or screen.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,6 +16,13 @@ if command -v tmux >/dev/null; then
   tmux new-session -d -s "$session" \
     "HALLU_DOCRED_RUN_ID='$RUN_ID' bash '$RUNNER'"
   printf '[ok] started in tmux session %s\n' "$session"
+  exit 0
+fi
+
+if command -v screen >/dev/null; then
+  session="docred-local-${RUN_ID}"
+  screen -dmS "$session" env HALLU_DOCRED_RUN_ID="$RUN_ID" bash "$RUNNER"
+  printf '[ok] started in detached screen session %s\n' "$session"
   exit 0
 fi
 

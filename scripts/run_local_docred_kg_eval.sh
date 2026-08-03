@@ -19,7 +19,7 @@ usage() {
 Usage: bash scripts/run_local_docred_kg_eval.sh [--preflight]
 
 The paid run reads HALLU_GATEWAY_API_KEY from macOS Keychain, never from a file
-or command-line argument. It must be started inside tmux; the script uses
+or command-line argument. It must be started inside tmux or screen; the script uses
 caffeinate and writes its data, checkpoints, snapshots, archives and builds
 under HALLU_DOCRED_ROOT (default: /Volumes/mySSD/hallu_smiles/docred-kggen).
 EOF
@@ -53,8 +53,8 @@ disk_available_kib() {
 preflight() {
   test -x "$PYTHON" || { echo "Python venv missing: $PYTHON" >&2; return 2; }
   command -v caffeinate >/dev/null || { echo "caffeinate is required on macOS" >&2; return 2; }
-  if ! command -v tmux >/dev/null; then
-    echo "[warn] tmux is unavailable; use scripts/start_local_docred_kg_eval.sh for the nohup fallback" >&2
+  if ! command -v tmux >/dev/null && ! command -v screen >/dev/null; then
+    echo "[warn] tmux and screen are unavailable; use scripts/start_local_docred_kg_eval.sh for the nohup fallback" >&2
   fi
   command -v curl >/dev/null || { echo "curl is required" >&2; return 2; }
   command -v xelatex >/dev/null || { echo "xelatex is required to build the final report" >&2; return 2; }
@@ -123,8 +123,8 @@ if [[ "${HALLU_DOCRED_CAFFEINATED:-}" != "1" ]]; then
   exec caffeinate -dimsu bash "$0"
 fi
 
-[[ -n "${TMUX:-}" || "${HALLU_DOCRED_DETACHED:-}" == "1" ]] || {
-  echo "Refusing paid run outside tmux. Use scripts/start_local_docred_kg_eval.sh." >&2
+[[ -n "${TMUX:-}" || -n "${STY:-}" || "${HALLU_DOCRED_DETACHED:-}" == "1" ]] || {
+  echo "Refusing paid run outside tmux or screen. Use scripts/start_local_docred_kg_eval.sh." >&2
   exit 2
 }
 preflight

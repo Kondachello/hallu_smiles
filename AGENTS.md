@@ -149,8 +149,8 @@ pacing, a 4096-token base cap, 8192-token adaptive ceiling, and the existing
 
 `scripts/run_local_docred_kg_eval.sh --preflight` is network-free and checks the
 external disk, offline S-BERT snapshot, Keychain access, and XeLaTeX. The paid run
-uses `caffeinate`; `start_local...` prefers tmux and otherwise uses a detached
-`nohup` fallback. `scripts/monitor_local_docred_kg_eval.py` saves redacted snapshots
+uses `caffeinate`; `start_local...` prefers tmux, then screen, and otherwise uses a
+detached `nohup` fallback. `scripts/monitor_local_docred_kg_eval.py` saves redacted snapshots
 every 15 minutes and treats inner/retry heartbeats as work. It never cancels a run.
 Persistent caches are DocRED-specific and incompatible with RAGTruth caches; never
 delete them. Terminal archives deliberately exclude cache keys, raw graphs, prompts,

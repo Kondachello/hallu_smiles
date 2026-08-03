@@ -99,6 +99,7 @@ def test_local_launcher_uses_keychain_caffeinate_replay_and_redacted_monitoring(
     assert '"gemini"' in launcher
     assert "caffeinate -dimsu" in launcher
     assert "TMUX" in launcher
+    assert "STY" in launcher
     assert "monitor_local_docred_kg_eval.py" in launcher
     assert "--interval-seconds 900" in launcher
     assert "--stage replay --cache-only" in launcher
@@ -106,6 +107,7 @@ def test_local_launcher_uses_keychain_caffeinate_replay_and_redacted_monitoring(
     assert "archive_local_docred_kg_eval.py" in launcher
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_local_docred_kg_eval.sh")], check=True)
     fallback = (SCRIPTS / "start_local_docred_kg_eval.sh").read_text(encoding="utf-8")
+    assert "screen -dmS" in fallback
     assert "nohup" in fallback
     assert "HALLU_DOCRED_DETACHED=1" in fallback
     subprocess.run(["bash", "-n", str(SCRIPTS / "start_local_docred_kg_eval.sh")], check=True)
