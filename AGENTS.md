@@ -304,41 +304,39 @@ GitHub Actions only builds and publishes a reproducible Docker image. It does **
 
 ### DataSphere CLI authentication (mandatory)
 
-Use the existing `datasphere` CLI from `.venv`; a working DataSphere CLI does not
-require reinstalling `yc` just to submit or inspect a Job. In this project, DataSphere
-access is associated with the already configured **Yandex Identity Hub subject-id**.
-It may be an organisation's federated or user-pool identity rather than the user's
-ordinary personal Yandex ID. DataSphere CLI uses the existing `yc` profile only to
-obtain a temporary IAM token for that subject.
+Use the existing `datasphere` CLI from `.venv` with an externally provisioned OAuth
+token for the existing Yandex Identity Hub account. This is the mandatory
+**non-interactive** path for agents and monitoring: it obtains a temporary IAM token
+from OAuth inside the CLI and never invokes `yc`, a subject-id browser redirect, or
+`yc init`.
 
-Do **not** run `yc init`. It may re-initialise the profile, ask for cloud/folder or
-account type, and replace the subject-specific flow that grants access to this
-project. There is no independent "DataSphere token" to invent or paste into the
-configuration.
+The host must supply the OAuth token through its secret environment, under
+`YC_TOKEN` (or the equivalent `YC_OAUTH_TOKEN`). Do not write its value into the
+repository, a command argument, an artifact, a log, the shell history, or chat.
+`datasphere` reads those variables itself. The token is not a separate
+"DataSphere token": it is the renewable OAuth credential for the already authorised
+identity. If neither variable is present, fail closed with an authentication error;
+do **not** fall back to `datasphere --profile default`, `yc iam create-token`, or any
+browser flow.
 
-Use this safe, read-only authentication/status preflight from the repository root:
+Use this safe, read-only status preflight from the repository root:
 
 ```bash
 source .venv/bin/activate
-# The checked-in local YC utility is the working one.  Keep the historical
-# directory in PATH only as a harmless compatibility fallback; do not run yc init.
-PATH="$PWD/.venv/bin:$PWD/.tools/yc:/Users/maslovartemij/yandex-cloud:$PATH" \
-  GRPC_DNS_RESOLVER=ares \
-  YC_CLI_INITIALIZATION_SILENCE=true \
-  datasphere --profile default project get --id bt1i64odluitglbaj5st
+: "${YC_TOKEN:=${YC_OAUTH_TOKEN:?Set a secret YC_TOKEN or YC_OAUTH_TOKEN first}}"
+export YC_AUTH=OAUTH
+GRPC_DNS_RESOLVER=ares \
+  datasphere project get --id bt1i64odluitglbaj5st
 ```
 
-If the temporary IAM token has expired, this command starts the browser sign-in for
-the **existing subject-id**. Complete the identity-provider flow that actually owns
-the DataSphere access. Do not switch to a personal Yandex-ID flow just because it is
-the first login page shown. If the expected federation/user-pool path is unavailable,
-stop rather than guessing parameters: ask the project administrator for the identity
-type and, when applicable, the federation ID or user-pool ID. Do not print tokens,
-subject identifiers, browser callbacks, credentials, or signed URLs in logs or chat.
+For fully unattended long-term operation, the organisation can instead provision a
+dedicated service account, grant it `datasphere.community-projects.developer` on the
+project, and make its authorised key available only through an approved secret store.
+That is an administrator action; agents must not create accounts, keys, or profiles.
 
 Interpret authentication and submission errors separately. A successful
-`project get` with this exact profile proves that the subject-id login and temporary
-IAM token work. If a subsequent `project job execute` returns a service-side
+non-interactive `project get` proves that the OAuth-to-IAM path works. If a subsequent
+`project job execute` returns a service-side
 `PERMISSION_DENIED` such as `community is blocked by billing`, do **not** run
 `yc init`, do not overwrite the profile, and do not repeatedly submit duplicate
 jobs: this is not an expired IAM token. Preserve the rendered Job and immutable
@@ -357,8 +355,8 @@ bash scripts/submit_datasphere_vertex_qa_pilot.sh --help
 # --cv-folds 5, --concurrency 1, gateway URL, gate artifact, and image data.
 # Do not hand-submit an old file under datasphere/jobs/rendered/.
 
-datasphere --profile default project job get --id JOB_ID --format json
-datasphere --profile default project job download-files --id JOB_ID \
+datasphere project job get --id JOB_ID --format json
+datasphere project job download-files --id JOB_ID \
   --with-logs --with-diagnostics --output-dir outputs/RUN_NAME
 ```
 

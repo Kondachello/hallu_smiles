@@ -126,9 +126,11 @@ conditioned-on-success диагностику, но нельзя выдават�
    если консервативного резерва не хватает. При `budget_exhausted` сохрани
    checkpoint и заверши эксперимент как неполный -- не расширяй бюджет и не
    запускай ещё один платный Job без указания пользователя.
-5. Сохраняй только безопасные diagnostics: не логируй API key, IAM token,
+5. Сохраняй только безопасные diagnostics: не логируй API key, OAuth/IAM token,
    `Authorization`, prompt, completion, signed URL или cache key. Для DataSphere
-   используй только subject-id flow из `AGENTS.md`; никогда не запускай `yc init`.
+   используй только неинтерактивный OAuth flow из `AGENTS.md`: секретный
+   `YC_TOKEN`/`YC_OAUTH_TOKEN`, `YC_AUTH=OAUTH` и никакого profile fallback,
+   `yc init` или browser login.
 6. Не увеличивай concurrency ради скорости. Для живого Gemini прогона оставь
    консервативную сериализацию, bounded retry/backoff/pacing и сохранение каждого
    завершённого cache entry. Не превращай настоящую extraction/review ошибку в

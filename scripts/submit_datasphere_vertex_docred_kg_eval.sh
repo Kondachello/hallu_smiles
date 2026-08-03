@@ -4,7 +4,10 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export GRPC_DNS_RESOLVER="${GRPC_DNS_RESOLVER:-ares}"
-export YC_CLI_INITIALIZATION_SILENCE="${YC_CLI_INITIALIZATION_SILENCE:-true}"
+# Never fall back to the subject-id profile: it can open an interactive browser
+# login. DataSphere CLI consumes YC_TOKEN / YC_OAUTH_TOKEN directly and creates
+# its short-lived IAM token internally.
+export YC_AUTH=OAUTH
 
 usage() {
   cat <<'EOF'
@@ -19,13 +22,15 @@ Options:
   --commit SHA        Pushed source commit (default: HEAD)
   --branch NAME       Remote branch containing the commit (default: current)
   --docker-image REF  Optional immutable image; must match the committed build
-  --profile NAME      DataSphere CLI profile (default: default)
+
+Authentication is non-interactive. Set YC_TOKEN (or YC_OAUTH_TOKEN) through the
+host secret environment; the token is never accepted as a command-line argument.
 EOF
 }
 
 PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""
 BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"
-IMAGE=""; PROFILE="default"; BUDGET_EUR="10.5"
+IMAGE=""; BUDGET_EUR="10.5"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-id) PROJECT_ID="$2"; shift 2 ;;
@@ -36,7 +41,6 @@ while [[ $# -gt 0 ]]; do
     --branch) BRANCH="$2"; shift 2 ;;
     --commit) COMMIT="$2"; shift 2 ;;
     --docker-image) IMAGE="$2"; shift 2 ;;
-    --profile) PROFILE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -44,6 +48,7 @@ done
 [[ -n "$PROJECT_ID" && -n "$RUN_ID" && -n "$GATEWAY_URL" && -n "$GATE_ARTIFACT" ]] || {
   usage >&2; exit 2;
 }
+: "${YC_TOKEN:=${YC_OAUTH_TOKEN:?Set secret YC_TOKEN or YC_OAUTH_TOKEN for non-interactive DataSphere authentication}}"
 test -f "$GATE_ARTIFACT" || { echo "gateway gate artifact is missing: $GATE_ARTIFACT" >&2; exit 2; }
 python3 - "$BUDGET_EUR" <<'PY'
 import sys
@@ -77,6 +82,6 @@ python3 scripts/render_datasphere_vertex_docred_kg_eval_job.py \
   --gateway-manifest-sha256 "$GATE_MANIFEST_SHA256" --budget-eur "$BUDGET_EUR" \
   --docker-image "$IMAGE" --output "$RENDERED"
 python3 scripts/validate_datasphere_job.py --job "$RENDERED" --repo-root .
-datasphere --profile "$PROFILE" project get --id "$PROJECT_ID" >/dev/null
-datasphere --profile "$PROFILE" project job execute --async -p "$PROJECT_ID" -c "$RENDERED" \
+datasphere project get --id "$PROJECT_ID" >/dev/null
+datasphere project job execute --async -p "$PROJECT_ID" -c "$RENDERED" \
   -o "${RENDERED%.yaml}.execution.json"
