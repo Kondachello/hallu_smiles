@@ -14,7 +14,7 @@ cmd: >-
   test "$(git -C source rev-parse HEAD)" = "__GIT_COMMIT__";
   export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
   export HALLU_GATEWAY_URL="__GATEWAY_URL__";
-  export HALLU_TYPING_MODEL="${HALLU_TYPING_MODEL:-openai/gemini-2.5-flash}";
+  export HALLU_TYPING_MODEL="openai/gemini-2.5-flash";
   export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
   archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
   trap "status=\$?; archive || status=1; exit \$status" EXIT;
