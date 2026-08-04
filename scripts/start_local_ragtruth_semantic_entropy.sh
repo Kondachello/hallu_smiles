@@ -22,7 +22,8 @@ if command -v screen >/dev/null; then
   session="semantic-entropy-${RUN_ID}"
   log="$LOG_DIR/${RUN_ID}.log"
   screen -dmS "$session" bash -c 'exec "$@" > "$0" 2>&1' "$log" \
-    env HALLU_SE_RUN_ID="$RUN_ID" bash "$RUNNER"
+    env HALLU_SE_RUN_ID="$RUN_ID" HALLU_SE_CAFFEINATED=1 \
+    caffeinate -dimsu bash "$RUNNER"
   printf '[ok] started in screen session %s\n' "$session"
   exit 0
 fi
