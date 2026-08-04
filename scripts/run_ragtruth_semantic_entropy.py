@@ -54,6 +54,18 @@ class WallClockBudgetExceeded(RuntimeError):
     """The caller-set maximum wall clock was reached before another source."""
 
 
+def _is_retryable_gateway_failure(error: GatewayRequestError) -> bool:
+    """Keep persistent failures out of the cache-resume loop.
+
+    ``GatewayRequestError`` deliberately redacts the response body, but its
+    status code is safe to use for control flow.  Authentication and malformed
+    request responses need operator attention; retry only a missing transport
+    status, quota pressure, and server-side failures.
+    """
+
+    return error.status_code is None or error.status_code == 429 or 500 <= error.status_code <= 599
+
+
 def _utc() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -407,7 +419,7 @@ def _run(args: argparse.Namespace) -> int:
         _atomic_json(output_dir / "run_metadata.json", metadata)
         progress.emit("wall_clock_budget_exhausted")
         return 76
-    except (RateLimitRetryDeadlineExceeded, RetryDeadlineExceeded, GatewayRequestError) as exc:
+    except (RateLimitRetryDeadlineExceeded, RetryDeadlineExceeded) as exc:
         metadata.update({
             "state": "retryable_gateway_pause",
             "error_type": type(exc).__name__,
@@ -419,6 +431,30 @@ def _run(args: argparse.Namespace) -> int:
         _atomic_json(output_dir / "run_metadata.json", metadata)
         progress.emit("retryable_gateway_pause", error_type=type(exc).__name__)
         return 75
+    except GatewayRequestError as exc:
+        if _is_retryable_gateway_failure(exc):
+            metadata.update({
+                "state": "retryable_gateway_pause",
+                "error_type": type(exc).__name__,
+                "elapsed_seconds": round(time.monotonic() - started, 4),
+                "sources_completed": len(rows),
+                "usage": usage.summary(),
+                "finished_at_utc": _utc(),
+            })
+            _atomic_json(output_dir / "run_metadata.json", metadata)
+            progress.emit("retryable_gateway_pause", error_type=type(exc).__name__)
+            return 75
+        metadata.update({
+            "state": "error",
+            "error_type": type(exc).__name__,
+            "elapsed_seconds": round(time.monotonic() - started, 4),
+            "sources_completed": len(rows),
+            "usage": usage.summary(),
+            "finished_at_utc": _utc(),
+        })
+        _atomic_json(output_dir / "run_metadata.json", metadata)
+        progress.emit("error", error_type=type(exc).__name__)
+        raise
     except Exception as exc:  # noqa: BLE001 - terminal state must remain redacted
         metadata.update({
             "state": "error",

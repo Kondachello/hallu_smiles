@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from src.config import Config
-from src.semantic_entropy import CompletionSample, SemanticEntropyDetector, SemanticEntropyError
+from src.semantic_entropy import CompletionSample, GatewayRequestError, SemanticEntropyDetector, SemanticEntropyError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +106,22 @@ def test_toha_greedy_semantic_entropy_and_cache_only_replay(tmp_path, monkeypatc
 def test_semantic_entropy_rejects_misaligned_or_sparse_classes(ids, values):
     with pytest.raises((ValueError, SemanticEntropyError)):
         SemanticEntropyDetector._entropy(ids, values)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    [(None, True), (429, True), (500, True), (503, True), (400, False), (401, False), (404, False)],
+)
+def test_runner_retries_only_transient_gateway_failures(status_code, expected):
+    import importlib.util
+
+    runner_path = ROOT / "scripts" / "run_ragtruth_semantic_entropy.py"
+    spec = importlib.util.spec_from_file_location("semantic_entropy_runner", runner_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    error = GatewayRequestError(status_code, "redacted")
+    assert module._is_retryable_gateway_failure(error) is expected
 
 
 def test_entropy_runtime_config_requires_logprob_capability(tmp_path):
