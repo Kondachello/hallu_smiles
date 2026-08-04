@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 
-GATEWAY_PROTOCOL = "hallu-vertex-openai-gateway-v1"
+GATEWAY_PROTOCOL = "hallu-vertex-openai-gateway-v2-logprobs"
 API_PATH = "/v1"
 
 
@@ -135,6 +135,27 @@ def _parse_response_format(value: Any) -> dict[str, Any] | None:
     return dict(schema)
 
 
+def _parse_logprobs(payload: Mapping[str, Any]) -> tuple[bool, int | None]:
+    """Validate the narrow OpenAI logprob subset needed by semantic entropy.
+
+    Vertex can return the log probability of every selected output token.  That
+    is sufficient to score a sampled completion, whereas returning a top-k
+    token distribution is not necessary (and would enlarge every response).
+    ``top_logprobs=0`` therefore asks only for selected-token probabilities.
+    """
+    requested = payload.get("logprobs", False)
+    if not isinstance(requested, bool):
+        raise GatewayError(400, "logprobs must be a boolean")
+    top = payload.get("top_logprobs")
+    if top is None:
+        return requested, None
+    if not requested:
+        raise GatewayError(400, "top_logprobs requires logprobs=true")
+    if not isinstance(top, int) or isinstance(top, bool) or not 0 <= top <= 20:
+        raise GatewayError(400, "top_logprobs must be an integer between 0 and 20")
+    return True, int(top)
+
+
 def _request_model_matches(model: str, settings: GatewaySettings) -> bool:
     return model in {settings.logical_model, settings.vertex_model}
 
@@ -184,12 +205,15 @@ def parse_chat_request(payload: Any, settings: GatewaySettings) -> dict[str, Any
     ):
         raise GatewayError(400, "max_tokens must be a positive integer")
 
+    response_logprobs, top_logprobs = _parse_logprobs(payload)
     return {
         "contents": contents,
         "system_instruction": "\n\n".join(system_parts) or None,
         "temperature": float(temperature),
         "max_output_tokens": max_tokens,
         "response_json_schema": _parse_response_format(payload.get("response_format")),
+        "response_logprobs": response_logprobs,
+        "top_logprobs": top_logprobs,
     }
 
 
@@ -221,6 +245,29 @@ def _finish_reason(candidate: Any) -> str:
     return "content_filter"
 
 
+def _openai_logprobs(candidate: Any) -> dict[str, Any] | None:
+    """Translate selected Vertex token probabilities to OpenAI's response shape.
+
+    The gateway intentionally exposes no prompt tokens or provider-internal
+    alternatives unless the caller explicitly requested them.  Semantic entropy
+    needs only the selected completion-token log probabilities.
+    """
+    raw = _field(candidate, "logprobs_result")
+    chosen = _field(raw, "chosen_candidates")
+    if not isinstance(chosen, (list, tuple)):
+        return None
+    content: list[dict[str, Any]] = []
+    for item in chosen:
+        token = _field(item, "token")
+        logprob = _field(item, "log_probability")
+        if not isinstance(token, str) or not isinstance(logprob, (int, float)):
+            raise GatewayError(502, "Vertex returned malformed token logprobs", "api_error")
+        content.append({"token": token, "logprob": float(logprob), "bytes": None, "top_logprobs": []})
+    if not content:
+        raise GatewayError(502, "Vertex returned empty token logprobs", "api_error")
+    return {"content": content}
+
+
 def openai_response(vertex_response: Any, settings: GatewaySettings) -> dict[str, Any]:
     candidates = _field(vertex_response, "candidates", [])
     if not isinstance(candidates, (list, tuple)) or len(candidates) != 1:
@@ -232,19 +279,21 @@ def openai_response(vertex_response: Any, settings: GatewaySettings) -> dict[str
     total_tokens = int(_field(usage, "total_token_count", prompt_tokens + completion_tokens) or 0)
     model_version = str(_field(vertex_response, "model_version", settings.vertex_model) or settings.vertex_model)
     manifest_hash = canonical_manifest_sha256(gateway_manifest(settings))
+    choice: dict[str, Any] = {
+        "index": 0,
+        "message": {"role": "assistant", "content": _candidate_text(candidate)},
+        "finish_reason": _finish_reason(candidate),
+    }
+    logprobs = _openai_logprobs(candidate)
+    if logprobs is not None:
+        choice["logprobs"] = logprobs
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": settings.vertex_model,
         "system_fingerprint": f"{manifest_hash[:16]}:{model_version}",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": _candidate_text(candidate)},
-                "finish_reason": _finish_reason(candidate),
-            }
-        ],
+        "choices": [choice],
         "usage": {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,

@@ -9,6 +9,10 @@ pandas
 tenacity                 # retries with backoff
 jsonschema>=4.23,<5      # independent validation of every structured LLM response
 tqdm
+# Local mutual-entailment model used by the non-graph SemanticEntropy baseline.
+# ``sentencepiece`` is required by DeBERTa-v2's tokenizer.
+transformers>=4.47
+sentencepiece
 
 # --- Reporting ---
 matplotlib               # diagnostic plots (histograms, AUC-vs-length). Optional; guarded.

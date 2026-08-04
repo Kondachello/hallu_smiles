@@ -85,6 +85,32 @@ def test_openai_request_becomes_vertex_contents_without_mutating_the_schema():
     assert parsed["response_json_schema"] is not SCHEMA
 
 
+def test_logprobs_request_is_narrow_and_opt_in():
+    parsed = parse_chat_request({
+        "model": "gemini-2.5-flash",
+        "messages": [{"role": "user", "content": "Sample an answer."}],
+        "logprobs": True,
+        "top_logprobs": 0,
+    }, _settings())
+    assert parsed["response_logprobs"] is True
+    assert parsed["top_logprobs"] == 0
+
+
+@pytest.mark.parametrize("payload, message", [
+    ({"logprobs": "yes"}, "logprobs must be a boolean"),
+    ({"top_logprobs": 1}, "top_logprobs requires"),
+    ({"logprobs": True, "top_logprobs": 21}, "top_logprobs must be"),
+])
+def test_invalid_logprob_requests_fail_before_vertex(payload, message):
+    payload = {
+        "model": "gemini-2.5-flash",
+        "messages": [{"role": "user", "content": "x"}],
+        **payload,
+    }
+    with pytest.raises(GatewayError, match=message):
+        parse_chat_request(payload, _settings())
+
+
 @pytest.mark.parametrize(
     "payload, message",
     [
@@ -128,6 +154,23 @@ def test_protobuf_style_vertex_finish_reason_is_normalised():
         ],
     )
     assert openai_response(response, _settings())["choices"][0]["finish_reason"] == "length"
+
+
+def test_vertex_selected_token_logprobs_are_returned_only_when_present():
+    response = SimpleNamespace(
+        usage_metadata=SimpleNamespace(),
+        candidates=[SimpleNamespace(
+            finish_reason="STOP",
+            content=SimpleNamespace(parts=[SimpleNamespace(text="answer")]),
+            logprobs_result=SimpleNamespace(chosen_candidates=[
+                SimpleNamespace(token="answer", token_id=7, log_probability=-0.25),
+                SimpleNamespace(token="<eos>", token_id=1, log_probability=-0.5),
+            ]),
+        )],
+    )
+    logprobs = openai_response(response, _settings())["choices"][0]["logprobs"]
+    assert [row["logprob"] for row in logprobs["content"]] == [-0.25, -0.5]
+    assert all(row["top_logprobs"] == [] for row in logprobs["content"])
 
 
 def test_vertex_error_mapping_preserves_transient_retry_boundary():

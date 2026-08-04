@@ -142,6 +142,28 @@ support_critical:
     top_k_grid: [1, 2, 3]
     unknown_risk_grid: [0.0, 0.25]
 
+# Non-graph baseline adapted from TOHA's SemanticEntropy implementation.  The
+# generator remains the single llm.model above; its selected-token logprobs
+# provide per-sample likelihoods, and local DeBERTa groups samples by mutual
+# entailment.  Runtime launchers place this cache on the external disk.
+semantic_entropy:
+  protocol: "toha-semantic-entropy-v1-gemini-selected-logprobs"
+  cache_dir: ".cache/semantic_entropy"
+  cache_read_dirs: []
+  n_samples: 15
+  temperature: 1.0
+  max_tokens: 512
+  request_timeout_s: 120
+  prompt_version: "ragtruth-original-prompt-v1"
+  likelihood_normalization: "mean_selected_token_logprob"
+  strict_entailment: false
+  nli_model: "microsoft/deberta-v2-xlarge-mnli"
+  nli_revision: null
+  nli_model_path: null
+  nli_device: "auto"
+  nli_batch_size: 2
+  nli_max_length: 512
+
 data:
   dir: "data"                         # holds source_info.jsonl and response.jsonl
   exclude_implicit_true: false        # RAGTruth strict convention: implicit_true spans COUNT as hallucinations

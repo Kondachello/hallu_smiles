@@ -1,0 +1,13 @@
+# Minimal isolated runtime for the RAGTruth SemanticEntropy baseline.
+# Install this file into an external-disk venv; it deliberately avoids KGGen
+# and all graph-pipeline dependencies.
+numpy
+scikit-learn
+tenacity
+PyYAML
+torch
+transformers>=4.47
+sentencepiece
+safetensors
+huggingface-hub
+pytest

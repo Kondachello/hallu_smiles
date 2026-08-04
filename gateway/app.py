@@ -95,6 +95,13 @@ async def chat_completions(
         if parsed["response_json_schema"] is not None:
             generation["response_mime_type"] = "application/json"
             generation["response_json_schema"] = parsed["response_json_schema"]
+        if parsed["response_logprobs"]:
+            generation["response_logprobs"] = True
+            # Vertex returns selected-token log probabilities even when no
+            # top-k alternatives are requested.  Omitting the field for zero
+            # avoids needlessly sending candidate distributions over the wire.
+            if parsed["top_logprobs"]:
+                generation["logprobs"] = parsed["top_logprobs"]
         response = vertex_client().models.generate_content(
             model=cfg.vertex_model,
             contents=contents,
