@@ -29,7 +29,8 @@ cloud-instance-types:
   - c1.4
 working-storage:
   type: SSD
-  size: 20Gb
+  # DataSphere rejects anything below 100Gb, even for a probe this small.
+  size: 100Gb
 graceful-shutdown:
   signal: SIGTERM
   timeout: 60s
