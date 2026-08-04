@@ -59,6 +59,24 @@ fetch_gateway_manifest "$MANIFEST_RAW"
 "$CLIENT_PYTHON" "$ROOT/scripts/validate_vertex_gateway_manifest.py" \
   --manifest "$MANIFEST_RAW" --logical-model openai/gemini-2.5-flash --output "$MANIFEST"
 rm -f "$MANIFEST_RAW"
+
+# Everything that identifies the graph cache is derived from the manifest: the
+# fingerprint that names the cache directory, and the llm.model_revision that
+# goes into each graph's cache key. A replacement gateway therefore invalidates
+# the whole cache even when it serves the identical model. Point the identity at
+# the manifest the cache was built under; the live manifest is still fetched,
+# validated and kept beside it, so what actually served the run stays auditable.
+if [[ -n "${HALLU_CACHE_MANIFEST:-}" ]]; then
+  test -s "$HALLU_CACHE_MANIFEST" || {
+    echo "HALLU_CACHE_MANIFEST is set but unreadable: $HALLU_CACHE_MANIFEST" >&2
+    exit 2
+  }
+  cp "$MANIFEST" "$RUN_ROOT/live-gateway-manifest.json"
+  cp "$HALLU_CACHE_MANIFEST" "$MANIFEST"
+  echo "[cache-manifest] cache identity taken from $HALLU_CACHE_MANIFEST" >&2
+  echo "[cache-manifest] live manifest archived as live-gateway-manifest.json" >&2
+fi
+
 GATEWAY_MANIFEST_SHA256="$("$CLIENT_PYTHON" - "$MANIFEST" <<'PY'
 import json, sys
 from gateway.core import canonical_manifest_sha256

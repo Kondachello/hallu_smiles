@@ -41,6 +41,10 @@ def main() -> None:
     parser.add_argument("--max-workers", type=int, default=1,
                         help="record-level typing concurrency (overlaps gateway+HHEM calls; "
                              "identical results, ~N x faster). 1 = sequential.")
+    parser.add_argument("--cache-manifest", default="",
+                        help="repo-relative path to the gateway manifest the graph cache was built "
+                             "under; its fingerprint names the cache directory and its release/revision "
+                             "feed every graph's cache key. Empty = use the live manifest")
     parser.add_argument("--cache-gateway-url", default="",
                         help="gateway origin the graph cache was keyed under; the origin is a "
                              "cache-key ingredient and is never contacted, so pin it here when the "
@@ -82,6 +86,11 @@ def main() -> None:
         raise SystemExit("--batch-size must be a positive integer")
     if args.cache_fingerprint_override and not re.fullmatch(r"[0-9a-f]{64}", args.cache_fingerprint_override):
         raise SystemExit("--cache-fingerprint-override must be a sha256 hex digest")
+    if args.cache_manifest:
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", args.cache_manifest) or ".." in args.cache_manifest:
+            raise SystemExit("--cache-manifest must be a plain repo-relative path")
+        if not (ROOT / args.cache_manifest).is_file():
+            raise SystemExit(f"--cache-manifest not found in the repo: {args.cache_manifest}")
     cache_gateway = ""
     if args.cache_gateway_url:
         parsed = urlparse(args.cache_gateway_url)
@@ -102,6 +111,7 @@ def main() -> None:
         .replace("__TYPED_METRIC_BATCH_SIZE__", str(args.batch_size))
         .replace("__CACHE_FINGERPRINT_OVERRIDE__", args.cache_fingerprint_override)
         .replace("__CACHE_GATEWAY_URL__", cache_gateway)
+        .replace("__CACHE_MANIFEST__", args.cache_manifest)
         .replace("__JOB_TIMEOUT_SECONDS__", str(args.timeout_seconds))
         .replace("__DOCKER_ENV_BLOCK__", f"  docker:\n    image: {image}"))
     if "__" in rendered:

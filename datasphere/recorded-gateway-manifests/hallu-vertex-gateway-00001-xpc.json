@@ -1,0 +1,9 @@
+{
+  "api_path": "/v1",
+  "cloud_run_revision": "hallu-vertex-gateway-00001-xpc",
+  "gateway_release": "13a8e9fac8f471c0fc7599ed840cf6fcbcf4d9c7",
+  "logical_model": "openai/gemini-2.5-flash",
+  "protocol": "hallu-vertex-openai-gateway-v1",
+  "vertex_location": "europe-west4",
+  "vertex_model": "gemini-2.5-flash"
+}
