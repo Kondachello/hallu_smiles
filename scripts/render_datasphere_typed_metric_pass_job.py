@@ -41,6 +41,10 @@ def main() -> None:
     parser.add_argument("--max-workers", type=int, default=1,
                         help="record-level typing concurrency (overlaps gateway+HHEM calls; "
                              "identical results, ~N x faster). 1 = sequential.")
+    parser.add_argument("--cache-gateway-url", default="",
+                        help="gateway origin the graph cache was keyed under; the origin is a "
+                             "cache-key ingredient and is never contacted, so pin it here when the "
+                             "serving gateway differs. Empty = use --gateway-url")
     parser.add_argument("--cache-fingerprint-override", default="",
                         help="gateway-manifest sha256 the graph cache was built under; set this when "
                              "the serving gateway reports a different manifest but runs the same "
@@ -78,6 +82,12 @@ def main() -> None:
         raise SystemExit("--batch-size must be a positive integer")
     if args.cache_fingerprint_override and not re.fullmatch(r"[0-9a-f]{64}", args.cache_fingerprint_override):
         raise SystemExit("--cache-fingerprint-override must be a sha256 hex digest")
+    cache_gateway = ""
+    if args.cache_gateway_url:
+        parsed = urlparse(args.cache_gateway_url)
+        if parsed.scheme != "https" or not parsed.netloc or parsed.path.rstrip("/") or parsed.query or parsed.fragment:
+            raise SystemExit("--cache-gateway-url must be an HTTPS origin")
+        cache_gateway = f"https://{parsed.netloc}"
     rendered = TEMPLATE.read_text(encoding="utf-8")
     rendered = (rendered.replace("__GIT_COMMIT__", args.commit)
         .replace("__IMAGE_SOURCE_COMMIT__", args.image_source_commit)
@@ -91,6 +101,7 @@ def main() -> None:
         .replace("__TYPED_METRIC_QPS__", str(args.typing_qps))
         .replace("__TYPED_METRIC_BATCH_SIZE__", str(args.batch_size))
         .replace("__CACHE_FINGERPRINT_OVERRIDE__", args.cache_fingerprint_override)
+        .replace("__CACHE_GATEWAY_URL__", cache_gateway)
         .replace("__JOB_TIMEOUT_SECONDS__", str(args.timeout_seconds))
         .replace("__DOCKER_ENV_BLOCK__", f"  docker:\n    image: {image}"))
     if "__" in rendered:

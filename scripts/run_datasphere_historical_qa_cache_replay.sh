@@ -72,6 +72,14 @@ PY
 # same logical model, point the discovery at the fingerprint the cache was built
 # under instead of re-extracting every graph. The live manifest is still fetched,
 # validated and archived, so the substitution stays auditable.
+# The recorded gateway origin is a cache-key ingredient only -- the config
+# generator documents it as never contacted -- so a replacement gateway silently
+# invalidates every cached graph key even after the directory itself resolves.
+# HALLU_CACHE_GATEWAY_URL pins the origin the cache was keyed under; live calls
+# still go to RECORDED_GATEWAY_URL.
+if [[ -n "${HALLU_CACHE_GATEWAY_URL:-}" ]]; then
+  echo "[cache-gateway] keying graph cache under ${HALLU_CACHE_GATEWAY_URL}; live calls go to ${RECORDED_GATEWAY_URL}" >&2
+fi
 if [[ -n "${HALLU_CACHE_FINGERPRINT_OVERRIDE:-}" ]]; then
   echo "[cache-fingerprint] live gateway manifest hashes to $GATEWAY_MANIFEST_SHA256" >&2
   echo "[cache-fingerprint] overriding with ${HALLU_CACHE_FINGERPRINT_OVERRIDE} to reuse the existing graph cache" >&2
@@ -238,7 +246,7 @@ PY
 HISTORICAL_CACHE_ROOT="$TARGET_CACHE_ROOT"
 "$CLIENT_PYTHON" "$ROOT/scripts/make_datasphere_vertex_config.py" \
   --base-config "$ROOT/config.yaml" --gateway-manifest "$MANIFEST" \
-  --gateway-url "$RECORDED_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
+  --gateway-url "${HALLU_CACHE_GATEWAY_URL:-$RECORDED_GATEWAY_URL}" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$RUN_ROOT/historical-cache-runtime.yaml" --data-dir "$DATA_DIR" \
   --work-dir "$RUN_ROOT" --cache-root "$RUN_ROOT/current-cache" \
   --llm-runtime-fingerprint-override "$LINEAGE_FINGERPRINT" \
