@@ -5,9 +5,11 @@ numpy
 scikit-learn
 tenacity
 PyYAML
+jsonschema>=4.23,<5
 torch
-transformers>=4.47
+transformers>=4.47,<5
 sentencepiece
+protobuf
 safetensors
 huggingface-hub
 pytest

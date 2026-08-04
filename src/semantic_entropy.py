@@ -125,7 +125,10 @@ class DebertaEntailment:
         self.device = self._resolve_device(torch, device)
         self.batch_size = int(batch_size)
         self.max_length = int(max_length)
-        self.tokenizer = AutoTokenizer.from_pretrained(source, **kwargs)
+        # Newer Transformers releases detect a legacy SentencePiece regex
+        # pattern in this DeBERTa snapshot. Opt into their corrective path so
+        # the local NLI classifier does not silently tokenize with it.
+        self.tokenizer = AutoTokenizer.from_pretrained(source, fix_mistral_regex=True, **kwargs)
         self.model = AutoModelForSequenceClassification.from_pretrained(source, **kwargs)
         self.model.to(self.device)
         self.model.eval()

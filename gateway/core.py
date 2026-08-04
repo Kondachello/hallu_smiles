@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 
-GATEWAY_PROTOCOL = "hallu-vertex-openai-gateway-v2-logprobs"
+# Keep the established protocol marker so historical graph cache/config
+# fixtures remain readable.  New, optional functionality is declared through
+# an explicit capability marker below instead of silently redefining v1.
+GATEWAY_PROTOCOL = "hallu-vertex-openai-gateway-v1"
+SELECTED_TOKEN_LOGPROBS_PROTOCOL = "vertex-selected-token-logprobs-v1"
 API_PATH = "/v1"
 
 
@@ -91,6 +95,7 @@ def gateway_manifest(settings: GatewaySettings) -> dict[str, str]:
         "vertex_location": settings.location,
         "gateway_release": settings.release,
         "cloud_run_revision": settings.cloud_run_revision,
+        "selected_token_logprobs": SELECTED_TOKEN_LOGPROBS_PROTOCOL,
     }
 
 

@@ -9,6 +9,7 @@ from gateway.core import (
     GATEWAY_PROTOCOL,
     GatewayError,
     GatewaySettings,
+    SELECTED_TOKEN_LOGPROBS_PROTOCOL,
     authenticate,
     canonical_manifest_sha256,
     gateway_manifest,
@@ -43,6 +44,7 @@ def test_manifest_is_stable_and_does_not_contain_the_secret():
     manifest = gateway_manifest(_settings())
     assert manifest["protocol"] == GATEWAY_PROTOCOL
     assert manifest["logical_model"] == "openai/gemini-2.5-flash"
+    assert manifest["selected_token_logprobs"] == SELECTED_TOKEN_LOGPROBS_PROTOCOL
     assert "not-a-real-key" not in str(manifest)
     assert canonical_manifest_sha256(manifest) == canonical_manifest_sha256(dict(manifest))
 

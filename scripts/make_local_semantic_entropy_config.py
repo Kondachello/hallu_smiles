@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gateway.core import canonical_manifest_sha256
+from gateway.core import SELECTED_TOKEN_LOGPROBS_PROTOCOL, canonical_manifest_sha256
 from scripts.make_datasphere_vertex_config import (  # noqa: E402
     _normalise_gateway_url,
     _read_json,
@@ -44,6 +44,10 @@ def main() -> None:
         raise SystemExit("base config has no llm mapping")
     manifest = _read_json(Path(args.gateway_manifest))
     _validate_manifest(manifest, str(config["llm"].get("model", "")))
+    if manifest.get("selected_token_logprobs") != SELECTED_TOKEN_LOGPROBS_PROTOCOL:
+        raise SystemExit(
+            "gateway manifest does not advertise selected-token logprobs; deploy the entropy gateway revision"
+        )
     nli_path = Path(args.nli_model_path).resolve()
     if not (nli_path / "config.json").is_file():
         raise SystemExit("NLI model path is not a complete local transformers snapshot")

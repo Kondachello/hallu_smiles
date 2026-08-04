@@ -11,7 +11,7 @@ jsonschema>=4.23,<5      # independent validation of every structured LLM respon
 tqdm
 # Local mutual-entailment model used by the non-graph SemanticEntropy baseline.
 # ``sentencepiece`` is required by DeBERTa-v2's tokenizer.
-transformers>=4.47
+transformers>=4.47,<5
 sentencepiece
 
 # --- Reporting ---
