@@ -1,0 +1,35 @@
+# Liveness probe for the typing gateway: one manifest call + one real completion.
+# Run this before submitting a 750-record typed pass -- it answers "are the
+# credentials still good and is the model answering?" in a couple of minutes
+# instead of discovering a dead key an hour into a full pass.
+# Render with scripts/render_datasphere_typing_gateway_smoke_job.py.
+name: typing-gateway-smoke-__RUN_ID__
+desc: "Gateway liveness probe: manifest auth check plus one structured completion through the production typing transport."
+cmd: >-
+  bash -lc 'set -Eeuo pipefail;
+  export RUN_ROOT="$PWD/typing-gateway-smoke-artifacts/__RUN_ID__";
+  mkdir -p "$RUN_ROOT";
+  git init source; git -C source remote add origin https://github.com/Kondachello/hallu_smiles.git;
+  git -C source fetch --depth 1 origin __GIT_COMMIT__; git -C source checkout --detach FETCH_HEAD;
+  test "$(git -C source rev-parse HEAD)" = "__GIT_COMMIT__";
+  export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE__";
+  export HALLU_GATEWAY_URL="__GATEWAY_URL__";
+  export HALLU_TYPING_MODEL="${HALLU_TYPING_MODEL:-openai/gemini-2.5-flash}";
+  export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
+  archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
+  trap "status=\$?; archive || status=1; exit \$status" EXIT;
+  timeout --signal=TERM --kill-after=60s 900 python source/scripts/check_typing_gateway_smoke.py 2>&1 | tee "$RUN_ROOT/gateway-smoke.console.log"'
+env:
+__DOCKER_ENV_BLOCK__
+outputs:
+  - typing-gateway-smoke-__RUN_ID__.tar.gz: ARTIFACT_ARCHIVE
+flags:
+  - attach-project-disk
+cloud-instance-types:
+  - c1.4
+working-storage:
+  type: SSD
+  size: 20Gb
+graceful-shutdown:
+  signal: SIGTERM
+  timeout: 60s
