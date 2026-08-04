@@ -18,7 +18,10 @@ cmd: >-
   export ARCHIVE_PATH="${ARTIFACT_ARCHIVE}";
   archive() { tar -C "$(dirname "$RUN_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$RUN_ROOT")"; tar -tzf "$ARCHIVE_PATH" >/dev/null; chmod a+r "$ARCHIVE_PATH"; };
   trap "status=\$?; archive || status=1; exit \$status" EXIT;
-  timeout --signal=TERM --kill-after=60s 900 python source/scripts/check_typing_gateway_smoke.py 2>&1 | tee "$RUN_ROOT/gateway-smoke.console.log"'
+  CLIENT_PYTHON=/opt/hallu/client/bin/python;
+  "$CLIENT_PYTHON" -m pip install --quiet --disable-pip-version-check --target "$RUN_ROOT/pydeps" "langchain-core>=1,<2";
+  export PYTHONPATH="$RUN_ROOT/pydeps";
+  timeout --signal=TERM --kill-after=60s 900 "$CLIENT_PYTHON" source/scripts/check_typing_gateway_smoke.py 2>&1 | tee "$RUN_ROOT/gateway-smoke.console.log"'
 env:
 __DOCKER_ENV_BLOCK__
 outputs:

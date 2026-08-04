@@ -26,8 +26,18 @@ from langchain_core.messages import HumanMessage, SystemMessage
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "dynamic_typing_agent" / "src"))
 
-from hallugraph_dynamic_typing.agent import DynamicTypingAgent  # noqa: E402
 from hallugraph_dynamic_typing.transports import LiteLLMStructuredModel  # noqa: E402
+
+
+def _openai_api_base(gateway_url: str) -> str:
+    """Mirror of DynamicTypingAgent._openai_api_base.
+
+    Duplicated rather than imported: pulling in the agent module drags langgraph
+    into a probe that only needs the transport, and the probe should not fail for
+    a dependency the thing it is testing never touches.
+    """
+    base = gateway_url.rstrip("/")
+    return base if base.endswith("/v1") else f"{base}/v1"
 
 _LIVE_CONFIG = _REPO_ROOT / "dynamic_typing_agent" / "config" / "live-gateway-hhem.yaml"
 _DEFAULT_MODEL = "openai/gemini-2.5-flash"
@@ -133,7 +143,7 @@ def main() -> int:
         return 1
 
     model_config = yaml.safe_load(_LIVE_CONFIG.read_text(encoding="utf-8")).get("model", {})
-    api_base = DynamicTypingAgent._openai_api_base(gateway_url)
+    api_base = _openai_api_base(gateway_url)
     _emit(
         "probe_start",
         gateway_url=gateway_url,
