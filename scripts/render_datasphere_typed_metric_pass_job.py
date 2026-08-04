@@ -41,6 +41,10 @@ def main() -> None:
     parser.add_argument("--max-workers", type=int, default=1,
                         help="record-level typing concurrency (overlaps gateway+HHEM calls; "
                              "identical results, ~N x faster). 1 = sequential.")
+    parser.add_argument("--cache-fingerprint-override", default="",
+                        help="gateway-manifest sha256 the graph cache was built under; set this when "
+                             "the serving gateway reports a different manifest but runs the same "
+                             "logical model, so the existing cache still resolves. Empty = no override")
     parser.add_argument("--batch-size", type=int, default=15,
                         help="flush a batch file every N records; smaller loses less work "
                              "if the job dies mid-run (default matches the pass's own default)")
@@ -72,6 +76,8 @@ def main() -> None:
         raise SystemExit("--timeout-seconds must be at least 60")
     if args.batch_size < 1:
         raise SystemExit("--batch-size must be a positive integer")
+    if args.cache_fingerprint_override and not re.fullmatch(r"[0-9a-f]{64}", args.cache_fingerprint_override):
+        raise SystemExit("--cache-fingerprint-override must be a sha256 hex digest")
     rendered = TEMPLATE.read_text(encoding="utf-8")
     rendered = (rendered.replace("__GIT_COMMIT__", args.commit)
         .replace("__IMAGE_SOURCE_COMMIT__", args.image_source_commit)
@@ -84,6 +90,7 @@ def main() -> None:
         .replace("__TYPED_METRIC_MAX_WORKERS__", str(args.max_workers))
         .replace("__TYPED_METRIC_QPS__", str(args.typing_qps))
         .replace("__TYPED_METRIC_BATCH_SIZE__", str(args.batch_size))
+        .replace("__CACHE_FINGERPRINT_OVERRIDE__", args.cache_fingerprint_override)
         .replace("__JOB_TIMEOUT_SECONDS__", str(args.timeout_seconds))
         .replace("__DOCKER_ENV_BLOCK__", f"  docker:\n    image: {image}"))
     if "__" in rendered:

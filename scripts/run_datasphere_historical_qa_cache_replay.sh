@@ -66,6 +66,18 @@ print(canonical_manifest_sha256(json.load(open(sys.argv[1], encoding='utf-8'))))
 PY
 )"
 
+# The manifest fingerprint names the graph-cache directory, so a gateway that
+# reports an extra manifest field hashes differently and stops resolving a cache
+# it is otherwise perfectly able to serve. When the replacement gateway runs the
+# same logical model, point the discovery at the fingerprint the cache was built
+# under instead of re-extracting every graph. The live manifest is still fetched,
+# validated and archived, so the substitution stays auditable.
+if [[ -n "${HALLU_CACHE_FINGERPRINT_OVERRIDE:-}" ]]; then
+  echo "[cache-fingerprint] live gateway manifest hashes to $GATEWAY_MANIFEST_SHA256" >&2
+  echo "[cache-fingerprint] overriding with ${HALLU_CACHE_FINGERPRINT_OVERRIDE} to reuse the existing graph cache" >&2
+  GATEWAY_MANIFEST_SHA256="$HALLU_CACHE_FINGERPRINT_OVERRIDE"
+fi
+
 HISTORICAL_LINEAGE="$RUN_ROOT/historical-lineage.json"
 DISCOVERY_REPORT="$RUN_ROOT/reports/historical_cache_discovery.json"
 mkdir -p "$(dirname "$DISCOVERY_REPORT")"
