@@ -6,6 +6,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCAL_ROOT="${HALLU_SE_ROOT:-/Volumes/mySSD/hallu_smiles/semantic-entropy}"
 RUN_ID="${HALLU_SE_RUN_ID:-local-$(date -u +%Y%m%dT%H%M%SZ)}"
 RUNNER="$ROOT/scripts/run_local_ragtruth_semantic_entropy.sh"
+GATEWAY_URL="${HALLU_GATEWAY_URL:-https://hallu-vertex-gateway-453887629111.europe-west4.run.app}"
+MAX_WALL_SECONDS="${HALLU_SE_MAX_WALL_SECONDS:-86400}"
+KEYCHAIN_SERVICE="${HALLU_GATEWAY_KEYCHAIN_SERVICE:-}"
 LOG_DIR="$LOCAL_ROOT/launch-logs"
 mkdir -p "$LOG_DIR"
 
@@ -22,7 +25,9 @@ if command -v screen >/dev/null; then
   session="semantic-entropy-${RUN_ID}"
   log="$LOG_DIR/${RUN_ID}.log"
   screen -dmS "$session" bash -c 'exec "$@" > "$0" 2>&1' "$log" \
-    env HALLU_SE_RUN_ID="$RUN_ID" HALLU_SE_CAFFEINATED=1 \
+    env HALLU_SE_ROOT="$LOCAL_ROOT" HALLU_SE_RUN_ID="$RUN_ID" \
+    HALLU_SE_MAX_WALL_SECONDS="$MAX_WALL_SECONDS" HALLU_GATEWAY_URL="$GATEWAY_URL" \
+    HALLU_GATEWAY_KEYCHAIN_SERVICE="$KEYCHAIN_SERVICE" HALLU_SE_CAFFEINATED=1 \
     caffeinate -dimsu bash "$RUNNER"
   printf '[ok] started in screen session %s\n' "$session"
   exit 0
