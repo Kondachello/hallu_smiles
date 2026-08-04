@@ -292,7 +292,8 @@ PY
     "${TYPED_KG_ARGS[@]}" --gateway-manifest-sha256 "$GATEWAY_MANIFEST_SHA256" \
     --qa-sample-size "$QA_SAMPLE_SIZE" --qa-test-fraction "$QA_TEST_FRACTION" \
     --replay-count "$REPLAY_COUNT" --replay-selection-seed "$REPLAY_SELECTION_SEED" \
-    --alpha "${TYPED_METRIC_ALPHA:-0.5}" --max-workers "${TYPED_METRIC_MAX_WORKERS:-1}" | tee "$RUN_ROOT/typed-metric-pass-summary.log"
+    --alpha "${TYPED_METRIC_ALPHA:-0.5}" --max-workers "${TYPED_METRIC_MAX_WORKERS:-1}" \
+    --batch-size "${TYPED_METRIC_BATCH_SIZE:-15}" | tee "$RUN_ROOT/typed-metric-pass-summary.log"
 elif [[ "${DIAGNOSTIC_ONLY:-0}" == "1" ]]; then
   # Read-only: check how many computed cache_keys for the selected QA texts
   # already exist as files in the chained read sources, using the exact same

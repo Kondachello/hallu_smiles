@@ -41,6 +41,9 @@ def main() -> None:
     parser.add_argument("--max-workers", type=int, default=1,
                         help="record-level typing concurrency (overlaps gateway+HHEM calls; "
                              "identical results, ~N x faster). 1 = sequential.")
+    parser.add_argument("--batch-size", type=int, default=15,
+                        help="flush a batch file every N records; smaller loses less work "
+                             "if the job dies mid-run (default matches the pass's own default)")
     parser.add_argument("--typing-qps", type=float, default=0.0,
                         help="process-wide gateway request rate cap (req/sec) to stay under the "
                              "Vertex quota and avoid 429 storms. 0 = unlimited.")
@@ -67,6 +70,8 @@ def main() -> None:
         raise SystemExit("--alpha must be in [0, 1]")
     if args.timeout_seconds < 60:
         raise SystemExit("--timeout-seconds must be at least 60")
+    if args.batch_size < 1:
+        raise SystemExit("--batch-size must be a positive integer")
     rendered = TEMPLATE.read_text(encoding="utf-8")
     rendered = (rendered.replace("__GIT_COMMIT__", args.commit)
         .replace("__IMAGE_SOURCE_COMMIT__", args.image_source_commit)
@@ -78,6 +83,7 @@ def main() -> None:
         .replace("__TYPED_METRIC_ALPHA__", str(args.alpha))
         .replace("__TYPED_METRIC_MAX_WORKERS__", str(args.max_workers))
         .replace("__TYPED_METRIC_QPS__", str(args.typing_qps))
+        .replace("__TYPED_METRIC_BATCH_SIZE__", str(args.batch_size))
         .replace("__JOB_TIMEOUT_SECONDS__", str(args.timeout_seconds))
         .replace("__DOCKER_ENV_BLOCK__", f"  docker:\n    image: {image}"))
     if "__" in rendered:
