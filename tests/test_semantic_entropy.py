@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import math
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from src.config import Config
 from src.semantic_entropy import CompletionSample, SemanticEntropyDetector, SemanticEntropyError
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _config(cache_dir: Path) -> Config:
@@ -100,3 +106,42 @@ def test_toha_greedy_semantic_entropy_and_cache_only_replay(tmp_path, monkeypatc
 def test_semantic_entropy_rejects_misaligned_or_sparse_classes(ids, values):
     with pytest.raises((ValueError, SemanticEntropyError)):
         SemanticEntropyDetector._entropy(ids, values)
+
+
+def test_entropy_runtime_config_requires_logprob_capability(tmp_path):
+    from gateway.core import GatewaySettings, gateway_manifest
+
+    settings = GatewaySettings(
+        api_key="not-a-real-key",
+        logical_model="openai/gemini-2.5-flash",
+        vertex_model="gemini-2.5-flash",
+        project="test-project",
+        location="europe-west4",
+        release="test-release",
+        cloud_run_revision="test-revision",
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(gateway_manifest(settings)), encoding="utf-8")
+    nli = tmp_path / "nli"
+    nli.mkdir()
+    (nli / "config.json").write_text("{}", encoding="utf-8")
+    output = tmp_path / "runtime.yaml"
+    command = [
+        sys.executable, str(ROOT / "scripts" / "make_local_semantic_entropy_config.py"),
+        "--base-config", str(ROOT / "config.yaml"),
+        "--gateway-manifest", str(manifest),
+        "--gateway-url", "https://gateway.example.run.app",
+        "--nli-model-path", str(nli),
+        "--data-dir", str(tmp_path / "data"),
+        "--cache-root", str(tmp_path / "cache"),
+        "--output", str(output),
+    ]
+    subprocess.run(command, check=True)
+    assert output.is_file()
+
+    incompatible = gateway_manifest(settings)
+    incompatible.pop("selected_token_logprobs")
+    manifest.write_text(json.dumps(incompatible), encoding="utf-8")
+    failed = subprocess.run(command, text=True, capture_output=True)
+    assert failed.returncode != 0
+    assert "selected-token logprobs" in failed.stderr
