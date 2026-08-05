@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,7 +17,7 @@ from src.semantic_entropy import CompletionSample, GatewayRequestError, Semantic
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _config(cache_dir: Path) -> Config:
+def _config(cache_dir: Path, *, max_tokens: int = 512, max_tokens_read_through: list[int] | None = None) -> Config:
     return Config({
         "llm": {
             "model": "openai/gemini-2.5-flash",
@@ -39,7 +40,8 @@ def _config(cache_dir: Path) -> Config:
             "cache_read_dirs": [],
             "n_samples": 3,
             "temperature": 1.0,
-            "max_tokens": 512,
+            "max_tokens": max_tokens,
+            "max_tokens_read_through": max_tokens_read_through or [],
             "request_timeout_s": 10,
             "prompt_version": "ragtruth-original-prompt-v1",
             "likelihood_normalization": "mean_selected_token_logprob",
@@ -99,6 +101,30 @@ def test_toha_greedy_semantic_entropy_and_cache_only_replay(tmp_path, monkeypatc
     assert replay._loaded_nli is None  # noqa: SLF001 - proves no model was loaded
 
 
+def test_completed_lower_cap_samples_are_cache_compatible_with_a_higher_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_SEMANTIC_ENTROPY_KEY", "not-a-real-key")
+    cache_dir = tmp_path / "cache"
+    legacy = SemanticEntropyDetector(_config(cache_dir, max_tokens=8192), entailment_backend=_FakeNLI())
+    samples = iter([
+        CompletionSample("same-one", -1.0, 1, 1),
+        CompletionSample("same-two", -1.0, 1, 1),
+        CompletionSample("different", -2.0, 1, 1),
+    ])
+    legacy._live_sample = lambda _prompt: next(samples)  # type: ignore[method-assign]
+    legacy_score = legacy.score_prompt("A synthetic RAGTruth prompt")
+
+    # Only completed samples enter the legacy cache. Their probability is
+    # unchanged under the larger cap, so a cache-only replay may reuse them.
+    monkeypatch.delenv("TEST_SEMANTIC_ENTROPY_KEY")
+    target = SemanticEntropyDetector(
+        _config(cache_dir, max_tokens=65535, max_tokens_read_through=[8192]),
+        cache_only=True,
+    )
+    assert target.score_prompt("A synthetic RAGTruth prompt") == legacy_score
+    assert target.usage.summary()["api_calls"] == 0
+    assert target.usage.summary()["cache_hits"] >= 3
+
+
 @pytest.mark.parametrize(
     ("ids", "values"),
     [([], []), ([0, 1], [-1.0]), ([0, 2], [-1.0, -2.0])],
@@ -122,6 +148,23 @@ def test_runner_retries_only_transient_gateway_failures(status_code, expected):
     spec.loader.exec_module(module)
     error = GatewayRequestError(status_code, "redacted")
     assert module._is_retryable_gateway_failure(error) is expected
+
+
+def test_runner_reuses_terminal_output_length_marker_on_resume(tmp_path):
+    import importlib.util
+
+    runner_path = ROOT / "scripts" / "run_ragtruth_semantic_entropy.py"
+    spec = importlib.util.spec_from_file_location("semantic_entropy_runner", runner_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    instance = SimpleNamespace(
+        response_id="response-1", source_id="source-1", split="test", y=1, gen_model="test-model"
+    )
+    path = tmp_path / "score.json"
+    payload = module._unscorable_output_length_checkpoint(instance, "manifest-hash", 1.0)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert module._load_checkpoint(path, instance, "manifest-hash") == payload
 
 
 def test_entropy_runtime_config_requires_logprob_capability(tmp_path):

@@ -152,13 +152,17 @@ semantic_entropy:
   cache_read_dirs: []
   n_samples: 15
   temperature: 1.0
-  # All final entropy samples use one fixed completion cap.  The failed
-  # 512- and 4096-token attempts are retained in separate cache lineages and
-  # are not comparable with or reused by this fixed-cap protocol.
-  max_tokens: 8192
-  # The cap affects decoding; this longer transport allowance does not.  It
-  # prevents a valid long completion from being mistaken for a network fault.
-  request_timeout_s: 300
+  # All final entropy samples use one fixed completion cap. Gemini 2.5 Flash
+  # supports 65,535 output tokens; use its documented maximum so a valid long
+  # answer cannot hit an arbitrary local truncation ceiling.
+  max_tokens: 65535
+  # A previously completed sample below 8192 tokens has the identical
+  # probability under this larger ceiling, so it may be read through once.
+  # Truncated samples are never cached and therefore never reused.
+  max_tokens_read_through: [8192]
+  # The cap affects decoding; this longer transport allowance does not. It
+  # prevents an allowed long completion from being mistaken for a network fault.
+  request_timeout_s: 1800
   prompt_version: "ragtruth-original-prompt-v1"
   likelihood_normalization: "mean_selected_token_logprob"
   strict_entailment: false

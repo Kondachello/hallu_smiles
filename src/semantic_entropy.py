@@ -463,6 +463,27 @@ class SemanticEntropyDetector:
         }
         key = self._cache_key("samples", generation)
         cached = self._load("samples", key)
+        cache_key_used = key
+        reused_from_max_tokens: int | None = None
+        if cached is None:
+            # The gateway persists an entry only after a ``finish_reason=stop``
+            # response.  Such a completed sequence has the same probability
+            # under a larger output ceiling; only a sequence that hit the old
+            # ceiling would differ, and it is deliberately never cached.
+            current_cap = int(generation["max_tokens"])
+            for previous_cap in config_value(self.settings, "max_tokens_read_through", []) or []:
+                if not isinstance(previous_cap, int) or isinstance(previous_cap, bool):
+                    continue
+                if previous_cap <= 0 or previous_cap >= current_cap:
+                    continue
+                previous_generation = dict(generation, max_tokens=int(previous_cap))
+                previous_key = self._cache_key("samples", previous_generation)
+                previous_cached = self._load("samples", previous_key)
+                if previous_cached is not None:
+                    cached = previous_cached
+                    cache_key_used = previous_key
+                    reused_from_max_tokens = int(previous_cap)
+                    break
         if cached is not None:
             try:
                 sample = CompletionSample(
@@ -471,7 +492,15 @@ class SemanticEntropyDetector:
                     completion_tokens=int(cached.get("completion_tokens", 0)),
                 )
                 if sample.text and math.isfinite(sample.mean_logprob):
-                    self.usage.record_call(cache_key=key, seconds=0.0, cached=True)
+                    if reused_from_max_tokens is not None and not self.cache_only:
+                        self._save("samples", key, {
+                            "text": sample.text,
+                            "mean_logprob": sample.mean_logprob,
+                            "prompt_tokens": sample.prompt_tokens,
+                            "completion_tokens": sample.completion_tokens,
+                            "reused_completed_sample_from_max_tokens": reused_from_max_tokens,
+                        })
+                    self.usage.record_call(cache_key=cache_key_used, seconds=0.0, cached=True)
                     return sample
             except (KeyError, TypeError, ValueError):
                 pass
@@ -584,6 +613,7 @@ def semantic_runtime_metadata(cfg: Any) -> dict[str, Any]:
         "n_samples": int(config_value(section, "n_samples", 15)),
         "temperature": float(config_value(section, "temperature", 1.0)),
         "max_tokens": int(config_value(section, "max_tokens", 512)),
+        "max_tokens_read_through": list(config_value(section, "max_tokens_read_through", []) or []),
         "likelihood_normalization": config_value(section, "likelihood_normalization"),
         "nli": {
             "protocol": NLI_PROTOCOL,

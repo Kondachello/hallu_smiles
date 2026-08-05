@@ -35,6 +35,7 @@ from src.sampling import load_manifest_instances, qa_sample_quotas, select_qa_sa
 from src.semantic_entropy import (
     GatewayRequestError,
     SemanticEntropyDetector,
+    SemanticEntropyTruncatedError,
     SemanticUsageLogger,
     semantic_runtime_metadata,
 )
@@ -213,8 +214,12 @@ def _load_checkpoint(path: Path, instance: Instance, manifest_sha256: str) -> di
             or payload.get("response_id") != instance.response_id
             or payload.get("source_id") != instance.source_id
             or int(payload.get("y")) != int(instance.y)
-            or not math.isfinite(float(payload["semantic_entropy"]))
         ):
+            return None
+        state = str(payload.get("state", "scored"))
+        if state == "unscorable_output_length":
+            return payload
+        if state != "scored" or not math.isfinite(float(payload["semantic_entropy"])):
             return None
         return payload
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
@@ -232,10 +237,27 @@ def _checkpoint_payload(instance: Instance, manifest_sha256: str, score: Any, el
         "split": instance.split,
         "y": int(instance.y),
         "gen_model": instance.gen_model,
+        "state": "scored",
         "semantic_entropy": float(score.entropy),
         "n_samples": int(score.n_samples),
         "n_semantic_classes": int(score.n_classes),
         "semantic_ids": list(score.semantic_ids),
+        "seconds": round(float(elapsed_s), 6),
+    }
+
+
+def _unscorable_output_length_checkpoint(instance: Instance, manifest_sha256: str, elapsed_s: float) -> dict[str, Any]:
+    """Record a model-maximum truncation without silently discarding a source."""
+
+    return {
+        "protocol": PROTOCOL,
+        "manifest_sha256": manifest_sha256,
+        "response_id": instance.response_id,
+        "source_id": instance.source_id,
+        "split": instance.split,
+        "y": int(instance.y),
+        "gen_model": instance.gen_model,
+        "state": "unscorable_output_length",
         "seconds": round(float(elapsed_s), 6),
     }
 
@@ -323,7 +345,9 @@ def _write_report(path: Path, metadata: dict[str, Any], metrics: dict[str, Any])
         "",
         f"- Manifest SHA-256: `{metadata['manifest_sha256']}`",
         f"- Fixed source-level manifest: {metadata['manifest_rows']} QA rows; after the historical quarantine, "
-        f"{metadata['sources_total']} scored sources ({metadata['train_sources']} train / {metadata['test_sources']} held-out test).",
+        f"{metadata['sources_total']} selected sources ({metadata['train_sources']} train / {metadata['test_sources']} held-out test); "
+        f"{metadata.get('sources_scored', metadata['sources_total'])} scored and "
+        f"{metadata.get('sources_unscorable_output_length', 0)} unscorable at the model output maximum.",
         f"- Quarantined source IDs: {', '.join(metadata['quarantined_source_ids'])}",
         f"- Threshold: θ = {threshold['theta']:.6f}, selected on train only by F1 (train F1 = {threshold['train_f1']:.4f}).",
         "",
@@ -373,6 +397,10 @@ def _run(args: argparse.Namespace) -> int:
         "train_sources": train_sources,
         "test_sources": test_sources,
         "quarantined_source_ids": list(QUARANTINED_SOURCE_IDS),
+        "output_length_failure_policy": (
+            "record_unscorable_output_length_at_the_fixed_model_maximum; "
+            "retain_in_manifest_and_report_coverage"
+        ),
         "data": {
             "source_info_sha256": _sha256_file(Path(args.data_dir) / "source_info.jsonl"),
             "response_sha256": _sha256_file(Path(args.data_dir) / "response.jsonl"),
@@ -383,13 +411,17 @@ def _run(args: argparse.Namespace) -> int:
     _atomic_json(output_dir / "run_metadata.json", metadata)
 
     rows: list[dict[str, Any]] = []
+    unscorable: list[dict[str, Any]] = []
     try:
         for index, instance in enumerate(selected):
             progress.set_source_state(completed=index, phase="cache_replay" if args.cache_only else "live")
             path = _score_path(output_dir, instance)
             checkpoint = None if args.cache_only or args.recompute_from_cache else _load_checkpoint(path, instance, manifest_sha256)
             if checkpoint is not None:
-                rows.append(checkpoint)
+                if checkpoint.get("state") == "unscorable_output_length":
+                    unscorable.append(checkpoint)
+                else:
+                    rows.append(checkpoint)
                 progress.set_source_state(completed=index + 1, phase="checkpoint_reused")
                 progress.emit("source_checkpoint_reused")
                 continue
@@ -401,7 +433,19 @@ def _run(args: argparse.Namespace) -> int:
                 raise WallClockBudgetExceeded()
             progress.emit("source_started")
             source_started = time.monotonic()
-            score = detector.score_prompt(instance.prompt)
+            try:
+                score = detector.score_prompt(instance.prompt)
+            except SemanticEntropyTruncatedError:
+                if args.cache_only:
+                    raise
+                checkpoint = _unscorable_output_length_checkpoint(
+                    instance, manifest_sha256, time.monotonic() - source_started
+                )
+                _atomic_json(path, checkpoint)
+                unscorable.append(checkpoint)
+                progress.set_source_state(completed=index + 1, phase="unscorable_output_length")
+                progress.emit("source_unscorable", error_type=SemanticEntropyTruncatedError.__name__)
+                continue
             row = _checkpoint_payload(instance, manifest_sha256, score, time.monotonic() - source_started)
             if not args.cache_only:
                 _atomic_json(path, row)
@@ -412,7 +456,9 @@ def _run(args: argparse.Namespace) -> int:
         metadata.update({
             "state": "wall_clock_budget_exhausted",
             "elapsed_seconds": round(time.monotonic() - started, 4),
-            "sources_completed": len(rows),
+            "sources_completed": len(rows) + len(unscorable),
+            "sources_scored": len(rows),
+            "sources_unscorable_output_length": len(unscorable),
             "usage": usage.summary(),
             "finished_at_utc": _utc(),
         })
@@ -424,7 +470,9 @@ def _run(args: argparse.Namespace) -> int:
             "state": "retryable_gateway_pause",
             "error_type": type(exc).__name__,
             "elapsed_seconds": round(time.monotonic() - started, 4),
-            "sources_completed": len(rows),
+            "sources_completed": len(rows) + len(unscorable),
+            "sources_scored": len(rows),
+            "sources_unscorable_output_length": len(unscorable),
             "usage": usage.summary(),
             "finished_at_utc": _utc(),
         })
@@ -437,7 +485,9 @@ def _run(args: argparse.Namespace) -> int:
                 "state": "retryable_gateway_pause",
                 "error_type": type(exc).__name__,
                 "elapsed_seconds": round(time.monotonic() - started, 4),
-                "sources_completed": len(rows),
+                "sources_completed": len(rows) + len(unscorable),
+                "sources_scored": len(rows),
+                "sources_unscorable_output_length": len(unscorable),
                 "usage": usage.summary(),
                 "finished_at_utc": _utc(),
             })
@@ -448,7 +498,9 @@ def _run(args: argparse.Namespace) -> int:
             "state": "error",
             "error_type": type(exc).__name__,
             "elapsed_seconds": round(time.monotonic() - started, 4),
-            "sources_completed": len(rows),
+            "sources_completed": len(rows) + len(unscorable),
+            "sources_scored": len(rows),
+            "sources_unscorable_output_length": len(unscorable),
             "usage": usage.summary(),
             "finished_at_utc": _utc(),
         })
@@ -460,7 +512,9 @@ def _run(args: argparse.Namespace) -> int:
             "state": "error",
             "error_type": type(exc).__name__,
             "elapsed_seconds": round(time.monotonic() - started, 4),
-            "sources_completed": len(rows),
+            "sources_completed": len(rows) + len(unscorable),
+            "sources_scored": len(rows),
+            "sources_unscorable_output_length": len(unscorable),
             "usage": usage.summary(),
             "finished_at_utc": _utc(),
         })
@@ -469,12 +523,16 @@ def _run(args: argparse.Namespace) -> int:
         raise
 
     rows.sort(key=lambda row: (str(row["split"]), str(row["source_id"]), str(row["response_id"])))
+    unscorable.sort(key=lambda row: (str(row["split"]), str(row["source_id"]), str(row["response_id"])))
     _write_jsonl(output_dir / "scores.jsonl", rows)
+    _write_jsonl(output_dir / "unscorable.jsonl", unscorable)
     if args.cache_only:
         metadata.update({
             "state": "completed_cache_replay",
             "elapsed_seconds": round(time.monotonic() - started, 4),
-            "sources_completed": len(rows),
+            "sources_completed": len(rows) + len(unscorable),
+            "sources_scored": len(rows),
+            "sources_unscorable_output_length": len(unscorable),
             "usage": usage.summary(),
             "finished_at_utc": _utc(),
         })
@@ -489,14 +547,21 @@ def _run(args: argparse.Namespace) -> int:
         "higher_score_means": "higher_hallucination_risk",
         "manifest_sha256": manifest_sha256,
         "n_scored": len(rows),
-        "n_failed": 0,
+        "n_unscorable_output_length": len(unscorable),
+        "coverage": {
+            "manifest_sources": len(selected),
+            "scored_sources": len(rows),
+            "unscorable_output_length": len(unscorable),
+        },
         "usage": usage.summary(),
     })
     _atomic_json(output_dir / "metrics.json", metrics)
     metadata.update({
         "state": "completed",
         "elapsed_seconds": round(time.monotonic() - started, 4),
-        "sources_completed": len(rows),
+        "sources_completed": len(rows) + len(unscorable),
+        "sources_scored": len(rows),
+        "sources_unscorable_output_length": len(unscorable),
         "usage": usage.summary(),
         "finished_at_utc": _utc(),
     })
