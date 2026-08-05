@@ -5,7 +5,7 @@ likelihood-weighted semantic entropy.  It does not extract a KG and does not
 read the candidate response text while constructing its score.
 
 For each selected RAGTruth source prompt, Gemini 2.5 Flash produces `N=15`
-independent completions at temperature `1.0` and a fixed 4096-token cap. The Cloud
+independent completions at temperature `1.0` and a fixed 8192-token cap. The Cloud
 Run gateway returns the selected-token log probability for each generated
 completion token.  We use the mean selected-token log probability, matching
 TOHA's causal-LM loss reduction, as the sample log likelihood.  A local

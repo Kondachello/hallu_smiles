@@ -153,10 +153,12 @@ semantic_entropy:
   n_samples: 15
   temperature: 1.0
   # All final entropy samples use one fixed completion cap.  The failed
-  # 512-token preflight is retained in its separate cache lineage and is not
-  # comparable with or reused by this fixed-cap protocol.
-  max_tokens: 4096
-  request_timeout_s: 120
+  # 512- and 4096-token attempts are retained in separate cache lineages and
+  # are not comparable with or reused by this fixed-cap protocol.
+  max_tokens: 8192
+  # The cap affects decoding; this longer transport allowance does not.  It
+  # prevents a valid long completion from being mistaken for a network fault.
+  request_timeout_s: 300
   prompt_version: "ragtruth-original-prompt-v1"
   likelihood_normalization: "mean_selected_token_logprob"
   strict_entailment: false
