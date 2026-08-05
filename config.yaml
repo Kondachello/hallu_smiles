@@ -159,7 +159,10 @@ semantic_entropy:
   # A previously completed sample below 8192 tokens has the identical
   # probability under this larger ceiling, so it may be read through once.
   # Truncated samples are never cached and therefore never reused.
-  max_tokens_read_through: [8192]
+  max_tokens_read_through: [4096, 8192]
+  # A cross-revision read-through requires an exact, recorded LLM cache
+  # identity plus an explicit, compatible legacy cache contract.
+  legacy_sample_cache_contracts: []
   # The cap affects decoding; this longer transport allowance does not. It
   # prevents an allowed long completion from being mistaken for a network fault.
   request_timeout_s: 1800

@@ -9,15 +9,25 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from src.config import Config
+from src.cache import llm_runtime_fingerprint
 from src.semantic_entropy import CompletionSample, GatewayRequestError, SemanticEntropyDetector, SemanticEntropyError
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _config(cache_dir: Path, *, max_tokens: int = 512, max_tokens_read_through: list[int] | None = None) -> Config:
+def _config(
+    cache_dir: Path,
+    *,
+    max_tokens: int = 512,
+    max_tokens_read_through: list[int] | None = None,
+    cache_read_dirs: list[Path] | None = None,
+    runtime_fingerprint: str = "unit-test",
+    legacy_sample_cache_contracts: list[dict] | None = None,
+) -> Config:
     return Config({
         "llm": {
             "model": "openai/gemini-2.5-flash",
@@ -32,16 +42,17 @@ def _config(cache_dir: Path, *, max_tokens: int = 512, max_tokens_read_through: 
             "rate_limit_retry_deadline_s": 1,
             "retry_deadline_s": 1,
             "concurrency": 1,
-            "runtime_fingerprint": "unit-test",
+            "runtime_fingerprint": runtime_fingerprint,
         },
         "semantic_entropy": {
             "protocol": "toha-semantic-entropy-v1-gemini-selected-logprobs",
             "cache_dir": str(cache_dir),
-            "cache_read_dirs": [],
+            "cache_read_dirs": [str(path) for path in cache_read_dirs or []],
             "n_samples": 3,
             "temperature": 1.0,
             "max_tokens": max_tokens,
             "max_tokens_read_through": max_tokens_read_through or [],
+            "legacy_sample_cache_contracts": legacy_sample_cache_contracts or [],
             "request_timeout_s": 10,
             "prompt_version": "ragtruth-original-prompt-v1",
             "likelihood_normalization": "mean_selected_token_logprob",
@@ -118,6 +129,46 @@ def test_completed_lower_cap_samples_are_cache_compatible_with_a_higher_cap(tmp_
     monkeypatch.delenv("TEST_SEMANTIC_ENTROPY_KEY")
     target = SemanticEntropyDetector(
         _config(cache_dir, max_tokens=65535, max_tokens_read_through=[8192]),
+        cache_only=True,
+    )
+    assert target.score_prompt("A synthetic RAGTruth prompt") == legacy_score
+    assert target.usage.summary()["api_calls"] == 0
+    assert target.usage.summary()["cache_hits"] >= 3
+
+
+def test_completed_lower_cap_samples_can_read_through_an_attested_legacy_runtime(
+    tmp_path, monkeypatch
+):
+    """Explicitly attested, same-endpoint legacy samples need no paid replay."""
+    monkeypatch.setenv("TEST_SEMANTIC_ENTROPY_KEY", "not-a-real-key")
+    legacy_cache = tmp_path / "legacy-cache"
+    legacy = SemanticEntropyDetector(
+        _config(legacy_cache, max_tokens=4096, runtime_fingerprint="legacy-runtime"),
+        entailment_backend=_FakeNLI(),
+    )
+    samples = iter([
+        CompletionSample("same-one", -1.0, 1, 1),
+        CompletionSample("same-two", -1.0, 1, 1),
+        CompletionSample("different", -2.0, 1, 1),
+    ])
+    legacy._live_sample = lambda _prompt: next(samples)  # type: ignore[method-assign]
+    legacy_score = legacy.score_prompt("A synthetic RAGTruth prompt")
+    legacy_identity = llm_runtime_fingerprint(legacy.cfg)
+
+    monkeypatch.delenv("TEST_SEMANTIC_ENTROPY_KEY")
+    target = SemanticEntropyDetector(
+        _config(
+            tmp_path / "target-cache",
+            max_tokens=65535,
+            max_tokens_read_through=[4096],
+            runtime_fingerprint="current-runtime",
+            legacy_sample_cache_contracts=[{
+                "cache_dir": str(legacy_cache),
+                "llm_identity": legacy_identity,
+                "api_base": "https://gateway.invalid/v1",
+                "max_tokens": [4096],
+            }],
+        ),
         cache_only=True,
     )
     assert target.score_prompt("A synthetic RAGTruth prompt") == legacy_score
@@ -204,3 +255,56 @@ def test_entropy_runtime_config_requires_logprob_capability(tmp_path):
     failed = subprocess.run(command, text=True, capture_output=True)
     assert failed.returncode != 0
     assert "selected-token logprobs" in failed.stderr
+
+
+def test_entropy_runtime_config_records_an_exact_legacy_cache_contract(tmp_path):
+    from gateway.core import GatewaySettings, gateway_manifest
+
+    settings = GatewaySettings(
+        api_key="not-a-real-key",
+        logical_model="openai/gemini-2.5-flash",
+        vertex_model="gemini-2.5-flash",
+        project="test-project",
+        location="europe-west4",
+        release="test-release",
+        cloud_run_revision="test-revision",
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(gateway_manifest(settings)), encoding="utf-8")
+    nli = tmp_path / "nli"
+    nli.mkdir()
+    (nli / "config.json").write_text("{}", encoding="utf-8")
+    legacy_cache = tmp_path / "legacy-cache"
+    legacy_cache.mkdir()
+    legacy_metadata = tmp_path / "legacy-run-metadata.json"
+    legacy_identity = {"runtime_fingerprint": "recorded-legacy", "packages": {"numpy": "test"}}
+    legacy_metadata.write_text(
+        json.dumps({"runtime": {"llm": legacy_identity}}), encoding="utf-8"
+    )
+    legacy_runtime = tmp_path / "legacy-runtime.yaml"
+    legacy_runtime.write_text(yaml.safe_dump({
+        "llm": {"api_base": "https://gateway.example.run.app/v1"},
+        "semantic_entropy": {"max_tokens": 4096},
+    }), encoding="utf-8")
+    output = tmp_path / "runtime.yaml"
+    command = [
+        sys.executable, str(ROOT / "scripts" / "make_local_semantic_entropy_config.py"),
+        "--base-config", str(ROOT / "config.yaml"),
+        "--gateway-manifest", str(manifest),
+        "--gateway-url", "https://gateway.example.run.app",
+        "--nli-model-path", str(nli),
+        "--data-dir", str(tmp_path / "data"),
+        "--cache-root", str(tmp_path / "cache"),
+        "--legacy-sample-cache-dir", str(legacy_cache),
+        "--legacy-run-metadata", str(legacy_metadata),
+        "--legacy-runtime-config", str(legacy_runtime),
+        "--output", str(output),
+    ]
+    subprocess.run(command, check=True)
+    generated = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert generated["semantic_entropy"]["legacy_sample_cache_contracts"] == [{
+        "cache_dir": str(legacy_cache.resolve()),
+        "llm_identity": legacy_identity,
+        "api_base": "https://gateway.example.run.app/v1",
+        "max_tokens": [4096],
+    }]

@@ -31,12 +31,25 @@ def main() -> None:
     parser.add_argument("--nli-model-path", required=True)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--cache-root", required=True)
+    parser.add_argument("--cache-read-dir", action="append", default=[])
+    parser.add_argument("--legacy-sample-cache-dir", action="append", default=[])
+    parser.add_argument("--legacy-run-metadata", action="append", default=[])
+    parser.add_argument("--legacy-runtime-config", action="append", default=[])
     parser.add_argument("--output", required=True)
     parser.add_argument("--request-min-interval-s", type=float, default=4.0)
     parser.add_argument("--rate-limit-deadline-s", type=float, default=1800.0)
     args = parser.parse_args()
     if args.request_min_interval_s < 0 or args.rate_limit_deadline_s <= 0:
         raise SystemExit("invalid retry/pacing bounds")
+    legacy_counts = {
+        len(args.legacy_sample_cache_dir),
+        len(args.legacy_run_metadata),
+        len(args.legacy_runtime_config),
+    }
+    if len(legacy_counts) != 1:
+        raise SystemExit(
+            "each legacy sample-cache directory needs matching run metadata and runtime config"
+        )
 
     with Path(args.base_config).open(encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -80,9 +93,41 @@ def main() -> None:
         "retry_deadline_s": args.rate_limit_deadline_s,
     })
     semantic = config.setdefault("semantic_entropy", {})
+    legacy_contracts = []
+    for cache_dir_arg, metadata_arg, runtime_config_arg in zip(
+        args.legacy_sample_cache_dir,
+        args.legacy_run_metadata,
+        args.legacy_runtime_config,
+        strict=True,
+    ):
+        cache_dir = Path(cache_dir_arg).resolve()
+        if not cache_dir.is_dir():
+            raise SystemExit(f"legacy sample cache directory does not exist: {cache_dir}")
+        metadata = _read_json(Path(metadata_arg))
+        runtime = metadata.get("runtime") if isinstance(metadata, dict) else None
+        identity = runtime.get("llm") if isinstance(runtime, dict) else None
+        if not isinstance(identity, dict):
+            raise SystemExit("legacy run metadata has no recorded LLM cache identity")
+        with Path(runtime_config_arg).open(encoding="utf-8") as handle:
+            legacy_config = yaml.safe_load(handle)
+        legacy_llm = legacy_config.get("llm") if isinstance(legacy_config, dict) else None
+        legacy_api_base = legacy_llm.get("api_base") if isinstance(legacy_llm, dict) else None
+        if legacy_api_base != f"{gateway_url}/v1":
+            raise SystemExit("legacy cache endpoint differs from the authenticated gateway")
+        legacy_semantic = legacy_config.get("semantic_entropy") if isinstance(legacy_config, dict) else None
+        legacy_cap = legacy_semantic.get("max_tokens") if isinstance(legacy_semantic, dict) else None
+        if not isinstance(legacy_cap, int) or isinstance(legacy_cap, bool) or legacy_cap <= 0:
+            raise SystemExit("legacy runtime config has no valid semantic-entropy output cap")
+        legacy_contracts.append({
+            "cache_dir": str(cache_dir),
+            "llm_identity": identity,
+            "api_base": legacy_api_base,
+            "max_tokens": [legacy_cap],
+        })
     semantic.update({
         "cache_dir": str(Path(args.cache_root).resolve() / "semantic_entropy"),
-        "cache_read_dirs": [],
+        "cache_read_dirs": [str(Path(path).resolve()) for path in args.cache_read_dir],
+        "legacy_sample_cache_contracts": legacy_contracts,
         "nli_model_path": str(nli_path),
     })
     config.setdefault("data", {})["dir"] = str(Path(args.data_dir).resolve())
@@ -99,6 +144,7 @@ def main() -> None:
         "gateway_manifest_sha256": manifest_hash,
         "runtime_fingerprint": llm["runtime_fingerprint"],
         "nli_model_path": str(nli_path),
+        "legacy_sample_cache_contracts": len(legacy_contracts),
     }, sort_keys=True))
 
 

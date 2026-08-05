@@ -7,8 +7,9 @@ read the candidate response text while constructing its score.
 For each selected RAGTruth source prompt, Gemini 2.5 Flash produces `N=15`
 independent completions at temperature `1.0` and the documented Gemini 2.5 Flash
 maximum fixed cap of 65,535 output tokens. A completed sample from the preceding
-8192-token preflight is reused only when it finished below that ceiling; an
-output cut at a ceiling is never reused. If an output reaches the model maximum,
+4096- or 8192-token preflight is reused only when it finished below that ceiling
+and its gateway runtime has been explicitly attested compatible; an output cut at
+a ceiling is never reused. If an output reaches the model maximum,
 the source is recorded as `unscorable_output_length` and reported in coverage
 instead of silently being dropped or aborting the whole evaluation. The Cloud
 Run gateway returns the selected-token log probability for each generated

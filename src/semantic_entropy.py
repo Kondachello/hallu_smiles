@@ -379,22 +379,27 @@ class SemanticEntropyDetector:
             "strict_entailment": self.strict_entailment,
         }
 
-    def _cache_key(self, kind: str, payload: dict[str, Any]) -> str:
+    def _cache_key(
+        self,
+        kind: str,
+        payload: dict[str, Any],
+        *,
+        llm_identity: dict[str, Any] | None = None,
+        api_base: str | None = None,
+    ) -> str:
         return _canonical_hash({
             "protocol": self.protocol,
             "kind": kind,
-            "llm": llm_runtime_fingerprint(self.cfg),
-            "api_base": config_value(self.cfg.llm, "api_base"),
+            "llm": llm_runtime_fingerprint(self.cfg) if llm_identity is None else llm_identity,
+            "api_base": config_value(self.cfg.llm, "api_base") if api_base is None else api_base,
             "payload": payload,
         })
 
-    def _cache_candidates(self, kind: str, key: str) -> Iterable[Path]:
-        yield self.cache_root / kind / f"{key}.json"
-        for root in self.cache_read_roots:
-            yield root / kind / f"{key}.json"
-
-    def _load(self, kind: str, key: str) -> dict[str, Any] | None:
-        for path in self._cache_candidates(kind, key):
+    def _load_from_roots(
+        self, kind: str, key: str, roots: Iterable[Path]
+    ) -> dict[str, Any] | None:
+        for root in roots:
+            path = root / kind / f"{key}.json"
             try:
                 envelope = json.loads(path.read_text(encoding="utf-8"))
                 payload = envelope.get("payload")
@@ -410,6 +415,11 @@ class SemanticEntropyDetector:
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
         return None
+
+    def _load(self, kind: str, key: str) -> dict[str, Any] | None:
+        return self._load_from_roots(
+            kind, key, [self.cache_root, *self.cache_read_roots]
+        )
 
     def _save(self, kind: str, key: str, payload: dict[str, Any]) -> None:
         _atomic_json(self.cache_root / kind / f"{key}.json", {
@@ -471,6 +481,9 @@ class SemanticEntropyDetector:
             # under a larger output ceiling; only a sequence that hit the old
             # ceiling would differ, and it is deliberately never cached.
             current_cap = int(generation["max_tokens"])
+            legacy_contracts = config_value(
+                self.settings, "legacy_sample_cache_contracts", []
+            ) or []
             for previous_cap in config_value(self.settings, "max_tokens_read_through", []) or []:
                 if not isinstance(previous_cap, int) or isinstance(previous_cap, bool):
                     continue
@@ -483,6 +496,39 @@ class SemanticEntropyDetector:
                     cached = previous_cached
                     cache_key_used = previous_key
                     reused_from_max_tokens = int(previous_cap)
+                if cached is None:
+                    for contract in legacy_contracts:
+                        if not isinstance(contract, dict):
+                            continue
+                        caps = contract.get("max_tokens", [])
+                        if not isinstance(caps, list) or int(previous_cap) not in caps:
+                            continue
+                        identity = contract.get("llm_identity")
+                        api_base = contract.get("api_base")
+                        cache_dir = contract.get("cache_dir")
+                        if (
+                            not isinstance(identity, dict)
+                            or not isinstance(api_base, str)
+                            or not api_base
+                            or not isinstance(cache_dir, str)
+                            or not cache_dir
+                        ):
+                            continue
+                        previous_key = self._cache_key(
+                            "samples",
+                            previous_generation,
+                            llm_identity=identity,
+                            api_base=api_base,
+                        )
+                        previous_cached = self._load_from_roots(
+                            "samples", previous_key, [Path(cache_dir)]
+                        )
+                        if previous_cached is not None:
+                            cached = previous_cached
+                            cache_key_used = previous_key
+                            reused_from_max_tokens = int(previous_cap)
+                            break
+                if cached is not None:
                     break
         if cached is not None:
             try:
@@ -499,6 +545,7 @@ class SemanticEntropyDetector:
                             "prompt_tokens": sample.prompt_tokens,
                             "completion_tokens": sample.completion_tokens,
                             "reused_completed_sample_from_max_tokens": reused_from_max_tokens,
+                            "reused_completed_sample_from_cache_key": cache_key_used,
                         })
                     self.usage.record_call(cache_key=cache_key_used, seconds=0.0, cached=True)
                     return sample
@@ -540,6 +587,34 @@ class SemanticEntropyDetector:
         }
         key = self._cache_key("clusters", cluster_input)
         cached = self._load("clusters", key)
+        if cached is None:
+            # Cluster records do not depend on the generation ceiling.  Their
+            # payload key still binds the NLI identity and the sampled texts,
+            # while this explicit legacy lookup preserves the LLM identity
+            # present in historical cache keys.
+            for contract in config_value(
+                self.settings, "legacy_sample_cache_contracts", []
+            ) or []:
+                if not isinstance(contract, dict):
+                    continue
+                identity = contract.get("llm_identity")
+                api_base = contract.get("api_base")
+                cache_dir = contract.get("cache_dir")
+                if (
+                    not isinstance(identity, dict)
+                    or not isinstance(api_base, str)
+                    or not api_base
+                    or not isinstance(cache_dir, str)
+                    or not cache_dir
+                ):
+                    continue
+                legacy_key = self._cache_key(
+                    "clusters", cluster_input, llm_identity=identity, api_base=api_base
+                )
+                cached = self._load_from_roots("clusters", legacy_key, [Path(cache_dir)])
+                if cached is not None:
+                    key = legacy_key
+                    break
         if cached is not None:
             raw = cached.get("semantic_ids")
             if isinstance(raw, list) and len(raw) == len(samples) and all(isinstance(value, int) and value >= 0 for value in raw):
@@ -614,6 +689,15 @@ def semantic_runtime_metadata(cfg: Any) -> dict[str, Any]:
         "temperature": float(config_value(section, "temperature", 1.0)),
         "max_tokens": int(config_value(section, "max_tokens", 512)),
         "max_tokens_read_through": list(config_value(section, "max_tokens_read_through", []) or []),
+        "legacy_sample_cache_contracts": [
+            {
+                "cache_dir": str(contract.get("cache_dir", "")),
+                "max_tokens": list(contract.get("max_tokens", [])),
+                "contract_sha256": _canonical_hash(contract),
+            }
+            for contract in config_value(section, "legacy_sample_cache_contracts", []) or []
+            if isinstance(contract, dict)
+        ],
         "likelihood_normalization": config_value(section, "likelihood_normalization"),
         "nli": {
             "protocol": NLI_PROTOCOL,
