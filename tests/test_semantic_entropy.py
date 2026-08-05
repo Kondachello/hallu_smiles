@@ -216,6 +216,10 @@ def test_runner_reuses_terminal_output_length_marker_on_resume(tmp_path):
     payload = module._unscorable_output_length_checkpoint(instance, "manifest-hash", 1.0)
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert module._load_checkpoint(path, instance, "manifest-hash") == payload
+    assert module._load_cache_only_unscorable_marker(path, instance, "manifest-hash") == payload
+    ordinary = dict(payload, state="scored")
+    path.write_text(json.dumps(ordinary), encoding="utf-8")
+    assert module._load_cache_only_unscorable_marker(path, instance, "manifest-hash") is None
 
 
 def test_entropy_runtime_config_requires_logprob_capability(tmp_path):

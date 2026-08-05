@@ -226,6 +226,23 @@ def _load_checkpoint(path: Path, instance: Instance, manifest_sha256: str) -> di
         return None
 
 
+def _load_cache_only_unscorable_marker(
+    path: Path, instance: Instance, manifest_sha256: str
+) -> dict[str, Any] | None:
+    """Replay a terminal output-length marker without accepting a cached score.
+
+    A completed score must still be regenerated from the semantic-entropy
+    caches during cache-only acceptance.  An output that hit Gemini's fixed
+    maximum has no valid completion cache by design, however, so its explicit
+    marker is the only deterministic cache-only representation of that
+    protocol-defined unscorable outcome.
+    """
+    checkpoint = _load_checkpoint(path, instance, manifest_sha256)
+    if checkpoint is not None and checkpoint.get("state") == "unscorable_output_length":
+        return checkpoint
+    return None
+
+
 def _checkpoint_payload(instance: Instance, manifest_sha256: str, score: Any, elapsed_s: float) -> dict[str, Any]:
     # IDs, labels and aggregate NLI assignments are reproducibility metadata;
     # neither the source prompt nor a generated completion is serialized here.
@@ -416,7 +433,14 @@ def _run(args: argparse.Namespace) -> int:
         for index, instance in enumerate(selected):
             progress.set_source_state(completed=index, phase="cache_replay" if args.cache_only else "live")
             path = _score_path(output_dir, instance)
-            checkpoint = None if args.cache_only or args.recompute_from_cache else _load_checkpoint(path, instance, manifest_sha256)
+            if args.cache_only:
+                checkpoint = _load_cache_only_unscorable_marker(
+                    path, instance, manifest_sha256
+                )
+            elif args.recompute_from_cache:
+                checkpoint = None
+            else:
+                checkpoint = _load_checkpoint(path, instance, manifest_sha256)
             if checkpoint is not None:
                 if checkpoint.get("state") == "unscorable_output_length":
                     unscorable.append(checkpoint)
