@@ -15,6 +15,7 @@ that a cache-only replay can reproduce the score without a network request.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -305,7 +306,7 @@ class GatewaySampler:
             # Deliberately do not include the server body: it can contain a
             # provider diagnostic and must not leak through a redacted monitor.
             raise GatewayRequestError(int(exc.code), "gateway rejected semantic entropy request", exc.headers) from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
             raise GatewayRequestError(None, "gateway request failed") from exc
         try:
             payload = json.loads(raw)

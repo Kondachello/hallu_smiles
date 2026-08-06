@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import json
+import http.client
 import subprocess
 import sys
 from pathlib import Path
@@ -328,6 +329,22 @@ def test_candidate_agreement_rejects_empty_historical_response(tmp_path, monkeyp
     detector = CandidateAgreementDetector(_config(tmp_path / "cache"))
     with pytest.raises(CandidateAgreementEmptyCandidateError):
         detector.score_candidate("prompt", "  ")
+
+
+def test_gateway_sampler_maps_incomplete_read_to_retryable_transport_failure(tmp_path, monkeypatch):
+    """A partial HTTP body is transient, rather than a terminal protocol error."""
+    monkeypatch.setenv("TEST_SEMANTIC_ENTROPY_KEY", "not-a-real-key")
+    detector = SemanticEntropyDetector(_config(tmp_path / "cache"))
+
+    def incomplete(*_args, **_kwargs):
+        raise http.client.IncompleteRead(b"partial", 2)
+
+    monkeypatch.setattr("src.semantic_entropy.urllib.request.urlopen", incomplete)
+    assert detector.sampler is not None
+    with pytest.raises(GatewayRequestError) as error:
+        detector.sampler.sample("synthetic prompt")
+    assert error.value.status_code is None
+    assert detector._is_retryable(error.value)  # noqa: SLF001 - transport contract
 
 
 @pytest.mark.parametrize(
