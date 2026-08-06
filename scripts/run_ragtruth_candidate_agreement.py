@@ -52,8 +52,12 @@ SELECTION_PROTOCOL = "ragtruth-qa-source-balanced-v1"
 QUARANTINED_SOURCE_IDS = ("12448",)
 HISTORICAL_750_MANIFEST_SHA256 = "19cb9472e1662ac029dab7e144e07267c9e43f7ca50556aa92123a5e268e4f86"
 EXPECTED_ELIGIBLE_SOURCES = 749
-EXPECTED_REUSED_SOURCES = 509
-EXPECTED_COLD_SOURCES = 240
+# The cache inventory is verified against the immutable semantic-entropy
+# namespace rather than estimated from an earlier manifest-overlap note.  All
+# 559 historically completed eligible sources have cache-compatible sample
+# keys under the pinned runtime; the remaining 190 require a live fill.
+EXPECTED_REUSED_SOURCES = 559
+EXPECTED_COLD_SOURCES = 190
 SAMPLES_PER_SOURCE = 15
 
 
@@ -326,7 +330,7 @@ def _run(args: argparse.Namespace) -> int:
         })
         _atomic_json(output_dir / "sample_cache_preflight.json", inventory)
         if inventory["sample_hits"] != expected_hits or inventory["sample_misses"] != expected_misses:
-            raise ValueError("sample cache inventory does not match the frozen 7,635-hit / 3,600-cold contract")
+            raise ValueError("sample cache inventory does not match the verified 8,385-hit / 2,850-cold contract")
         return 0
 
     usage = SemanticUsageLogger(output_dir / "usage.jsonl")

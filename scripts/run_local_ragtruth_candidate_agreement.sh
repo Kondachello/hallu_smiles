@@ -30,7 +30,7 @@ DataSphere job or runs graph inference.
 
 Before a live fill, provide the downloaded, read-only R12 terminal archive via
 HALLU_CA_R12_ARCHIVE.  The launcher refuses to generate if the R12 reference,
-gateway manifest, or exact 7,635-hit/3,600-cold sample-cache contract fails.
+gateway manifest, or exact 8,385-hit/2,850-cold sample-cache contract fails.
 EOF
 }
 
@@ -149,7 +149,7 @@ print(canonical_manifest_sha256(json.load(open(sys.argv[1], encoding='utf-8'))))
 PY
 )"
 if [[ "$GATEWAY_HASH" != "$EXPECTED_MANIFEST_SHA256" ]]; then
-  echo "gateway manifest is not cache-compatible with the 509-source sample cache; no Gemini generation started" >&2
+  echo "gateway manifest is not cache-compatible with the verified semantic sample cache; no Gemini generation started" >&2
   exit 2
 fi
 
@@ -170,7 +170,11 @@ RUNTIME_CONFIG="$RUN_ROOT/runtime-config.yaml"
 
 MANIFEST="$LOCAL_ROOT/checkpoints/manifests/ragtruth-qa-candidate-agreement-750.json"
 PREFLIGHT_OUT="$RUN_ROOT/sample-cache-preflight"
-"$PYTHON" "$ROOT/scripts/run_ragtruth_candidate_agreement.py" \
+# `python_hash_seed` is part of the semantic cache identity.  Run the
+# cache-only inventory under the same pinned process environment as the
+# historical writer and the live/replay stages below.
+TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=42 \
+  "$PYTHON" "$ROOT/scripts/run_ragtruth_candidate_agreement.py" \
   --config "$RUNTIME_CONFIG" --data-dir "$SAMPLE_ROOT/data/ragtruth-main" --output-dir "$PREFLIGHT_OUT" \
   --manifest "$MANIFEST" --graph-reference "$GRAPH_REFERENCE" \
   --required-gateway-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" --preflight-sample-inventory
