@@ -24,9 +24,9 @@ MANIFEST = "19cb9472e1662ac029dab7e144e07267c9e43f7ca50556aa92123a5e268e4f86"
 
 def _reference_payload():
     records = []
-    # Exact source balance of the R12 paired set: source 12448 is a quarantined
-    # training source and three factual test answer graphs are unscorable.
-    for index in range(599):
+    # Source 12448 is quarantined; 17 factual train and three factual test
+    # answer graphs are explicitly unscorable in the historical graph protocol.
+    for index in range(582):
         y = int(index < 300)
         records.append({
             "source_id": f"train-source-{index}", "response_id": f"train-response-{index}",
@@ -77,7 +77,7 @@ def test_graph_reference_requires_exact_r12_pairing_and_train_only_threshold(tmp
     assert baseline["heldout_test"]["n"] == 147
     assert baseline["heldout_test"]["n_hallucinated"] == 75
     assert baseline["heldout_test"]["n_factual"] == 72
-    assert baseline["threshold_selection"]["candidate_agreement"]["n"] == 599
+    assert baseline["threshold_selection"]["candidate_agreement"]["n"] == 582
     # Test labels/scores can change held-out metrics but never threshold choice.
     assert (
         baseline["threshold_selection"]["candidate_agreement"]["theta"]

@@ -127,13 +127,16 @@ def _validate_r12_pairing(reference: GraphReference) -> None:
 
     train = [row for row in reference.rows if row.split == "train"]
     test = [row for row in reference.rows if row.split == "test"]
-    # Source 12448 was the sole training quarantine.  The three empty answer
-    # graphs occurred on held-out factual rows, giving the audited 147-row
-    # denominator used by every historical headline method.
-    if len(train) != 599 or len(test) != 147:
-        raise GraphReferenceError("R12 graph reference does not have the required 599-train / 147-test pairing")
+    # Source 12448 was the sole training quarantine.  Twenty answer graphs
+    # were explicitly unscorable: 17 factual training rows and three factual
+    # held-out rows.  Thus threshold selection uses 582 graph-scorable train
+    # responses and the shared headline denominator is 147 held-out responses.
+    if len(train) != 582 or len(test) != 147:
+        raise GraphReferenceError("R12 graph reference does not have the required 582-train / 147-test pairing")
     if sum(row.y for row in train) != 300 or sum(row.y for row in test) != 75:
         raise GraphReferenceError("R12 graph reference label balance is not the verified pairing")
+    if len(train) - sum(row.y for row in train) != 282:
+        raise GraphReferenceError("R12 graph reference must contain 282 factual graph-scorable training responses")
     if len(test) - sum(row.y for row in test) != 72:
         raise GraphReferenceError("R12 graph reference must contain 72 factual held-out responses")
 

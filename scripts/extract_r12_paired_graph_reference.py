@@ -106,6 +106,19 @@ def _jsonl(reader: _ArchiveReader, name: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _manifest_hash(payload: dict[str, Any]) -> str:
+    """Match the historical sampler checksum, which was not stored inline."""
+
+    clean = {
+        key: payload[key]
+        for key in ("version", "task", "seed", "quotas", "records")
+        if key in payload
+    }
+    return hashlib.sha256(
+        json.dumps(clean, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _locate_manifest(reader: _ArchiveReader) -> dict[str, Any]:
     candidates: list[dict[str, Any]] = []
     for name in reader.matching(lambda path: path.suffix == ".json" and "manifest" in path.name.lower()):
@@ -113,7 +126,7 @@ def _locate_manifest(reader: _ArchiveReader) -> dict[str, Any]:
             payload = _json(reader, name)
         except ArchiveError:
             continue
-        if payload.get("manifest_sha256") == HISTORICAL_750_MANIFEST_SHA256 and isinstance(payload.get("records"), list):
+        if _manifest_hash(payload) == HISTORICAL_750_MANIFEST_SHA256 and isinstance(payload.get("records"), list):
             candidates.append(payload)
     if len(candidates) != 1:
         raise ArchiveError("R12 archive does not contain one validated historical 750-row manifest")
@@ -219,10 +232,10 @@ def extract(reader: _ArchiveReader) -> dict[str, Any]:
         "frozen_thresholds": {method: float(tuning[method]["theta"]) for method in METHOD_DIRS},
         "records": sorted(output, key=lambda row: (row["split"], row["source_id"], row["response_id"])),
     }
-    # The hard 599/147 and 300/299/75/72 validation is applied immediately
+    # The hard 582/147 and 300/282/75/72 validation is applied immediately
     # after the scalar-only payload is atomically written by ``main``.
-    if len(payload["records"]) != 746:
-        raise ArchiveError("R12 graph reference must retain exactly 746 graph-scorable responses")
+    if len(payload["records"]) != 729:
+        raise ArchiveError("R12 graph reference must retain exactly 729 graph-scorable responses")
     return payload
 
 
