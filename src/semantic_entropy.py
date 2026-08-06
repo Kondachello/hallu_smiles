@@ -779,8 +779,12 @@ class CandidateAgreementDetector:
         self.sample_detector = sample_detector or SemanticEntropyDetector(
             cfg, cache_only=self.cache_only, entailment_backend=entailment_backend
         )
-        if self.sample_detector.cache_only != self.cache_only:
-            raise ValueError("candidate and sample detector cache-only modes must match")
+        # A response-conditioned evaluation may deliberately read generator
+        # samples cache-only while filling its separate *local NLI* comparison
+        # cache.  The inverse is unsafe: a candidate cache-only replay must
+        # never be backed by a sample detector that could call Gemini.
+        if self.cache_only and not self.sample_detector.cache_only:
+            raise ValueError("candidate cache-only replay requires a sample cache-only detector")
         self.entailment_backend = entailment_backend
         self._loaded_nli: EntailmentBackend | None = entailment_backend
         self.nli_pair_evaluations = 0

@@ -238,6 +238,33 @@ def test_candidate_agreement_likelihood_weighting_and_cache_only_replay(tmp_path
     assert replay._loaded_nli is None  # noqa: SLF001 - cache-only needs no local NLI
 
 
+def test_candidate_agreement_can_fill_local_nli_cache_from_read_only_samples(tmp_path, monkeypatch):
+    """Cached samples may be reused without constructing a Gemini sampler."""
+    monkeypatch.setenv("TEST_SEMANTIC_ENTROPY_KEY", "not-a-real-key")
+    config = _config(tmp_path / "cache")
+    writer = SemanticEntropyDetector(config)
+    generated = iter([
+        CompletionSample("sample-a", -1.0, 1, 1),
+        CompletionSample("sample-b", -2.0, 1, 1),
+        CompletionSample("sample-c", -3.0, 1, 1),
+    ])
+    writer._live_sample = lambda _prompt: next(generated)  # type: ignore[method-assign]
+    writer.samples_for_prompt("synthetic prompt")
+
+    monkeypatch.delenv("TEST_SEMANTIC_ENTROPY_KEY")
+    sample_reader = SemanticEntropyDetector(config, cache_only=True)
+    nli = _CandidateNLI({
+        ("candidate", "sample-a"): 2, ("candidate", "sample-b"): 0, ("candidate", "sample-c"): 0,
+        ("sample-a", "candidate"): 2, ("sample-b", "candidate"): 0, ("sample-c", "candidate"): 0,
+    })
+    detector = CandidateAgreementDetector(config, sample_detector=sample_reader, entailment_backend=nli)
+    score = detector.score_candidate("synthetic prompt", "candidate")
+    assert score.matched_samples == 1
+    assert nli.pairs == 6
+    assert sample_reader.sampler is None
+    assert sample_reader.usage.summary()["api_calls"] == 0
+
+
 @pytest.mark.parametrize(
     ("labels", "expected_mass", "expected_matches"),
     [
