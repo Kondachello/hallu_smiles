@@ -149,14 +149,14 @@ def _paired_difference(left: np.ndarray, right: np.ndarray, labels: np.ndarray, 
     return {"estimate": float(observed), "paired_bootstrap_ci95": interval}
 
 
-def _load_subset(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Instance], Any]:
+def _load_subset(args: argparse.Namespace, *, exclude_implicit_true: bool) -> tuple[list[dict[str, Any]], dict[str, Instance], Any]:
     entropy = _entropy_ids(Path(args.semantic_entropy_scores).resolve())
     reference = load_graph_reference(args.graph_reference, manifest_sha256=R12_MANIFEST_SHA256)
     graph_by_id = {row.response_id: row for row in reference.rows}
     response_ids = sorted(set(entropy).intersection(graph_by_id))
     if len(response_ids) != EXPECTED_PAIRED_ROWS:
         raise GraphReferenceError("semantic entropy and R12 do not have the expected 496 paired IDs")
-    instances = {item.response_id: item for item in load_instances(args.data_dir, exclude_implicit_true=True)}
+    instances = {item.response_id: item for item in load_instances(args.data_dir, exclude_implicit_true=exclude_implicit_true)}
     subset: list[dict[str, Any]] = []
     for response_id in response_ids:
         entropy_row, graph_row, instance = entropy[response_id], graph_by_id[response_id], instances.get(response_id)
@@ -177,13 +177,28 @@ def _run(args: argparse.Namespace) -> int:
     configured_manifest = config_value(getattr(cfg, "vertex_gateway", None), "manifest_sha256")
     if configured_manifest != args.required_gateway_manifest_sha256:
         raise ValueError("runtime gateway manifest is not cache-compatible")
-    subset, instances, reference = _load_subset(args)
+    subset, instances, reference = _load_subset(
+        args, exclude_implicit_true=bool(config_value(cfg.data, "exclude_implicit_true", False))
+    )
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
     usage = SemanticUsageLogger(output / "usage.jsonl")
     # This is the no-Gemini invariant: even a cache miss cannot construct or
     # call a gateway sampler.  Candidate comparison cache misses may run local NLI.
     samples = SemanticEntropyDetector(cfg, usage=usage, cache_only=True)
+    if args.preflight:
+        sample_count = 0
+        try:
+            for row in subset:
+                sample_count += len(samples.samples_for_prompt(instances[row["response_id"]].prompt))
+        except CacheOnlyMissError as exc:
+            raise RuntimeError("paired candidate preflight found a missing semantic sample") from exc
+        _atomic_json(output / "preflight.json", {
+            "protocol": PROTOCOL, "state": "completed_sample_cache_preflight",
+            "paired_sources": EXPECTED_PAIRED_ROWS, "sample_cache_hits": int(usage.summary()["cache_hits"]),
+            "samples_loaded": sample_count, "gemini_api_calls": 0, "nli_pair_evaluations": 0,
+        })
+        return 0
     detector = CandidateAgreementDetector(cfg, sample_detector=samples, cache_only=bool(args.replay))
     records: list[dict[str, Any]] = []
     for index, row in enumerate(subset):
@@ -269,5 +284,6 @@ if __name__ == "__main__":
     parser.add_argument("--required-gateway-manifest-sha256", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--n-bootstrap", type=int, default=1000)
+    parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--replay", action="store_true")
     raise SystemExit(_run(parser.parse_args()))
