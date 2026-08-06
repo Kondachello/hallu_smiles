@@ -13,7 +13,15 @@ import yaml
 
 from src.config import Config
 from src.cache import llm_runtime_fingerprint
-from src.semantic_entropy import CompletionSample, GatewayRequestError, SemanticEntropyDetector, SemanticEntropyError
+from src.semantic_entropy import (
+    CandidateAgreementDetector,
+    CandidateAgreementEmptyCandidateError,
+    CompletionSample,
+    GatewayRequestError,
+    SemanticEntropyDetector,
+    SemanticEntropyError,
+    mutual_nli_equivalent,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +72,11 @@ def _config(
             "nli_batch_size": 2,
             "nli_max_length": 512,
         },
+        "candidate_agreement": {
+            "protocol": "ragtruth-candidate-agreement-v1",
+            "cache_dir": str(cache_dir / "candidate-agreement"),
+            "cache_read_dirs": [],
+        },
     })
 
 
@@ -80,6 +93,18 @@ class _FakeNLI:
             ("different", "same-one"): 0,
         }
         return [labels[pair] for pair in pairs]
+
+
+class _CandidateNLI:
+    def __init__(self, labels):
+        self.labels = labels
+        self.calls = 0
+        self.pairs = 0
+
+    def classify_pairs(self, pairs):
+        self.calls += 1
+        self.pairs += len(pairs)
+        return [self.labels[pair] for pair in pairs]
 
 
 def test_toha_greedy_semantic_entropy_and_cache_only_replay(tmp_path, monkeypatch):
@@ -174,6 +199,135 @@ def test_completed_lower_cap_samples_can_read_through_an_attested_legacy_runtime
     assert target.score_prompt("A synthetic RAGTruth prompt") == legacy_score
     assert target.usage.summary()["api_calls"] == 0
     assert target.usage.summary()["cache_hits"] >= 3
+
+
+def test_candidate_agreement_likelihood_weighting_and_cache_only_replay(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_SEMANTIC_ENTROPY_KEY", "not-a-real-key")
+    config = _config(tmp_path / "cache")
+    nli = _CandidateNLI({
+        ("candidate", "supported"): 2,
+        ("supported", "candidate"): 1,
+        ("candidate", "other"): 0,
+        ("other", "candidate"): 2,
+    })
+    sampler = SemanticEntropyDetector(config)
+    samples = iter([
+        CompletionSample("supported", -1.0, 1, 1),
+        CompletionSample("other", -3.0, 1, 1),
+        CompletionSample("other", -3.0, 1, 1),
+    ])
+    sampler._live_sample = lambda _prompt: next(samples)  # type: ignore[method-assign]
+    detector = CandidateAgreementDetector(
+        config, sample_detector=sampler, entailment_backend=nli
+    )
+
+    score = detector.score_candidate("synthetic prompt", "candidate")
+    expected_mass = math.exp(-1.0) / (math.exp(-1.0) + 2 * math.exp(-3.0))
+    assert score.agreement_mass == pytest.approx(expected_mass)
+    assert score.disagreement == pytest.approx(1.0 - expected_mass)
+    assert score.matched_samples == 1
+    assert nli.calls == 1
+    assert nli.pairs == 6
+
+    monkeypatch.delenv("TEST_SEMANTIC_ENTROPY_KEY")
+    replay = CandidateAgreementDetector(config, cache_only=True)
+    replay_score = replay.score_candidate("synthetic prompt", "candidate")
+    assert replay_score == score
+    assert replay.nli_pair_evaluations == 0
+    assert replay._loaded_nli is None  # noqa: SLF001 - cache-only needs no local NLI
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected_mass", "expected_matches"),
+    [
+        ((2, 2, 2, 2), 1.0, 3),
+        ((0, 2, 2, 0), 0.0, 0),
+    ],
+)
+def test_candidate_agreement_all_and_no_match_cases(tmp_path, monkeypatch, labels, expected_mass, expected_matches):
+    monkeypatch.setenv("TEST_SEMANTIC_ENTROPY_KEY", "not-a-real-key")
+    config = _config(tmp_path / "cache")
+    sampler = SemanticEntropyDetector(config)
+    samples = iter([
+        CompletionSample("a", -1.0, 1, 1),
+        CompletionSample("b", -2.0, 1, 1),
+        CompletionSample("b", -2.0, 1, 1),
+    ])
+    sampler._live_sample = lambda _prompt: next(samples)  # type: ignore[method-assign]
+    # Three samples are fixed by the shared test config; only the first two
+    # directional pairs are relevant to this parameterized all/no match test.
+    nli = _CandidateNLI({
+        ("candidate", "a"): labels[0],
+        ("candidate", "b"): labels[1],
+        ("a", "candidate"): labels[2],
+        ("b", "candidate"): labels[3],
+    })
+    detector = CandidateAgreementDetector(config, sample_detector=sampler, entailment_backend=nli)
+    score = detector.score_candidate("prompt", "candidate")
+    assert score.agreement_mass == pytest.approx(expected_mass)
+    assert score.disagreement == pytest.approx(1.0 - expected_mass)
+    assert score.matched_samples == expected_matches
+
+
+@pytest.mark.parametrize(
+    ("forward", "backward", "strict", "expected"),
+    [
+        (2, 2, False, True), (2, 1, False, True), (1, 2, False, True),
+        (1, 1, False, False), (0, 2, False, False), (2, 0, False, False),
+        (2, 1, True, False), (2, 2, True, True),
+    ],
+)
+def test_mutual_nli_equivalence_matches_toha_rule(forward, backward, strict, expected):
+    assert mutual_nli_equivalent(forward, backward, strict_entailment=strict) is expected
+
+
+def test_candidate_cache_key_invalidates_on_candidate_answer(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_SEMANTIC_ENTROPY_KEY", "not-a-real-key")
+    config = _config(tmp_path / "cache")
+    sampler = SemanticEntropyDetector(config)
+    samples = iter([
+        CompletionSample("sample", -1.0, 1, 1),
+        CompletionSample("sample", -1.0, 1, 1),
+        CompletionSample("sample", -1.0, 1, 1),
+    ])
+    sampler._live_sample = lambda _prompt: next(samples)  # type: ignore[method-assign]
+    nli = _CandidateNLI({
+        ("candidate-a", "sample"): 2, ("sample", "candidate-a"): 2,
+    })
+    detector = CandidateAgreementDetector(config, sample_detector=sampler, entailment_backend=nli)
+    detector.score_candidate("prompt", "candidate-a")
+
+    monkeypatch.delenv("TEST_SEMANTIC_ENTROPY_KEY")
+    replay = CandidateAgreementDetector(config, cache_only=True)
+    with pytest.raises(Exception, match="candidate_agreement_comparisons"):
+        replay.score_candidate("prompt", "candidate-b")
+    assert replay.nli_pair_evaluations == 0
+
+
+def test_candidate_comparison_key_binds_sample_identity_and_likelihood(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_SEMANTIC_ENTROPY_KEY", "not-a-real-key")
+    config = _config(tmp_path / "cache")
+    detector = CandidateAgreementDetector(config)
+    first, _, _ = detector._comparison_key(  # noqa: SLF001 - cache-key contract
+        "candidate", [CompletionSample("sample", -1.0, 1, 1)]
+    )
+    changed_candidate, _, _ = detector._comparison_key(  # noqa: SLF001
+        "candidate changed", [CompletionSample("sample", -1.0, 1, 1)]
+    )
+    changed_likelihood, _, _ = detector._comparison_key(  # noqa: SLF001
+        "candidate", [CompletionSample("sample", -2.0, 1, 1)]
+    )
+    changed_sample, _, _ = detector._comparison_key(  # noqa: SLF001
+        "candidate", [CompletionSample("different sample", -1.0, 1, 1)]
+    )
+    assert len({first, changed_candidate, changed_likelihood, changed_sample}) == 4
+
+
+def test_candidate_agreement_rejects_empty_historical_response(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_SEMANTIC_ENTROPY_KEY", "not-a-real-key")
+    detector = CandidateAgreementDetector(_config(tmp_path / "cache"))
+    with pytest.raises(CandidateAgreementEmptyCandidateError):
+        detector.score_candidate("prompt", "  ")
 
 
 @pytest.mark.parametrize(

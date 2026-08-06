@@ -43,6 +43,7 @@ from .retry import (
 
 SEMANTIC_ENTROPY_PROTOCOL = "toha-semantic-entropy-v1-gemini-selected-logprobs"
 NLI_PROTOCOL = "toha-mutual-entailment-greedy-v1"
+CANDIDATE_AGREEMENT_PROTOCOL = "ragtruth-candidate-agreement-v1"
 
 
 class SemanticEntropyError(RuntimeError):
@@ -51,6 +52,10 @@ class SemanticEntropyError(RuntimeError):
 
 class SemanticEntropyTruncatedError(SemanticEntropyError):
     """A sampled answer reached its documented output cap."""
+
+
+class CandidateAgreementEmptyCandidateError(SemanticEntropyError):
+    """The labelled historical response is empty and cannot be compared."""
 
 
 class GatewayRequestError(RuntimeError):
@@ -87,6 +92,30 @@ class SemanticEntropyScore:
             "class_logprobs": list(self.class_logprobs),
             "n_samples": self.n_samples,
             "n_classes": self.n_classes,
+        }
+
+
+@dataclass(frozen=True)
+class CandidateAgreementScore:
+    """Likelihood-weighted semantic support for one historical response.
+
+    ``agreement_mass`` is the normalized likelihood mass of sampled answers
+    mutually equivalent to the candidate.  ``disagreement`` is its
+    response-conditioned hallucination-risk score, ``1 - agreement_mass``.
+    No candidate or sampled text belongs in the serialized representation.
+    """
+
+    agreement_mass: float
+    disagreement: float
+    n_samples: int
+    matched_samples: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "agreement_mass": self.agreement_mass,
+            "candidate_disagreement": self.disagreement,
+            "n_samples": self.n_samples,
+            "matched_samples": self.matched_samples,
         }
 
 
@@ -322,6 +351,28 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def mutual_nli_equivalent(
+    forward_label: int, backward_label: int, *, strict_entailment: bool
+) -> bool:
+    """Apply the TOHA mutual, non-contradictory NLI equivalence rule.
+
+    The default rule intentionally permits entailment/neutral combinations
+    while rejecting any contradiction and a pair that is neutral in both
+    directions.  Candidate agreement must use this exact rule rather than a
+    stronger post-hoc notion of textual equality.
+    """
+
+    if forward_label not in {0, 1, 2} or backward_label not in {0, 1, 2}:
+        raise SemanticEntropyError("NLI classifier returned invalid MNLI labels")
+    if strict_entailment:
+        return forward_label == 2 and backward_label == 2
+    return (
+        forward_label != 0
+        and backward_label != 0
+        and (forward_label, backward_label) != (1, 1)
+    )
 
 
 class SemanticEntropyDetector:
@@ -635,10 +686,9 @@ class SemanticEntropyDetector:
                 raise SemanticEntropyError("NLI classifier returned invalid MNLI labels")
             forward, backward = labels[:len(candidates)], labels[len(candidates):]
             for other, first, second in zip(candidates, forward, backward):
-                equivalent = (first == 2 and second == 2) if self.strict_entailment else (
-                    first != 0 and second != 0 and (first, second) != (1, 1)
-                )
-                if equivalent:
+                if mutual_nli_equivalent(
+                    first, second, strict_entailment=self.strict_entailment
+                ):
                     ids[other] = next_id
             next_id += 1
         if -1 in ids:
@@ -670,12 +720,241 @@ class SemanticEntropyDetector:
     def score_prompt(self, prompt: str) -> SemanticEntropyScore:
         if not isinstance(prompt, str) or not prompt.strip():
             raise SemanticEntropyError("RAGTruth source prompt is required for semantic entropy")
-        samples = [self._sample(prompt, index) for index in range(self.n_samples)]
+        samples = self.samples_for_prompt(prompt)
         semantic_ids = self._semantic_ids(samples)
         entropy, class_logprobs = self._entropy(semantic_ids, [sample.mean_logprob for sample in samples])
         return SemanticEntropyScore(
             entropy=entropy, semantic_ids=semantic_ids, class_logprobs=class_logprobs,
             n_samples=len(samples), n_classes=len(set(semantic_ids)),
+        )
+
+    def samples_for_prompt(self, prompt: str) -> tuple[CompletionSample, ...]:
+        """Load or generate the fixed sample set without semantic clustering.
+
+        This is deliberately a narrow public seam for response-conditioned
+        baselines.  It preserves the existing sample key and cache contract:
+        calling it does not create a semantic-cluster cache entry and it does
+        not modify the entropy formula.
+        """
+
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise SemanticEntropyError("RAGTruth source prompt is required for semantic entropy")
+        return tuple(self._sample(prompt, index) for index in range(self.n_samples))
+
+
+class CandidateAgreementDetector:
+    """Response-conditioned agreement baseline over SemanticEntropy samples.
+
+    The generator sample cache remains owned by :class:`SemanticEntropyDetector`.
+    This class adds an independent, content-addressed comparison cache whose
+    entries contain only MNLI verdicts and aggregates.  In particular, raw
+    historical candidates and raw generated completions are never emitted to
+    checkpoints, public outputs, or archives.
+    """
+
+    def __init__(
+        self,
+        cfg: Any,
+        *,
+        sample_detector: SemanticEntropyDetector | None = None,
+        cache_only: bool = False,
+        entailment_backend: EntailmentBackend | None = None,
+    ):
+        self.cfg = cfg
+        self.settings = getattr(cfg, "candidate_agreement", None)
+        if self.settings is None:
+            raise ValueError("candidate_agreement config is required")
+        self.protocol = str(config_value(
+            self.settings, "protocol", CANDIDATE_AGREEMENT_PROTOCOL
+        ))
+        if self.protocol != CANDIDATE_AGREEMENT_PROTOCOL:
+            raise ValueError(f"unsupported candidate-agreement protocol: {self.protocol}")
+        self.cache_root = Path(str(config_value(self.settings, "cache_dir")))
+        self.cache_read_roots = [
+            Path(str(item))
+            for item in (config_value(self.settings, "cache_read_dirs", []) or [])
+        ]
+        self.cache_only = bool(cache_only)
+        self.sample_detector = sample_detector or SemanticEntropyDetector(
+            cfg, cache_only=self.cache_only, entailment_backend=entailment_backend
+        )
+        if self.sample_detector.cache_only != self.cache_only:
+            raise ValueError("candidate and sample detector cache-only modes must match")
+        self.entailment_backend = entailment_backend
+        self._loaded_nli: EntailmentBackend | None = entailment_backend
+        self.nli_pair_evaluations = 0
+        self.cache_hits = 0
+        self.cache_misses = 0
+        if not self.cache_only:
+            self.cache_root.mkdir(parents=True, exist_ok=True)
+
+    def _nli(self) -> EntailmentBackend:
+        if self._loaded_nli is None:
+            # Reuse the exact model identity and lazy-loading behavior used by
+            # the semantic-entropy implementation.
+            self._loaded_nli = self.sample_detector._nli()  # noqa: SLF001
+        return self._loaded_nli
+
+    def _comparison_key(
+        self, candidate: str, samples: Sequence[CompletionSample]
+    ) -> tuple[str, list[str], np.ndarray]:
+        if not samples:
+            raise SemanticEntropyError("candidate agreement requires at least one sample")
+        likelihoods = np.asarray([sample.mean_logprob for sample in samples], dtype=float)
+        if not np.all(np.isfinite(likelihoods)):
+            raise SemanticEntropyError("non-finite candidate-agreement log-likelihood")
+        maximum = float(likelihoods.max())
+        weights = np.exp(likelihoods - maximum)
+        weights /= float(weights.sum())
+        sample_hashes = [
+            _canonical_hash({
+                "text": sample.text,
+                "mean_logprob": float(sample.mean_logprob),
+                "completion_tokens": int(sample.completion_tokens),
+            })
+            for sample in samples
+        ]
+        key = _canonical_hash({
+            "protocol": self.protocol,
+            "candidate_answer_sha256": hashlib.sha256(candidate.encode("utf-8")).hexdigest(),
+            "sample_generation_protocol": self.sample_detector.protocol,
+            "sample_runtime": llm_runtime_fingerprint(self.cfg),
+            "sample_identities": [
+                {
+                    "sample_sha256": sample_hash,
+                    "mean_logprob": float(sample.mean_logprob),
+                    "normalized_weight": float(weight),
+                }
+                for sample_hash, sample, weight in zip(sample_hashes, samples, weights, strict=True)
+            ],
+            "nli": self.sample_detector._nli_identity(),  # noqa: SLF001
+            "equivalence": "bidirectional_noncontradictory_nli",
+            "strict_entailment": self.sample_detector.strict_entailment,
+        })
+        return key, sample_hashes, weights
+
+    def _load(self, key: str) -> dict[str, Any] | None:
+        for root in [self.cache_root, *self.cache_read_roots]:
+            path = root / "comparisons" / f"{key}.json"
+            try:
+                envelope = json.loads(path.read_text(encoding="utf-8"))
+                payload = envelope.get("payload")
+                if (
+                    isinstance(envelope, dict)
+                    and envelope.get("protocol") == self.protocol
+                    and envelope.get("kind") == "comparisons"
+                    and envelope.get("cache_key") == key
+                    and isinstance(payload, dict)
+                    and envelope.get("payload_sha256") == _canonical_hash(payload)
+                ):
+                    return payload
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+        return None
+
+    def _save(self, key: str, payload: dict[str, Any]) -> None:
+        _atomic_json(self.cache_root / "comparisons" / f"{key}.json", {
+            "protocol": self.protocol,
+            "kind": "comparisons",
+            "cache_key": key,
+            "payload": payload,
+            "payload_sha256": _canonical_hash(payload),
+        })
+
+    @staticmethod
+    def _score_from_payload(payload: dict[str, Any], n_samples: int) -> CandidateAgreementScore | None:
+        try:
+            agreement_mass = float(payload["agreement_mass"])
+            disagreement = float(payload["candidate_disagreement"])
+            matched_samples = int(payload["matched_samples"])
+            forward = payload["forward_labels"]
+            backward = payload["backward_labels"]
+            if (
+                not math.isfinite(agreement_mass)
+                or not math.isfinite(disagreement)
+                or not 0.0 <= agreement_mass <= 1.0
+                or not 0.0 <= disagreement <= 1.0
+                or not math.isclose(disagreement, 1.0 - agreement_mass, abs_tol=1e-12)
+                or not 0 <= matched_samples <= n_samples
+                or not isinstance(forward, list)
+                or not isinstance(backward, list)
+                or len(forward) != n_samples
+                or len(backward) != n_samples
+                or any(value not in {0, 1, 2} for value in forward + backward)
+            ):
+                return None
+            return CandidateAgreementScore(
+                agreement_mass=agreement_mass,
+                disagreement=disagreement,
+                n_samples=n_samples,
+                matched_samples=matched_samples,
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def score_candidate(self, prompt: str, candidate: str) -> CandidateAgreementScore:
+        """Score a labelled candidate against cached or newly sampled answers.
+
+        Scores never observe RAGTruth labels.  A cache-only invocation may
+        read samples and a comparison record, but any missing comparison is a
+        hard miss before the local NLI model is loaded.
+        """
+
+        if not isinstance(candidate, str) or not candidate.strip():
+            raise CandidateAgreementEmptyCandidateError(
+                "historical candidate answer is empty for candidate agreement"
+            )
+        samples = self.sample_detector.samples_for_prompt(prompt)
+        key, sample_hashes, weights = self._comparison_key(candidate, samples)
+        cached = self._load(key)
+        if cached is not None:
+            score = self._score_from_payload(cached, len(samples))
+            if score is not None:
+                self.cache_hits += 1
+                return score
+        self.cache_misses += 1
+        if self.cache_only:
+            raise CacheOnlyMissError(
+                "candidate_agreement_comparisons", key,
+                self.cache_root / "comparisons" / f"{key}.json",
+            )
+        pairs = [(candidate, sample.text) for sample in samples] + [
+            (sample.text, candidate) for sample in samples
+        ]
+        labels = self._nli().classify_pairs(pairs)
+        self.nli_pair_evaluations += len(pairs)
+        if len(labels) != len(pairs):
+            raise SemanticEntropyError("NLI classifier returned the wrong number of candidate labels")
+        forward = [int(value) for value in labels[:len(samples)]]
+        backward = [int(value) for value in labels[len(samples):]]
+        matches = [
+            mutual_nli_equivalent(
+                first, second, strict_entailment=self.sample_detector.strict_entailment
+            )
+            for first, second in zip(forward, backward, strict=True)
+        ]
+        agreement_mass = float(sum(
+            float(weight) for weight, matched in zip(weights, matches, strict=True) if matched
+        ))
+        # Keep rounding out of the scientific calculation.  Clamp only the
+        # unavoidable floating-point endpoints.
+        agreement_mass = min(1.0, max(0.0, agreement_mass))
+        payload = {
+            "candidate_answer_sha256": hashlib.sha256(candidate.encode("utf-8")).hexdigest(),
+            "sample_sha256": sample_hashes,
+            "forward_labels": forward,
+            "backward_labels": backward,
+            "agreement_mass": agreement_mass,
+            "candidate_disagreement": 1.0 - agreement_mass,
+            "matched_samples": int(sum(matches)),
+            "n_samples": len(samples),
+        }
+        self._save(key, payload)
+        return CandidateAgreementScore(
+            agreement_mass=agreement_mass,
+            disagreement=1.0 - agreement_mass,
+            n_samples=len(samples),
+            matched_samples=int(sum(matches)),
         )
 
 

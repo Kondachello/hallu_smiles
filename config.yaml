@@ -176,6 +176,14 @@ semantic_entropy:
   nli_batch_size: 2
   nli_max_length: 512
 
+# A separate response-conditioned baseline.  Its runtime cache is assigned by
+# ``make_local_candidate_agreement_config.py`` and never changes the sample or
+# semantic-cluster cache contract above.
+candidate_agreement:
+  protocol: "ragtruth-candidate-agreement-v1"
+  cache_dir: ".cache/candidate_agreement"
+  cache_read_dirs: []
+
 data:
   dir: "data"                         # holds source_info.jsonl and response.jsonl
   exclude_implicit_true: false        # RAGTruth strict convention: implicit_true spans COUNT as hallucinations
