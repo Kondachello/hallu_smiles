@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--candidate-cache-root", required=True)
     parser.add_argument("--expected-gateway-manifest-sha256", required=True)
     parser.add_argument("--nli-batch-size", type=int, default=None)
+    parser.add_argument("--nli-device", choices=("auto", "cpu", "mps", "cuda"), default=None)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     source = Path(args.semantic_runtime_config).resolve()
@@ -48,6 +49,11 @@ def main() -> None:
         # Batch size is an execution-only setting: the tokenizer, model,
         # max-length, labels, and cache-keyed NLI identity are unchanged.
         semantic["nli_batch_size"] = int(args.nli_batch_size)
+    if args.nli_device is not None:
+        # Device placement is execution-only.  It never enters the NLI identity
+        # or candidate-comparison cache key, because the tokenizer, weights,
+        # maximum length, labels, and scoring rule are unchanged.
+        semantic["nli_device"] = args.nli_device
     cache_root = Path(args.candidate_cache_root).resolve()
     payload["candidate_agreement"] = {
         "protocol": CANDIDATE_AGREEMENT_PROTOCOL,
@@ -71,6 +77,7 @@ def main() -> None:
         "candidate_cache_dir": payload["candidate_agreement"]["cache_dir"],
         "gateway_manifest_sha256": gateway["manifest_sha256"],
         "nli_batch_size": semantic.get("nli_batch_size"),
+        "nli_device": semantic.get("nli_device"),
     }, sort_keys=True))
 
 
