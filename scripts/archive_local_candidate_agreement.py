@@ -24,7 +24,11 @@ def main() -> None:
     parser.add_argument("--archive", required=True)
     args = parser.parse_args()
     root = Path(args.run_root).resolve()
-    if not root.is_dir() or not root.name.startswith("ragtruth-candidate-agreement-artifacts-"):
+    allowed_prefixes = (
+        "ragtruth-candidate-agreement-artifacts-",
+        "ragtruth-candidate-agreement-paired-",
+    )
+    if not root.is_dir() or not root.name.startswith(allowed_prefixes):
         raise SystemExit("run root is not a local candidate-agreement artifact directory")
     archive = Path(args.archive).resolve()
     archive.parent.mkdir(parents=True, exist_ok=True)
