@@ -201,36 +201,45 @@ def _run(args: argparse.Namespace) -> int:
         return 0
     detector = CandidateAgreementDetector(cfg, sample_detector=samples, cache_only=bool(args.replay))
     records: list[dict[str, Any]] = []
-    for index, row in enumerate(subset):
-        checkpoint = _checkpoint_path(output, row["response_id"])
-        existing = _valid_checkpoint(checkpoint, row)
-        if existing is not None and not args.replay:
-            records.append(existing)
-            continue
-        instance = instances[row["response_id"]]
-        try:
-            score = detector.score_candidate(instance.prompt, instance.response)
-        except CacheOnlyMissError as exc:
-            raise RuntimeError("sample-cache-only candidate run encountered a missing cache entry") from exc
-        except CandidateAgreementEmptyCandidateError as exc:
-            raise RuntimeError("paired candidate agreement has an unexpected empty historical answer") from exc
-        record = {
-            "protocol": PROTOCOL, "state": "scored", "source_id": row["source_id"],
-            "response_id": row["response_id"], "split": row["split"], "y": row["y"],
-            "candidate_agreement_mass": float(score.agreement_mass),
-            "candidate_disagreement": float(score.disagreement), "matched_samples": int(score.matched_samples),
-            "n_samples": int(score.n_samples),
-        }
-        if not args.replay:
-            _atomic_json(checkpoint, record)
-        records.append(record)
-        _atomic_json(output / "progress.json", {
-            "protocol": PROTOCOL, "event": "source_completed", "sources_completed": index + 1,
-            "sources_total": EXPECTED_PAIRED_ROWS, "gemini_api_calls": 0,
-            "sample_cache_hits": int(usage.summary()["cache_hits"]),
-            "nli_pair_evaluations": int(detector.nli_pair_evaluations),
+    try:
+        for index, row in enumerate(subset):
+            checkpoint = _checkpoint_path(output, row["response_id"])
+            existing = _valid_checkpoint(checkpoint, row)
+            if existing is not None and not args.replay:
+                records.append(existing)
+                continue
+            instance = instances[row["response_id"]]
+            try:
+                score = detector.score_candidate(instance.prompt, instance.response)
+            except CacheOnlyMissError as exc:
+                raise RuntimeError("sample-cache-only candidate run encountered a missing cache entry") from exc
+            except CandidateAgreementEmptyCandidateError as exc:
+                raise RuntimeError("paired candidate agreement has an unexpected empty historical answer") from exc
+            record = {
+                "protocol": PROTOCOL, "state": "scored", "source_id": row["source_id"],
+                "response_id": row["response_id"], "split": row["split"], "y": row["y"],
+                "candidate_agreement_mass": float(score.agreement_mass),
+                "candidate_disagreement": float(score.disagreement), "matched_samples": int(score.matched_samples),
+                "n_samples": int(score.n_samples),
+            }
+            if not args.replay:
+                _atomic_json(checkpoint, record)
+            records.append(record)
+            _atomic_json(output / "progress.json", {
+                "protocol": PROTOCOL, "event": "source_completed", "sources_completed": index + 1,
+                "sources_total": EXPECTED_PAIRED_ROWS, "gemini_api_calls": 0,
+                "sample_cache_hits": int(usage.summary()["cache_hits"]),
+                "nli_pair_evaluations": int(detector.nli_pair_evaluations),
+                "candidate_comparison_cache_hits": int(detector.cache_hits),
+            })
+    except Exception as exc:
+        _atomic_json(output / "run_metadata.json", {
+            "protocol": PROTOCOL, "state": "error", "error_type": type(exc).__name__,
+            "sources_completed": len(records), "sources_total": EXPECTED_PAIRED_ROWS,
+            "gemini_api_calls": 0, "nli_pair_evaluations": int(detector.nli_pair_evaluations),
             "candidate_comparison_cache_hits": int(detector.cache_hits),
         })
+        raise
     records.sort(key=lambda row: (row["split"], row["source_id"], row["response_id"]))
     target = output / ("candidate_scores.replay.jsonl" if args.replay else "candidate_scores.jsonl")
     _write_jsonl(target, records)
