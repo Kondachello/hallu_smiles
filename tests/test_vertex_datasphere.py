@@ -271,8 +271,12 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "--cache-root \"$BASELINE_CACHE_ROOT\"" in runner
     assert "--cache-root \"$CRITICAL_CACHE_ROOT\"" in runner
     assert "--kg-cache-read-dir \"$BASELINE_CACHE_ROOT/kg\"" in runner
-    assert "--kg-cache-read-dir \"$HISTORICAL_BASELINE_CACHE_ROOT/kg\"" in runner
-    assert "--relation-cache-read-dir \"$HISTORICAL_BASELINE_CACHE_ROOT/verdicts\"" in runner
+    assert "HISTORICAL_BASELINE_CACHE_READ_ROOTS" in runner
+    assert 'qa-750-test-150-cv-5' in runner
+    assert 'support-critical-v1-r12readthrough-${GATEWAY_MANIFEST_SHA256}' in runner
+    assert "R12 cache read-through root is incomplete" in runner
+    assert '"${BASELINE_CACHE_READ_ARGS[@]}"' in runner
+    assert '"${CRITICAL_KG_CACHE_READ_ARGS[@]}"' in runner
     assert "--critical-cache-read-root" in runner
     assert "support-critical-v1-${GATEWAY_MANIFEST_SHA256}" in runner
     assert "check_support_critical_gateway_probe.py" in runner

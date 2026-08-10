@@ -213,12 +213,69 @@ import sys
 print(json.load(open(sys.argv[1], encoding='utf-8'))['llm_runtime_fingerprint'])
 PY
 )"
+# The initial 750-QA scale-up is a separately attested, content-addressed
+# read-through lineage.  Its baseline root predates the checkpoint-identity
+# file that later runs write beside baseline caches, so it cannot be discovered
+# by the conservative 100-QA resolver above.  Do not silently omit it: that
+# would turn already-warm context/query graphs and critical artifacts into
+# unnecessary live calls.
+HISTORICAL_BASELINE_CACHE_READ_ROOTS=("$HISTORICAL_BASELINE_CACHE_ROOT")
+R12_SAMPLE_ROOT="$CHECKPOINT_PARENT/qa-750-test-150-cv-5"
+R12_BASELINE_CACHE_ROOT="$R12_SAMPLE_ROOT/baseline-v1-${GATEWAY_MANIFEST_SHA256}"
+R12_CRITICAL_CACHE_ROOT="$R12_SAMPLE_ROOT/support-critical/support-critical-v1-${GATEWAY_MANIFEST_SHA256}"
+R12_CRITICAL_IDENTITY="$R12_CRITICAL_CACHE_ROOT/checkpoint-identity.json"
+R12_READ_THROUGH_ENABLED=0
+if [[ "$R12_BASELINE_CACHE_ROOT" != "$BASELINE_CACHE_ROOT" ]] && test -d "$R12_BASELINE_CACHE_ROOT"; then
+  test -d "$R12_BASELINE_CACHE_ROOT/kg" && test -d "$R12_BASELINE_CACHE_ROOT/verdicts" \
+    && test -d "$R12_CRITICAL_CACHE_ROOT/critical_claims" \
+    && test -d "$R12_CRITICAL_CACHE_ROOT/critical_coverage" \
+    && test -d "$R12_CRITICAL_CACHE_ROOT/critical_verdicts" \
+    && test -f "$R12_CRITICAL_IDENTITY" || {
+      echo "R12 cache read-through root is incomplete; refusing to make avoidable live calls." >&2
+      exit 2
+    }
+  "$CLIENT_PYTHON" - "$R12_CRITICAL_IDENTITY" "$GATEWAY_MANIFEST_SHA256" "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" <<'PY'
+import json
+import sys
+
+identity = json.load(open(sys.argv[1], encoding='utf-8'))
+expected_sample = {'total': 750, 'train': 600, 'test': 150, 'alpha_cv_folds': 5}
+if identity.get('protocol') != 'hallu-vertex-qa-support-critical-checkpoint-v1':
+    raise SystemExit('R12 critical cache has an incompatible checkpoint protocol')
+if identity.get('gateway_manifest_sha256') != sys.argv[2]:
+    raise SystemExit('R12 critical cache gateway manifest does not match the authenticated gateway')
+if identity.get('qa_sample') != expected_sample:
+    raise SystemExit('R12 critical cache has an unexpected QA manifest shape')
+if identity.get('historical_llm_runtime_fingerprint') != sys.argv[3]:
+    raise SystemExit('R12 critical cache LLM runtime fingerprint does not match the validated historical lineage')
+PY
+  HISTORICAL_BASELINE_CACHE_READ_ROOTS+=("$R12_BASELINE_CACHE_ROOT")
+  R12_READ_THROUGH_ENABLED=1
+elif (( QA_SAMPLE_SIZE > 100 && QA_SAMPLE_SIZE < 750 )); then
+  echo "R12 cache read-through root is absent; refusing a 300/500-QA cache-fill run without it." >&2
+  exit 2
+fi
+"$CLIENT_PYTHON" - "$RUN_ROOT/historical-read-through-roots.json" \
+  "$HISTORICAL_BASELINE_CACHE_ROOT" "$R12_BASELINE_CACHE_ROOT" "$R12_CRITICAL_CACHE_ROOT" \
+  "$R12_READ_THROUGH_ENABLED" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(json.dumps({
+    'protocol': 'hallu-historical-cache-read-through-roots-v1',
+    'primary_historical_baseline_root': sys.argv[2],
+    'r12_baseline_root': sys.argv[3],
+    'r12_critical_root': sys.argv[4],
+    'r12_read_through_enabled': bool(int(sys.argv[5])),
+}, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+PY
 # Critical artifacts are independent of source commit when their component
 # protocol, prompt version, LLM identity, and evidence key are unchanged. A
 # stable namespace therefore resumes a partial Job instead of discarding every
 # completed verdict after a retry-only code change. Older commit namespaces are
 # read-through inputs and remain untouched.
-CRITICAL_PROTOCOL_NAMESPACE="support-critical-v1-${GATEWAY_MANIFEST_SHA256}"
+CRITICAL_PROTOCOL_NAMESPACE="support-critical-v1-r12readthrough-${GATEWAY_MANIFEST_SHA256}"
 CRITICAL_CACHE_ROOT="$CHECKPOINT_BASE/support-critical/$CRITICAL_PROTOCOL_NAMESPACE"
 CRITICAL_CACHE_READ_ARGS=()
 if test -d "$CHECKPOINT_BASE/support-critical"; then
@@ -233,10 +290,13 @@ if test -d "$HISTORICAL_SAMPLE_ROOT/support-critical"; then
     CRITICAL_CACHE_READ_ARGS+=(--critical-cache-read-root "$previous_critical_root")
   done < <(find "$HISTORICAL_SAMPLE_ROOT/support-critical" -mindepth 1 -maxdepth 1 -type d -name "*-${GATEWAY_MANIFEST_SHA256}" -print 2>/dev/null | sort)
 fi
+if (( R12_READ_THROUGH_ENABLED )); then
+  CRITICAL_CACHE_READ_ARGS+=(--critical-cache-read-root "$R12_CRITICAL_CACHE_ROOT")
+fi
 CHECKPOINT_ROOT="$CRITICAL_CACHE_ROOT"
 mkdir -p "$CRITICAL_CACHE_ROOT/kg" "$CRITICAL_CACHE_ROOT/critical_claims" \
   "$CRITICAL_CACHE_ROOT/critical_coverage" "$CRITICAL_CACHE_ROOT/critical_verdicts"
-"$CLIENT_PYTHON" - "$CRITICAL_CACHE_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" "$HISTORICAL_BASELINE_CACHE_ROOT" "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" <<'PY'
+"$CLIENT_PYTHON" - "$CRITICAL_CACHE_ROOT/checkpoint-identity.json" "$EXPECTED_SOURCE_COMMIT" "$GATEWAY_MANIFEST_SHA256" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" "$HISTORICAL_BASELINE_CACHE_ROOT" "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" "$R12_READ_THROUGH_ENABLED" <<'PY'
 import json
 import os
 import sys
@@ -253,12 +313,13 @@ payload = {
     },
     'historical_baseline_cache_root': sys.argv[8],
     'historical_llm_runtime_fingerprint': sys.argv[9],
-    'critical_protocol_namespace': 'support-critical-v1',
+    'r12_read_through_enabled': bool(int(sys.argv[10])),
+    'critical_protocol_namespace': 'support-critical-v1-r12readthrough',
     'protocol': 'hallu-vertex-qa-support-critical-checkpoint-v1',
 }
 if path.exists():
     existing = json.loads(path.read_text(encoding='utf-8'))
-    for key in ('gateway_manifest_sha256', 'qa_sample', 'historical_baseline_cache_root', 'historical_llm_runtime_fingerprint', 'critical_protocol_namespace', 'protocol'):
+    for key in ('gateway_manifest_sha256', 'qa_sample', 'historical_baseline_cache_root', 'historical_llm_runtime_fingerprint', 'r12_read_through_enabled', 'critical_protocol_namespace', 'protocol'):
         if existing.get(key) != payload[key]:
             raise SystemExit(f'critical checkpoint identity mismatch for {key}')
 else:
@@ -267,12 +328,19 @@ else:
     os.replace(tmp, path)
 PY
 
+BASELINE_CACHE_READ_ARGS=()
+CRITICAL_KG_CACHE_READ_ARGS=(--kg-cache-read-dir "$BASELINE_CACHE_ROOT/kg")
+for historical_root in "${HISTORICAL_BASELINE_CACHE_READ_ROOTS[@]}"; do
+  BASELINE_CACHE_READ_ARGS+=(--kg-cache-read-dir "$historical_root/kg")
+  BASELINE_CACHE_READ_ARGS+=(--relation-cache-read-dir "$historical_root/verdicts")
+  CRITICAL_KG_CACHE_READ_ARGS+=(--kg-cache-read-dir "$historical_root/kg")
+done
+
 "$CLIENT_PYTHON" "$ROOT/scripts/make_datasphere_vertex_config.py" \
   --base-config "$ROOT/config.yaml" --gateway-manifest "$GATEWAY_MANIFEST" \
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$BASELINE_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$BASELINE_CACHE_ROOT" \
-  --kg-cache-read-dir "$HISTORICAL_BASELINE_CACHE_ROOT/kg" \
-  --relation-cache-read-dir "$HISTORICAL_BASELINE_CACHE_ROOT/verdicts" \
+  "${BASELINE_CACHE_READ_ARGS[@]}" \
   --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
   --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries "$LLM_MAX_RETRIES" --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
   --cv-folds "$QA_CV_FOLDS" \
@@ -281,8 +349,7 @@ PY
   --base-config "$ROOT/config.yaml" --gateway-manifest "$GATEWAY_MANIFEST" \
   --gateway-url "$HALLU_GATEWAY_URL" --datasphere-runtime-manifest "$RUNTIME_MANIFEST" \
   --output "$CRITICAL_CONFIG" --data-dir "$DATA_DIR" --work-dir "$RUN_ROOT" --cache-root "$CRITICAL_CACHE_ROOT" \
-  --kg-cache-read-dir "$BASELINE_CACHE_ROOT/kg" \
-  --kg-cache-read-dir "$HISTORICAL_BASELINE_CACHE_ROOT/kg" \
+  "${CRITICAL_KG_CACHE_READ_ARGS[@]}" \
   --llm-runtime-fingerprint-override "$HISTORICAL_LLM_RUNTIME_FINGERPRINT" \
   "${CRITICAL_CACHE_READ_ARGS[@]}" \
   --max-tokens 16384 --concurrency "$LLM_CONCURRENCY" --max-retries "$LLM_MAX_RETRIES" --retry-backoff-base-s 5 --retry-backoff-max-s 60 \
@@ -352,7 +419,7 @@ PY
 # Fill the primary KG cache read-through from the validated historical root.
 # Strict has no text-verifier calls, so this stage can make only the required
 # KGGen requests for cold content and preserves the historical root unchanged.
-find "$HISTORICAL_BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-before.sha256"
+find "${HISTORICAL_BASELINE_CACHE_READ_ROOTS[@]}" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-before.sha256"
 "$CLIENT_PYTHON" "$ROOT/run.py" --config "$BASELINE_CONFIG" --stage all \
   --relation-mode strict --qa-manifest "$QA_MANIFEST" \
   --output-dir "$STRICT_OUT" "${BASELINE_RUN_ARGS[@]}" "${EXCLUDE_SOURCE_ARGS[@]}"
@@ -366,7 +433,7 @@ mv "$STRICT_OUT/usage.jsonl" "$RUN_ROOT/strict-cache-fill-usage.jsonl"
   --output-dir "$SUPPORT_OUT" "${BASELINE_RUN_ARGS[@]}" "${EXCLUDE_SOURCE_ARGS[@]}"
 require_complete_extraction "$SUPPORT_OUT" "$QA_SAMPLE_SIZE"
 mv "$SUPPORT_OUT/usage.jsonl" "$RUN_ROOT/support-cache-fill-usage.jsonl"
-find "$HISTORICAL_BASELINE_CACHE_ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-after-baseline.sha256"
+find "${HISTORICAL_BASELINE_CACHE_READ_ROOTS[@]}" -type f -print0 | sort -z | xargs -0 sha256sum > "$RUN_ROOT/historical-cache-after-baseline.sha256"
 cmp "$RUN_ROOT/historical-cache-before.sha256" "$RUN_ROOT/historical-cache-after-baseline.sha256"
 
 # KGGen is now fully warm in the primary/read-through baseline cache. This
