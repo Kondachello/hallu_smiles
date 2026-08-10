@@ -331,6 +331,12 @@ def test_cpu_vertex_qa_job_can_forbid_inference_cache_misses(tmp_path):
         "--concurrency", "1", "--exclude-source-id", "12448", "--force-cache-only",
         "--output", str(rendered),
     ], check=True)
+    job = yaml.safe_load(rendered.read_text(encoding="utf-8"))
+    assert 'QA_FORCE_CACHE_ONLY="1"' in str(job["cmd"])
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "validate_datasphere_job.py"),
+        "--job", str(rendered), "--repo-root", str(ROOT),
+    ], check=True)
 
 
 def test_cpu_vertex_qa_job_can_run_only_the_cache_preflight(tmp_path):
@@ -358,12 +364,38 @@ def test_cpu_vertex_qa_job_can_run_only_the_cache_preflight(tmp_path):
     ], text=True, capture_output=True)
     assert rejected.returncode != 0
     assert "requires --force-cache-only and --qa-manifest-source" in rejected.stderr
-    job = yaml.safe_load(rendered.read_text(encoding="utf-8"))
-    assert 'QA_FORCE_CACHE_ONLY="1"' in str(job["cmd"])
+
+
+def test_cache_complete_nested_manifest_generator_retains_quotas_and_nesting(tmp_path):
+    parent = ROOT / "datasphere/manifests/support-critical-r12-parent-750.json"
+    report = tmp_path / "cache-preflight.json"
+    report.write_text(json.dumps({
+        "protocol": "support-critical-cache-only-preflight-v1",
+        "cache_only": True,
+        "missing": [
+            {"source_id": "12183", "response_id": "16153", "component": "critical_claim_verifier"},
+            {"source_id": "12349", "response_id": "17142", "component": "critical_claim_verifier"},
+        ],
+    }), encoding="utf-8")
+    output = tmp_path / "manifests"
     subprocess.run([
-        sys.executable, str(SCRIPTS / "validate_datasphere_job.py"),
-        "--job", str(rendered), "--repo-root", str(ROOT),
+        sys.executable, str(SCRIPTS / "make_r12_cache_complete_nested_manifests.py"),
+        "--parent-manifest", str(parent), "--cache-preflight-report", str(report),
+        "--output-dir", str(output),
     ], check=True)
+    small = json.loads((output / "support-critical-r12-cache-complete-nested-300.json").read_text())
+    large = json.loads((output / "support-critical-r12-cache-complete-nested-500.json").read_text())
+    for size, manifest in [(300, small), (500, large)]:
+        assert len(manifest["records"]) == size
+        assert manifest["derivation"]["protocol"] == "support-critical-r12-cache-complete-nested-train-size-v1"
+        assert manifest["derivation"]["cache_eligibility"]["ineligible_source_count"] == 2
+    assert {row["response_id"] for row in small["records"]}.issubset(
+        {row["response_id"] for row in large["records"]}
+    )
+    assert "12183" not in {row["source_id"] for row in large["records"]}
+    assert "12349" not in {row["source_id"] for row in large["records"]}
+    assert "12448" not in {row["source_id"] for row in small["records"]}
+    assert "12448" in {row["source_id"] for row in large["records"]}
 
 
 def test_cpu_vertex_qa_job_pins_a_committed_r12_nested_manifest(tmp_path):
