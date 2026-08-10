@@ -14,6 +14,7 @@ cmd: >-
   actual_commit="$(git -C source rev-parse HEAD)";
   test "$actual_commit" = "__GIT_COMMIT__";
   export EXPECTED_SOURCE_COMMIT="__GIT_COMMIT__";
+  export EXPECTED_RUNTIME_IMAGE_SOURCE_COMMIT="__RUNTIME_IMAGE_SOURCE_COMMIT__";
   export DATASPHERE_DOCKER_IMAGE_ID="__DOCKER_IMAGE_ID__";
   export EXPECTED_GATEWAY_MANIFEST_SHA256="__GATEWAY_MANIFEST_SHA256__";
   export DATA_DIR="$DS_PROJECT_HOME/hallu_smiles/shared/ragtruth";

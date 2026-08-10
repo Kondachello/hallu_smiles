@@ -7,6 +7,7 @@ CLIENT_PYTHON="${CLIENT_PYTHON:-/opt/hallu/client/bin/python}"
 RUNTIME_MANIFEST="${RUNTIME_MANIFEST:-/opt/hallu/runtime-manifest.json}"
 EMBEDDING_MODEL_PATH="${EMBEDDING_MODEL_PATH:-/opt/hallu/models/all-MiniLM-L6-v2}"
 EXPECTED_SOURCE_COMMIT="${EXPECTED_SOURCE_COMMIT:?Set the source commit in the Job template}"
+EXPECTED_RUNTIME_IMAGE_SOURCE_COMMIT="${EXPECTED_RUNTIME_IMAGE_SOURCE_COMMIT:-$EXPECTED_SOURCE_COMMIT}"
 DATASPHERE_DOCKER_IMAGE_ID="${DATASPHERE_DOCKER_IMAGE_ID:?Set the immutable Docker identity}"
 EXPECTED_GATEWAY_MANIFEST_SHA256="${EXPECTED_GATEWAY_MANIFEST_SHA256:?Set the verified 3-QA gateway manifest hash}"
 DATA_DIR="${DATA_DIR:?Set DATA_DIR to RAGTruth project storage}"
@@ -45,6 +46,7 @@ HISTORICAL_LINEAGE="$RUN_ROOT/historical-baseline-lineage.json"
 KG_CACHE_PREFLIGHT="$RUN_ROOT/historical-kg-cache-preflight.json"
 CRITICAL_GATEWAY_PROBE="$RUN_ROOT/support-critical-gateway-probe.json"
 CRITICAL_RESILIENCE_PREFLIGHT="$RUN_ROOT/support-critical-resilience-preflight.json"
+CRITICAL_CACHE_PREFLIGHT="$RUN_ROOT/support-critical-cache-preflight.json"
 CHECKPOINT_ROOT=""
 BASELINE_CACHE_ROOT=""
 CRITICAL_CACHE_ROOT=""
@@ -154,7 +156,8 @@ cp /opt/hallu/manifests/client.freeze.txt "$RUN_ROOT/client.freeze.txt"
 
 "$CLIENT_PYTHON" "$ROOT/scripts/check_datasphere_vertex_cpu_runtime.py" \
   --python "$CLIENT_PYTHON" --runtime-manifest "$RUNTIME_MANIFEST" \
-  --embedding-path "$EMBEDDING_MODEL_PATH" --expected-source-commit "$EXPECTED_SOURCE_COMMIT" \
+  --embedding-path "$EMBEDDING_MODEL_PATH" \
+  --expected-runtime-source-commit "$EXPECTED_RUNTIME_IMAGE_SOURCE_COMMIT" \
   --report "$RUN_ROOT/cpu-runtime.json"
 
 curl --fail --silent --show-error \
@@ -404,6 +407,15 @@ done
   --config "$CRITICAL_CONFIG" --data-dir "$DATA_DIR" --qa-manifest "$QA_MANIFEST" \
   --report "$CRITICAL_RESILIENCE_PREFLIGHT"
 
+# For a fixed cache-only sub-study, prove every claim component can replay
+# before train-only CV.  The R12 replay cache is an input here; this command
+# has no gateway client and cannot write cache entries.
+if [[ "$QA_FORCE_CACHE_ONLY" == "1" ]]; then
+  "$CLIENT_PYTHON" "$ROOT/scripts/preflight_support_critical_cache.py" \
+    --config "$CRITICAL_CONFIG" --data-dir "$DATA_DIR" --qa-manifest "$QA_MANIFEST" \
+    "${EXCLUDE_SOURCE_ARGS[@]}" --report "$CRITICAL_CACHE_PREFLIGHT"
+fi
+
 # Probe the exact three new schemas before baseline reports/tuning. It does
 # not require a particular semantic answer, and its cache-only replay proves
 # the critical namespace is writable and resumable before the 100-QA loop.
@@ -565,27 +577,28 @@ if any(payload[name]['api_attempts'] for name in (
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 PY
 
-"$CLIENT_PYTHON" - "$METADATA" "$EXPECTED_SOURCE_COMMIT" "$DATASPHERE_DOCKER_IMAGE_ID" "$GATEWAY_MANIFEST" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" <<'PY'
+"$CLIENT_PYTHON" - "$METADATA" "$EXPECTED_SOURCE_COMMIT" "$EXPECTED_RUNTIME_IMAGE_SOURCE_COMMIT" "$DATASPHERE_DOCKER_IMAGE_ID" "$GATEWAY_MANIFEST" "$QA_SAMPLE_SIZE" "$QA_TRAIN_SOURCES" "$QA_TEST_SOURCES" "$QA_CV_FOLDS" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from gateway.core import canonical_manifest_sha256
 
-manifest = json.loads(Path(sys.argv[4]).read_text(encoding='utf-8'))
+manifest = json.loads(Path(sys.argv[5]).read_text(encoding='utf-8'))
 Path(sys.argv[1]).write_text(json.dumps({
     'state': 'completed',
     'mode': 'cpu-vertex-qa-strict-support-critical',
     'checked_at_utc': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
     'source_commit': sys.argv[2],
-    'datasphere_docker_image_id': sys.argv[3],
+    'runtime_image_source_commit': sys.argv[3],
+    'datasphere_docker_image_id': sys.argv[4],
     'gateway_manifest_sha256': canonical_manifest_sha256(manifest),
     'gateway_manifest': manifest,
     'qa_sample': {
-        'total': int(sys.argv[5]),
-        'train': int(sys.argv[6]),
-        'test': int(sys.argv[7]),
-        'alpha_cv_folds': int(sys.argv[8]),
+        'total': int(sys.argv[6]),
+        'train': int(sys.argv[7]),
+        'test': int(sys.argv[8]),
+        'alpha_cv_folds': int(sys.argv[9]),
     },
     'runs': ['strict-cache-fill', 'support-cache-fill', 'support-critical-live', 'cache-only-strict', 'cache-only-support', 'cache-only-support-critical'],
 }, indent=2, sort_keys=True) + '\n', encoding='utf-8')

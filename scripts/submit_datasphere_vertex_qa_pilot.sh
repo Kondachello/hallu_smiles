@@ -19,13 +19,15 @@ Options:
   --exclude-source-id ID  Explicit source-level quarantine recorded in metrics/audit (repeatable)
   --timeout-seconds N     Optional in-container wall-time ceiling; 0 uses the DataSphere deadline (default: 0)
   --commit SHA            Pushed source commit (default: HEAD)
+  --runtime-image-source-commit SHA
+                          Commit recorded in an attested older runtime image; only for fixed cache-only R12 recovery
   --branch NAME           Remote branch containing the commit (default: current)
   --skip-origin-fetch     Verify locally cached origin/BRANCH (only for a transient DNS outage)
   --docker-image REF      Optional immutable image; must match the committed build
   --profile NAME          DataSphere CLI profile (default: default)
 EOF
 }
-PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; IMAGE=""; PROFILE="default"; SKIP_ORIGIN_FETCH=0
+PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; RUNTIME_IMAGE_SOURCE_COMMIT=""; IMAGE=""; PROFILE="default"; SKIP_ORIGIN_FETCH=0
 QA_SAMPLE_SIZE=100; QA_TEST_FRACTION="0.2"; CV_FOLDS=5; CONCURRENCY=1; TIMEOUT_SECONDS=0; FORCE_CACHE_ONLY=0; QA_MANIFEST_SOURCE=""; EXCLUDE_SOURCE_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -35,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --gate-artifact) GATE_ARTIFACT="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --commit) COMMIT="$2"; shift 2 ;;
+    --runtime-image-source-commit) RUNTIME_IMAGE_SOURCE_COMMIT="$2"; shift 2 ;;
     --skip-origin-fetch) SKIP_ORIGIN_FETCH=1; shift ;;
     --docker-image) IMAGE="$2"; shift 2 ;;
     --profile) PROFILE="$2"; shift 2 ;;
@@ -60,6 +63,22 @@ QA_MANIFEST_SOURCE_ARGS=()
 if [[ -n "$QA_MANIFEST_SOURCE" ]]; then
   QA_MANIFEST_SOURCE_ARGS=(--qa-manifest-source "$QA_MANIFEST_SOURCE")
 fi
+RUNTIME_IMAGE_SOURCE_ARGS=()
+if [[ -n "$RUNTIME_IMAGE_SOURCE_COMMIT" ]]; then
+  [[ "$RUNTIME_IMAGE_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "--runtime-image-source-commit must be a lowercase full 40-character Git SHA." >&2
+    exit 2
+  }
+  [[ "$FORCE_CACHE_ONLY" -eq 1 && -n "$QA_MANIFEST_SOURCE" ]] || {
+    echo "an older runtime image is permitted only for a fixed force-cache-only recovery." >&2
+    exit 2
+  }
+  git merge-base --is-ancestor "$RUNTIME_IMAGE_SOURCE_COMMIT" "$COMMIT" || {
+    echo "runtime image source commit must be an ancestor of the selected source commit." >&2
+    exit 2
+  }
+  RUNTIME_IMAGE_SOURCE_ARGS=(--runtime-image-source-commit "$RUNTIME_IMAGE_SOURCE_COMMIT")
+fi
 if [[ "$SKIP_ORIGIN_FETCH" -eq 1 ]]; then
   REMOTE_REF="refs/remotes/origin/$BRANCH"
   git show-ref --verify --quiet "$REMOTE_REF" || {
@@ -75,9 +94,10 @@ else
   git fetch --quiet origin "refs/heads/$BRANCH"
   git merge-base --is-ancestor "$COMMIT" FETCH_HEAD || { echo "Commit is not pushed to origin/$BRANCH." >&2; exit 2; }
 fi
-RESOLVED_IMAGE="$(python3 scripts/resolve_datasphere_runtime_image.py --repository "${DATASPHERE_VERTEX_CPU_RUNTIME_REPOSITORY:-ghcr.io/kondachello/hallu-smiles-datasphere-vertex-cpu}" --commit "$COMMIT" --wait-seconds "${DATASPHERE_RUNTIME_WAIT_SECONDS:-1800}")"
+IMAGE_SOURCE_COMMIT="${RUNTIME_IMAGE_SOURCE_COMMIT:-$COMMIT}"
+RESOLVED_IMAGE="$(python3 scripts/resolve_datasphere_runtime_image.py --repository "${DATASPHERE_VERTEX_CPU_RUNTIME_REPOSITORY:-ghcr.io/kondachello/hallu-smiles-datasphere-vertex-cpu}" --commit "$IMAGE_SOURCE_COMMIT" --wait-seconds "${DATASPHERE_RUNTIME_WAIT_SECONDS:-1800}")"
 if [[ -n "$IMAGE" && "$IMAGE" != "$RESOLVED_IMAGE" ]]; then
-  echo "--docker-image does not match the immutable runtime published for source commit $COMMIT." >&2
+  echo "--docker-image does not match the immutable runtime published for image source commit $IMAGE_SOURCE_COMMIT." >&2
   echo "Expected: $RESOLVED_IMAGE" >&2
   exit 2
 fi
@@ -94,6 +114,7 @@ python3 scripts/render_datasphere_vertex_qa_pilot_job.py --commit "$COMMIT" --ru
   --concurrency "$CONCURRENCY" --timeout-seconds "$TIMEOUT_SECONDS" \
   "${QA_MANIFEST_SOURCE_ARGS[@]}" \
   "${FORCE_CACHE_ONLY_ARGS[@]}" \
+  "${RUNTIME_IMAGE_SOURCE_ARGS[@]}" \
   "${EXCLUDE_SOURCE_ARGS[@]}" --output "$RENDERED"
 python3 scripts/validate_datasphere_job.py --job "$RENDERED" --repo-root .
 datasphere --profile "$PROFILE" project get --id "$PROJECT_ID" >/dev/null

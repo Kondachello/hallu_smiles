@@ -283,6 +283,8 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "support-critical-v1-${GATEWAY_MANIFEST_SHA256}" in runner
     assert "check_support_critical_gateway_probe.py" in runner
     assert "preflight_support_critical_resilience.py" in runner
+    assert "preflight_support_critical_cache.py" in runner
+    assert 'EXPECTED_RUNTIME_IMAGE_SOURCE_COMMIT' in runner
     assert 'hallu-vertex-qa-support-critical-checkpoint-v1' in runner
     assert "support-critical-live-usage.jsonl" in runner
     assert "strict-cache-fill-usage.jsonl" in runner
@@ -293,6 +295,9 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "verify_cache_replay.py" in runner
     assert "vllm" not in runner.lower()
     subprocess.run(["bash", "-n", str(SCRIPTS / "run_datasphere_vertex_cpu_qa_pilot.sh")], check=True)
+    submitter = (SCRIPTS / "submit_datasphere_vertex_qa_pilot.sh").read_text(encoding="utf-8")
+    assert "--runtime-image-source-commit" in submitter
+    assert "fixed force-cache-only recovery" in submitter
 
 
 def test_cpu_vertex_qa_job_defaults_to_platform_deadline_for_resumable_long_runs(tmp_path):
@@ -365,6 +370,38 @@ def test_cpu_vertex_qa_job_pins_a_committed_r12_nested_manifest(tmp_path):
     ], text=True, capture_output=True)
     assert missing_quarantine.returncode != 0
     assert "must explicitly quarantine" in missing_quarantine.stderr
+
+
+def test_cpu_vertex_qa_job_allows_only_the_attested_r12_runtime_override(tmp_path):
+    source = "datasphere/manifests/support-critical-r12-nested-300.json"
+    r12_source = "1218ae7b22ded57466762152f4766eee267cc492"
+    r12_image = (
+        "ghcr.io/kondachello/hallu-smiles-datasphere-vertex-cpu@"
+        "sha256:21052ddca620c8ef9d8d6b9c17a846e9bb7394cfdb5621d93f842fc0a05412f6"
+    )
+    rendered = tmp_path / "r12-runtime-recovery.yaml"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_qa_pilot_job.py"),
+        "--commit", "f" * 40, "--runtime-image-source-commit", r12_source,
+        "--run-id", "vertex-300qa-r12-runtime", "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--docker-image", r12_image,
+        "--qa-sample-size", "300", "--qa-test-fraction", "0.2", "--cv-folds", "5",
+        "--concurrency", "1", "--force-cache-only", "--qa-manifest-source", source,
+        "--output", str(rendered),
+    ], check=True)
+    assert f'EXPECTED_RUNTIME_IMAGE_SOURCE_COMMIT="{r12_source}"' in rendered.read_text(encoding="utf-8")
+
+    rejected = subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_qa_pilot_job.py"),
+        "--commit", "f" * 40, "--runtime-image-source-commit", r12_source,
+        "--run-id", "vertex-300qa-bad-runtime", "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--docker-image", IMAGE,
+        "--qa-sample-size", "300", "--qa-test-fraction", "0.2", "--cv-folds", "5",
+        "--concurrency", "1", "--force-cache-only", "--qa-manifest-source", source,
+        "--output", str(tmp_path / "must-not-render.yaml"),
+    ], text=True, capture_output=True)
+    assert rejected.returncode != 0
+    assert "fixed R12 image" in rejected.stderr
 
 
 def test_cpu_dockerfile_is_pinned_and_has_no_llama_or_vllm(tmp_path):

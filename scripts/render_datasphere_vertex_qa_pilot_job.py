@@ -20,6 +20,14 @@ TEMPLATE = ROOT / "datasphere/jobs/vertex-cpu-qa-pilot.template.yaml"
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# This is the attested R12 image that produced the persistent cache lineage.
+# A cache-only nested study may run newer orchestration code against this
+# immutable runtime only to reproduce its S-BERT/evidence-selection behaviour.
+R12_RUNTIME_SOURCE_COMMIT = "1218ae7b22ded57466762152f4766eee267cc492"
+R12_RUNTIME_IMAGE = (
+    "ghcr.io/kondachello/hallu-smiles-datasphere-vertex-cpu@"
+    "sha256:21052ddca620c8ef9d8d6b9c17a846e9bb7394cfdb5621d93f842fc0a05412f6"
+)
 
 from src.sampling import qa_sample_quotas
 
@@ -31,6 +39,13 @@ def main() -> None:
     parser.add_argument("--gateway-url", required=True)
     parser.add_argument("--gateway-manifest-sha256", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--runtime-image-source-commit",
+        help=(
+            "source commit recorded in the immutable runtime image; an override is "
+            "restricted to the verified R12 cache-only recovery image"
+        ),
+    )
     parser.add_argument("--qa-sample-size", type=int, default=20)
     parser.add_argument("--qa-test-fraction", default="0.2")
     parser.add_argument("--cv-folds", type=int, default=5)
@@ -66,6 +81,9 @@ def main() -> None:
     args = parser.parse_args()
     if not COMMIT_RE.fullmatch(args.commit):
         raise SystemExit("--commit must be a lowercase full 40-character Git SHA")
+    runtime_image_source_commit = args.runtime_image_source_commit or args.commit
+    if not COMMIT_RE.fullmatch(runtime_image_source_commit):
+        raise SystemExit("--runtime-image-source-commit must be a lowercase full 40-character Git SHA")
     if not RUN_ID_RE.fullmatch(args.run_id):
         raise SystemExit("--run-id must match [a-z0-9][a-z0-9-]{0,47}")
     if not SHA256_RE.fullmatch(args.gateway_manifest_sha256):
@@ -115,6 +133,17 @@ def main() -> None:
         require_runtime_image(runtime_image, registry=args.docker_image is not None)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
+    if runtime_image_source_commit != args.commit:
+        if not (
+            args.force_cache_only
+            and args.qa_manifest_source
+            and runtime_image_source_commit == R12_RUNTIME_SOURCE_COMMIT
+            and runtime_image == R12_RUNTIME_IMAGE
+        ):
+            raise SystemExit(
+                "a runtime/source commit mismatch is allowed only for the fixed R12 "
+                "image in a force-cache-only fixed-manifest recovery"
+            )
     docker_block = f"  docker: {runtime_image}" if args.docker_image_id else f"  docker:\n    image: {runtime_image}"
     run_command = (
         "bash source/scripts/run_datasphere_vertex_cpu_qa_pilot.sh"
@@ -127,6 +156,7 @@ def main() -> None:
     rendered = TEMPLATE.read_text(encoding="utf-8")
     rendered = (rendered.replace("__GIT_COMMIT__", args.commit).replace("__RUN_ID__", args.run_id)
         .replace("__GATEWAY_URL__", gateway_url).replace("__DOCKER_IMAGE_ID__", runtime_image)
+        .replace("__RUNTIME_IMAGE_SOURCE_COMMIT__", runtime_image_source_commit)
         .replace("__GATEWAY_MANIFEST_SHA256__", args.gateway_manifest_sha256)
         .replace("__QA_SAMPLE_SIZE__", str(args.qa_sample_size))
         .replace("__QA_TEST_FRACTION__", str(args.qa_test_fraction))

@@ -25,13 +25,25 @@ def main() -> None:
     parser.add_argument("--python", required=True)
     parser.add_argument("--runtime-manifest", required=True)
     parser.add_argument("--embedding-path", required=True)
-    parser.add_argument("--expected-source-commit", required=True)
+    expected_commit = parser.add_mutually_exclusive_group(required=True)
+    expected_commit.add_argument(
+        "--expected-runtime-source-commit",
+        dest="expected_runtime_source_commit",
+        help="commit recorded in the immutable CPU runtime image manifest",
+    )
+    # Keep the probe runner compatible: it always uses one source identity for
+    # both the checked-out code and the immutable image.
+    expected_commit.add_argument(
+        "--expected-source-commit",
+        dest="expected_runtime_source_commit",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
     manifest = json.loads(Path(args.runtime_manifest).read_text(encoding="utf-8"))
     if manifest.get("runtime_protocol") != PROTOCOL:
         raise RuntimeError("unexpected CPU runtime protocol")
-    if manifest.get("source_commit") != args.expected_source_commit:
+    if manifest.get("source_commit") != args.expected_runtime_source_commit:
         raise RuntimeError("CPU runtime image was built from another source commit")
     if manifest.get("embedding_path") != args.embedding_path:
         raise RuntimeError("CPU runtime embedding path mismatch")
