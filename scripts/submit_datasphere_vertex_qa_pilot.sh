@@ -16,6 +16,7 @@ Options:
   --concurrency N         Gateway requests in flight (default: 1)
   --qa-manifest-source P  Committed fixed QA manifest (required for cache-only sub-studies)
   --force-cache-only      Fail on every inference cache miss; never call Gemini
+  --cache-preflight-only  Stop after the complete no-network cache preflight
   --exclude-source-id ID  Explicit source-level quarantine recorded in metrics/audit (repeatable)
   --timeout-seconds N     Optional in-container wall-time ceiling; 0 uses the DataSphere deadline (default: 0)
   --commit SHA            Pushed source commit (default: HEAD)
@@ -28,7 +29,7 @@ Options:
 EOF
 }
 PROJECT_ID=""; RUN_ID=""; GATEWAY_URL=""; GATE_ARTIFACT=""; BRANCH="$(git branch --show-current)"; COMMIT="$(git rev-parse HEAD)"; RUNTIME_IMAGE_SOURCE_COMMIT=""; IMAGE=""; PROFILE="default"; SKIP_ORIGIN_FETCH=0
-QA_SAMPLE_SIZE=100; QA_TEST_FRACTION="0.2"; CV_FOLDS=5; CONCURRENCY=1; TIMEOUT_SECONDS=0; FORCE_CACHE_ONLY=0; QA_MANIFEST_SOURCE=""; EXCLUDE_SOURCE_ARGS=()
+QA_SAMPLE_SIZE=100; QA_TEST_FRACTION="0.2"; CV_FOLDS=5; CONCURRENCY=1; TIMEOUT_SECONDS=0; FORCE_CACHE_ONLY=0; CACHE_PREFLIGHT_ONLY=0; QA_MANIFEST_SOURCE=""; EXCLUDE_SOURCE_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-id) PROJECT_ID="$2"; shift 2 ;;
@@ -47,6 +48,7 @@ while [[ $# -gt 0 ]]; do
     --concurrency) CONCURRENCY="$2"; shift 2 ;;
     --qa-manifest-source) QA_MANIFEST_SOURCE="$2"; shift 2 ;;
     --force-cache-only) FORCE_CACHE_ONLY=1; shift ;;
+    --cache-preflight-only) CACHE_PREFLIGHT_ONLY=1; shift ;;
     --exclude-source-id) EXCLUDE_SOURCE_ARGS+=(--exclude-source-id "$2"); shift 2 ;;
     --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -58,6 +60,14 @@ test -f "$GATE_ARTIFACT" || { echo "3-QA gate artifact is missing: $GATE_ARTIFAC
 FORCE_CACHE_ONLY_ARGS=()
 if [[ "$FORCE_CACHE_ONLY" -eq 1 ]]; then
   FORCE_CACHE_ONLY_ARGS=(--force-cache-only)
+fi
+CACHE_PREFLIGHT_ONLY_ARGS=()
+if [[ "$CACHE_PREFLIGHT_ONLY" -eq 1 ]]; then
+  [[ "$FORCE_CACHE_ONLY" -eq 1 && -n "$QA_MANIFEST_SOURCE" ]] || {
+    echo "--cache-preflight-only requires --force-cache-only and --qa-manifest-source." >&2
+    exit 2
+  }
+  CACHE_PREFLIGHT_ONLY_ARGS=(--cache-preflight-only)
 fi
 QA_MANIFEST_SOURCE_ARGS=()
 if [[ -n "$QA_MANIFEST_SOURCE" ]]; then
@@ -114,6 +124,7 @@ python3 scripts/render_datasphere_vertex_qa_pilot_job.py --commit "$COMMIT" --ru
   --concurrency "$CONCURRENCY" --timeout-seconds "$TIMEOUT_SECONDS" \
   "${QA_MANIFEST_SOURCE_ARGS[@]}" \
   "${FORCE_CACHE_ONLY_ARGS[@]}" \
+  "${CACHE_PREFLIGHT_ONLY_ARGS[@]}" \
   "${RUNTIME_IMAGE_SOURCE_ARGS[@]}" \
   "${EXCLUDE_SOURCE_ARGS[@]}" --output "$RENDERED"
 python3 scripts/validate_datasphere_job.py --job "$RENDERED" --repo-root .

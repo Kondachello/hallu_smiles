@@ -19,6 +19,7 @@ QA_TEST_FRACTION="${QA_TEST_FRACTION:-0.2}"
 QA_CV_FOLDS="${QA_CV_FOLDS:-5}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
 QA_FORCE_CACHE_ONLY="${QA_FORCE_CACHE_ONLY:-0}"
+QA_CACHE_PREFLIGHT_ONLY="${QA_CACHE_PREFLIGHT_ONLY:-0}"
 QA_MANIFEST_SOURCE="${QA_MANIFEST_SOURCE:-}"
 QA_MANIFEST_SHA256="${QA_MANIFEST_SHA256:-}"
 # A DataSphere Job must not spend days repeating one 408/429.  This is a
@@ -414,6 +415,35 @@ if [[ "$QA_FORCE_CACHE_ONLY" == "1" ]]; then
   "$CLIENT_PYTHON" "$ROOT/scripts/preflight_support_critical_cache.py" \
     --config "$CRITICAL_CONFIG" --data-dir "$DATA_DIR" --qa-manifest "$QA_MANIFEST" \
     "${EXCLUDE_SOURCE_ARGS[@]}" --report "$CRITICAL_CACHE_PREFLIGHT"
+fi
+
+if [[ "$QA_CACHE_PREFLIGHT_ONLY" == "1" ]]; then
+  [[ "$QA_FORCE_CACHE_ONLY" == "1" && -n "$QA_MANIFEST_SOURCE" ]] || {
+    echo "QA_CACHE_PREFLIGHT_ONLY requires a fixed force-cache-only manifest" >&2
+    exit 2
+  }
+  "$CLIENT_PYTHON" - "$RUN_ROOT/cache-preflight-only.json" "$KG_CACHE_PREFLIGHT" \
+    "$CRITICAL_RESILIENCE_PREFLIGHT" "$CRITICAL_CACHE_PREFLIGHT" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+reports = {
+    'kg': json.loads(Path(sys.argv[2]).read_text(encoding='utf-8')),
+    'resilience': json.loads(Path(sys.argv[3]).read_text(encoding='utf-8')),
+    'support_critical': json.loads(Path(sys.argv[4]).read_text(encoding='utf-8')),
+}
+Path(sys.argv[1]).write_text(json.dumps({
+    'protocol': 'hallu-support-critical-cache-preflight-only-v1',
+    'completed_at_utc': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+    'force_cache_only': True,
+    'inference_calls': 0,
+    'reports': reports,
+}, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+PY
+  echo "[cache-preflight-only] complete; no scoring, tuning, schema probe, or inference was run"
+  exit 0
 fi
 
 # Probe the exact three new schemas before baseline reports/tuning. It does

@@ -246,6 +246,7 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert 'QA_TEST_FRACTION="0.2"' in command
     assert 'QA_CV_FOLDS="5"' in command
     assert 'QA_FORCE_CACHE_ONLY="0"' in command
+    assert 'QA_CACHE_PREFLIGHT_ONLY="0"' in command
     assert 'QA_MANIFEST_SOURCE=""' in command
     assert 'QA_MANIFEST_SHA256=""' in command
     assert 'QA_EXCLUDE_SOURCE_IDS="12448"' in command
@@ -267,6 +268,8 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert "--cache-only" in runner
     assert "LLM_MAX_RETRIES=\"${LLM_MAX_RETRIES:-12}\"" in runner
     assert "QA_FORCE_CACHE_ONLY=\"${QA_FORCE_CACHE_ONLY:-0}\"" in runner
+    assert "QA_CACHE_PREFLIGHT_ONLY=\"${QA_CACHE_PREFLIGHT_ONLY:-0}\"" in runner
+    assert "[cache-preflight-only] complete; no scoring, tuning, schema probe, or inference was run" in runner
     assert "force mode enabled: any missing inference entry is a hard failure" in runner
     assert "--max-tokens 16384 --concurrency \"$LLM_CONCURRENCY\" --max-retries \"$LLM_MAX_RETRIES\"" in runner
     assert "--cv-folds \"$QA_CV_FOLDS\"" in runner
@@ -328,6 +331,33 @@ def test_cpu_vertex_qa_job_can_forbid_inference_cache_misses(tmp_path):
         "--concurrency", "1", "--exclude-source-id", "12448", "--force-cache-only",
         "--output", str(rendered),
     ], check=True)
+
+
+def test_cpu_vertex_qa_job_can_run_only_the_cache_preflight(tmp_path):
+    rendered = tmp_path / "vertex-500qa-cache-preflight.yaml"
+    source = "datasphere/manifests/support-critical-r12-nested-500.json"
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_qa_pilot_job.py"),
+        "--commit", "f" * 40, "--run-id", "vertex-500qa-cache-preflight",
+        "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--docker-image", IMAGE,
+        "--qa-sample-size", "500", "--qa-test-fraction", "0.2", "--cv-folds", "5",
+        "--concurrency", "1", "--exclude-source-id", "12448", "--force-cache-only",
+        "--cache-preflight-only", "--qa-manifest-source", source, "--output", str(rendered),
+    ], check=True)
+    command = str(yaml.safe_load(rendered.read_text(encoding="utf-8"))["cmd"])
+    assert 'QA_CACHE_PREFLIGHT_ONLY="1"' in command
+
+    rejected = subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_qa_pilot_job.py"),
+        "--commit", "f" * 40, "--run-id", "vertex-500qa-bad-cache-preflight",
+        "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--docker-image", IMAGE,
+        "--qa-sample-size", "500", "--qa-test-fraction", "0.2", "--cv-folds", "5",
+        "--concurrency", "1", "--cache-preflight-only", "--output", str(tmp_path / "bad.yaml"),
+    ], text=True, capture_output=True)
+    assert rejected.returncode != 0
+    assert "requires --force-cache-only and --qa-manifest-source" in rejected.stderr
     job = yaml.safe_load(rendered.read_text(encoding="utf-8"))
     assert 'QA_FORCE_CACHE_ONLY="1"' in str(job["cmd"])
     subprocess.run([

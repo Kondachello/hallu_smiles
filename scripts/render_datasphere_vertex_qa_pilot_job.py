@@ -60,6 +60,14 @@ def main() -> None:
         help="forbid all inference cache misses during a recovery-only Job",
     )
     parser.add_argument(
+        "--cache-preflight-only",
+        action="store_true",
+        help=(
+            "run the complete no-network support-critical cache preflight and stop "
+            "before any scoring, tuning, or gateway schema probe"
+        ),
+    )
+    parser.add_argument(
         "--exclude-source-id",
         action="append",
         default=[],
@@ -96,6 +104,8 @@ def main() -> None:
         raise SystemExit("--cv-folds must be between 2 and the selected train source count")
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be positive")
+    if args.cache_preflight_only and not (args.force_cache_only and args.qa_manifest_source):
+        raise SystemExit("--cache-preflight-only requires --force-cache-only and --qa-manifest-source")
     manifest_sha256 = ""
     if args.qa_manifest_source:
         source = Path(args.qa_manifest_source)
@@ -163,6 +173,7 @@ def main() -> None:
         .replace("__QA_CV_FOLDS__", str(args.cv_folds))
         .replace("__LLM_CONCURRENCY__", str(args.concurrency))
         .replace("__QA_FORCE_CACHE_ONLY__", "1" if args.force_cache_only else "0")
+        .replace("__QA_CACHE_PREFLIGHT_ONLY__", "1" if args.cache_preflight_only else "0")
         .replace("__QA_MANIFEST_SOURCE__", args.qa_manifest_source or "")
         .replace("__QA_MANIFEST_SHA256__", manifest_sha256)
         .replace("__QA_EXCLUDE_SOURCE_IDS__", ",".join(excluded_source_ids))
