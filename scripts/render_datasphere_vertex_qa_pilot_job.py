@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -33,6 +35,10 @@ def main() -> None:
     parser.add_argument("--qa-test-fraction", default="0.2")
     parser.add_argument("--cv-folds", type=int, default=5)
     parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument(
+        "--qa-manifest-source",
+        help="safe repository-relative path to a committed fixed QA manifest",
+    )
     parser.add_argument(
         "--force-cache-only",
         action="store_true",
@@ -72,11 +78,35 @@ def main() -> None:
         raise SystemExit("--cv-folds must be between 2 and the selected train source count")
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be positive")
+    manifest_sha256 = ""
+    if args.qa_manifest_source:
+        source = Path(args.qa_manifest_source)
+        if source.is_absolute() or ".." in source.parts or not re.fullmatch(r"[A-Za-z0-9._/-]+", args.qa_manifest_source):
+            raise SystemExit("--qa-manifest-source must be a safe repository-relative path")
+        manifest = ROOT / source
+        if not manifest.is_file():
+            raise SystemExit(f"--qa-manifest-source does not exist: {args.qa_manifest_source}")
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"--qa-manifest-source is not JSON: {exc}") from exc
+        expected_quotas = {"train_sources": train_sources, "test_sources": args.qa_sample_size - train_sources}
+        if payload.get("version") != 1 or payload.get("task") != "QA" or payload.get("quotas") != expected_quotas:
+            raise SystemExit("--qa-manifest-source does not match the requested v1 QA sample shape")
+        records = payload.get("records")
+        if not isinstance(records, list) or len(records) != args.qa_sample_size:
+            raise SystemExit("--qa-manifest-source record count does not match --qa-sample-size")
+        if not args.force_cache_only:
+            raise SystemExit("--qa-manifest-source requires --force-cache-only")
+        manifest_source_ids = {str(record.get("source_id", "")) for record in records}
+        manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
     excluded_source_ids = [str(source_id) for source_id in args.exclude_source_id]
     if any(not re.fullmatch(r"[A-Za-z0-9._:-]+", source_id) for source_id in excluded_source_ids):
         raise SystemExit("--exclude-source-id contains an invalid source ID")
     if len(set(excluded_source_ids)) != len(excluded_source_ids):
         raise SystemExit("--exclude-source-id cannot be repeated for the same source")
+    if args.qa_manifest_source and "12448" in manifest_source_ids and "12448" not in excluded_source_ids:
+        raise SystemExit("a fixed manifest containing source 12448 must explicitly quarantine it")
     if args.timeout_seconds < 0 or 0 < args.timeout_seconds < 60:
         raise SystemExit("--timeout-seconds must be 0 or at least 60")
     try:
@@ -103,6 +133,8 @@ def main() -> None:
         .replace("__QA_CV_FOLDS__", str(args.cv_folds))
         .replace("__LLM_CONCURRENCY__", str(args.concurrency))
         .replace("__QA_FORCE_CACHE_ONLY__", "1" if args.force_cache_only else "0")
+        .replace("__QA_MANIFEST_SOURCE__", args.qa_manifest_source or "")
+        .replace("__QA_MANIFEST_SHA256__", manifest_sha256)
         .replace("__QA_EXCLUDE_SOURCE_IDS__", ",".join(excluded_source_ids))
         .replace("__JOB_RUN_COMMAND__", run_command)
         .replace("__DOCKER_ENV_BLOCK__", docker_block))

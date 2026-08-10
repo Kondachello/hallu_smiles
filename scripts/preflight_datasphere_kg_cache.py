@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,7 +16,12 @@ if str(ROOT) not in sys.path:
 from src.cache_preflight import manifest_sha256, verify_kg_cache
 from src.config import load_config
 from src.data import load_instances
-from src.sampling import qa_sample_quotas, select_qa_sample, write_manifest
+from src.sampling import (
+    load_manifest_instances,
+    qa_sample_quotas,
+    select_qa_sample,
+    write_manifest,
+)
 
 
 def main() -> None:
@@ -25,6 +31,13 @@ def main() -> None:
     parser.add_argument("--qa-sample-size", type=int, required=True)
     parser.add_argument("--qa-test-fraction", required=True)
     parser.add_argument("--sample-seed", type=int, default=42)
+    parser.add_argument(
+        "--input-manifest",
+        help=(
+            "committed fixed QA manifest to validate and copy; it replaces "
+            "automatic sampling and is required for a cache-only sub-study"
+        ),
+    )
     parser.add_argument("--manifest-output", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument(
@@ -53,20 +66,39 @@ def main() -> None:
     all_instances = load_instances(
         args.data_dir, exclude_implicit_true=bool(cfg.data.exclude_implicit_true)
     )
-    selected = select_qa_sample(
-        all_instances,
-        seed=args.sample_seed,
-        train_sources=train_sources,
-        test_sources=test_sources,
-    )
     manifest_output = Path(args.manifest_output)
-    write_manifest(
-        manifest_output,
-        selected,
-        seed=args.sample_seed,
-        train_sources=train_sources,
-        test_sources=test_sources,
-    )
+    if args.input_manifest:
+        source = Path(args.input_manifest)
+        selected = load_manifest_instances(source, all_instances)
+        if len(selected) != args.qa_sample_size:
+            raise SystemExit(
+                f"input manifest selects {len(selected)} QA responses, "
+                f"expected {args.qa_sample_size}"
+            )
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        if payload.get("quotas") != {
+            "train_sources": train_sources,
+            "test_sources": test_sources,
+        }:
+            raise SystemExit("input manifest quotas do not match the requested QA sample size")
+        manifest_output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = manifest_output.with_name(f".{manifest_output.name}.{os.getpid()}.tmp")
+        temporary.write_bytes(source.read_bytes())
+        os.replace(temporary, manifest_output)
+    else:
+        selected = select_qa_sample(
+            all_instances,
+            seed=args.sample_seed,
+            train_sources=train_sources,
+            test_sources=test_sources,
+        )
+        write_manifest(
+            manifest_output,
+            selected,
+            seed=args.sample_seed,
+            train_sources=train_sources,
+            test_sources=test_sources,
+        )
     manifest = json.loads(manifest_output.read_text(encoding="utf-8"))
     report = verify_kg_cache(
         cfg, selected, excluded_source_ids=args.exclude_source_id

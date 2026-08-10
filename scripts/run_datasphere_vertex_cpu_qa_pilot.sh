@@ -18,6 +18,8 @@ QA_TEST_FRACTION="${QA_TEST_FRACTION:-0.2}"
 QA_CV_FOLDS="${QA_CV_FOLDS:-5}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
 QA_FORCE_CACHE_ONLY="${QA_FORCE_CACHE_ONLY:-0}"
+QA_MANIFEST_SOURCE="${QA_MANIFEST_SOURCE:-}"
+QA_MANIFEST_SHA256="${QA_MANIFEST_SHA256:-}"
 # A DataSphere Job must not spend days repeating one 408/429.  This is a
 # per-request circuit breaker (not a Job watchdog): completed entries remain
 # atomic on project disk, and a retry can resume them.  Twelve 90-second
@@ -100,6 +102,35 @@ read -r QA_TRAIN_SOURCES QA_TEST_SOURCES <<< "$QA_QUOTAS"
   echo "QA_FORCE_CACHE_ONLY must be 0 or 1" >&2
   exit 2
 }
+MANIFEST_SOURCE_ARGS=()
+PREFLIGHT_MISSING_ARGS=(--allow-missing)
+if [[ -n "$QA_MANIFEST_SOURCE" || -n "$QA_MANIFEST_SHA256" ]]; then
+  [[ -n "$QA_MANIFEST_SOURCE" && "$QA_MANIFEST_SOURCE" =~ ^[A-Za-z0-9._/-]+$ ]] \
+    && [[ "$QA_MANIFEST_SOURCE" != /* ]] \
+    && [[ ! "$QA_MANIFEST_SOURCE" =~ (^|/)\.\.(/|$) ]] || {
+      echo "QA_MANIFEST_SOURCE must be a safe relative source path" >&2
+      exit 2
+    }
+  [[ "$QA_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "QA_MANIFEST_SHA256 must be the committed manifest SHA-256" >&2
+    exit 2
+  }
+  test -f "$ROOT/$QA_MANIFEST_SOURCE" || {
+    echo "committed QA manifest is missing: $QA_MANIFEST_SOURCE" >&2
+    exit 2
+  }
+  actual_manifest_sha256="$(sha256sum "$ROOT/$QA_MANIFEST_SOURCE" | awk '{print $1}')"
+  test "$actual_manifest_sha256" = "$QA_MANIFEST_SHA256" || {
+    echo "committed QA manifest checksum mismatch" >&2
+    exit 2
+  }
+  [[ "$QA_FORCE_CACHE_ONLY" == "1" ]] || {
+    echo "a fixed historical manifest must run with QA_FORCE_CACHE_ONLY=1" >&2
+    exit 2
+  }
+  MANIFEST_SOURCE_ARGS=(--input-manifest "$ROOT/$QA_MANIFEST_SOURCE")
+  PREFLIGHT_MISSING_ARGS=()
+fi
 EXCLUDE_SOURCE_ARGS=()
 if [[ -n "$QA_EXCLUDE_SOURCE_IDS" ]]; then
   IFS=',' read -r -a EXCLUDED_SOURCE_IDS <<< "$QA_EXCLUDE_SOURCE_IDS"
@@ -117,7 +148,7 @@ if [[ -n "$QA_EXCLUDE_SOURCE_IDS" ]]; then
     EXCLUDE_SOURCE_ARGS+=(--exclude-source-id "$source_id")
   done
 fi
-echo "[qa-sample] total=$QA_SAMPLE_SIZE train=$QA_TRAIN_SOURCES test=$QA_TEST_SOURCES cv_folds=$QA_CV_FOLDS max_retries=$LLM_MAX_RETRIES exclusions=${QA_EXCLUDE_SOURCE_IDS:-none}"
+echo "[qa-sample] total=$QA_SAMPLE_SIZE train=$QA_TRAIN_SOURCES test=$QA_TEST_SOURCES cv_folds=$QA_CV_FOLDS max_retries=$LLM_MAX_RETRIES exclusions=${QA_EXCLUDE_SOURCE_IDS:-none} manifest=${QA_MANIFEST_SOURCE:-generated}"
 cp "$RUNTIME_MANIFEST" "$RUN_ROOT/runtime-manifest.json"
 cp /opt/hallu/manifests/client.freeze.txt "$RUN_ROOT/client.freeze.txt"
 
@@ -363,7 +394,7 @@ done
 "$CLIENT_PYTHON" "$ROOT/scripts/preflight_datasphere_kg_cache.py" \
   --config "$BASELINE_CONFIG" --data-dir "$DATA_DIR" \
   --qa-sample-size "$QA_SAMPLE_SIZE" --qa-test-fraction "$QA_TEST_FRACTION" \
-  --manifest-output "$QA_MANIFEST" --report "$KG_CACHE_PREFLIGHT" --allow-missing \
+  --manifest-output "$QA_MANIFEST" --report "$KG_CACHE_PREFLIGHT" "${MANIFEST_SOURCE_ARGS[@]}" "${PREFLIGHT_MISSING_ARGS[@]}" \
   "${EXCLUDE_SOURCE_ARGS[@]}"
 
 # Check every selected answer's deterministic segmentation and no-network

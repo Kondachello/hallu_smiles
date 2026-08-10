@@ -246,6 +246,8 @@ def test_cpu_vertex_qa_job_binds_the_gateway_and_parameterizes_the_sample(tmp_pa
     assert 'QA_TEST_FRACTION="0.2"' in command
     assert 'QA_CV_FOLDS="5"' in command
     assert 'QA_FORCE_CACHE_ONLY="0"' in command
+    assert 'QA_MANIFEST_SOURCE=""' in command
+    assert 'QA_MANIFEST_SHA256=""' in command
     assert 'QA_EXCLUDE_SOURCE_IDS="12448"' in command
     assert 'tee "$RUN_ROOT/qa.stdout.log"' in command
     assert "timeout --signal=TERM --kill-after=60s 43200" in command
@@ -327,6 +329,42 @@ def test_cpu_vertex_qa_job_can_forbid_inference_cache_misses(tmp_path):
         sys.executable, str(SCRIPTS / "validate_datasphere_job.py"),
         "--job", str(rendered), "--repo-root", str(ROOT),
     ], check=True)
+
+
+def test_cpu_vertex_qa_job_pins_a_committed_r12_nested_manifest(tmp_path):
+    rendered = tmp_path / "vertex-500qa-r12-nested.yaml"
+    source = "datasphere/manifests/support-critical-r12-nested-500.json"
+    completed = subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_qa_pilot_job.py"),
+        "--commit", "f" * 40, "--run-id", "vertex-500qa-r12-nested",
+        "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--docker-image", IMAGE,
+        "--qa-sample-size", "500", "--qa-test-fraction", "0.2", "--cv-folds", "5",
+        "--concurrency", "1", "--force-cache-only", "--exclude-source-id", "12448",
+        "--qa-manifest-source", source, "--output", str(rendered),
+    ], check=True, text=True, capture_output=True)
+    assert completed.stdout.strip() == str(rendered)
+    command = str(yaml.safe_load(rendered.read_text(encoding="utf-8"))["cmd"])
+    expected_sha256 = __import__("hashlib").sha256((ROOT / source).read_bytes()).hexdigest()
+    assert f'QA_MANIFEST_SOURCE="{source}"' in command
+    assert f'QA_MANIFEST_SHA256="{expected_sha256}"' in command
+    assert 'QA_FORCE_CACHE_ONLY="1"' in command
+    subprocess.run([
+        sys.executable, str(SCRIPTS / "validate_datasphere_job.py"),
+        "--job", str(rendered), "--repo-root", str(ROOT),
+    ], check=True)
+
+    missing_quarantine = subprocess.run([
+        sys.executable, str(SCRIPTS / "render_datasphere_vertex_qa_pilot_job.py"),
+        "--commit", "f" * 40, "--run-id", "vertex-500qa-noquarantine",
+        "--gateway-url", "https://gateway.example.run.app",
+        "--gateway-manifest-sha256", "a" * 64, "--docker-image", IMAGE,
+        "--qa-sample-size", "500", "--qa-test-fraction", "0.2", "--cv-folds", "5",
+        "--concurrency", "1", "--force-cache-only", "--qa-manifest-source", source,
+        "--output", str(tmp_path / "must-not-render.yaml"),
+    ], text=True, capture_output=True)
+    assert missing_quarantine.returncode != 0
+    assert "must explicitly quarantine" in missing_quarantine.stderr
 
 
 def test_cpu_dockerfile_is_pinned_and_has_no_llama_or_vllm(tmp_path):
