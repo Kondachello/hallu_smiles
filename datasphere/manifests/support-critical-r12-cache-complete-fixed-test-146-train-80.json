@@ -1,0 +1,1631 @@
+{
+  "version": 1,
+  "task": "QA",
+  "seed": 42,
+  "quotas": {
+    "train_sources": 80,
+    "test_sources": 146
+  },
+  "records": [
+    {
+      "source_id": "12167",
+      "response_id": "16056",
+      "split": "test",
+      "y": 1,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "12177",
+      "response_id": "16121",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12182",
+      "response_id": "16147",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12218",
+      "response_id": "16360",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "12228",
+      "response_id": "16418",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "12234",
+      "response_id": "16452",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "12236",
+      "response_id": "16469",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12243",
+      "response_id": "16510",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "12252",
+      "response_id": "16560",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "12264",
+      "response_id": "16634",
+      "split": "test",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "12269",
+      "response_id": "16662",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "12273",
+      "response_id": "16690",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "12287",
+      "response_id": "16771",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12291",
+      "response_id": "16798",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "12300",
+      "response_id": "16853",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12305",
+      "response_id": "16883",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12307",
+      "response_id": "16895",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12308",
+      "response_id": "16898",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "12309",
+      "response_id": "16902",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "12314",
+      "response_id": "16934",
+      "split": "test",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "12334",
+      "response_id": "17053",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12335",
+      "response_id": "17060",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "12342",
+      "response_id": "17104",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "12344",
+      "response_id": "17115",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "12358",
+      "response_id": "17199",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "12364",
+      "response_id": "17233",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12367",
+      "response_id": "17252",
+      "split": "test",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "12372",
+      "response_id": "17283",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "12391",
+      "response_id": "17394",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "12414",
+      "response_id": "17515",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12422",
+      "response_id": "17567",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12423",
+      "response_id": "17571",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "12455",
+      "response_id": "17754",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "14300",
+      "response_id": "11908",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "14318",
+      "response_id": "12012",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "14319",
+      "response_id": "12021",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14323",
+      "response_id": "12045",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14327",
+      "response_id": "12070",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "14334",
+      "response_id": "12105",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14339",
+      "response_id": "12136",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "14347",
+      "response_id": "12180",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "14353",
+      "response_id": "12216",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "14355",
+      "response_id": "12228",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "14357",
+      "response_id": "12244",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "14360",
+      "response_id": "12262",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "14366",
+      "response_id": "12297",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14373",
+      "response_id": "12330",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "14375",
+      "response_id": "12345",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14390",
+      "response_id": "12435",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14391",
+      "response_id": "12443",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "14392",
+      "response_id": "12445",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "14394",
+      "response_id": "12461",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "14396",
+      "response_id": "12472",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "14404",
+      "response_id": "12521",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "14405",
+      "response_id": "12523",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "14410",
+      "response_id": "12557",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "14418",
+      "response_id": "12602",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "14421",
+      "response_id": "12621",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14433",
+      "response_id": "12695",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "14435",
+      "response_id": "12702",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "14445",
+      "response_id": "12765",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14458",
+      "response_id": "12842",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "14468",
+      "response_id": "12902",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "14470",
+      "response_id": "12917",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15092",
+      "response_id": "13042",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15097",
+      "response_id": "13070",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15103",
+      "response_id": "13105",
+      "split": "test",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15107",
+      "response_id": "13128",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15108",
+      "response_id": "13137",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15111",
+      "response_id": "13156",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15112",
+      "response_id": "13161",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15120",
+      "response_id": "13210",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15124",
+      "response_id": "13231",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15130",
+      "response_id": "13262",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15135",
+      "response_id": "13290",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15138",
+      "response_id": "13313",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15143",
+      "response_id": "13340",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15147",
+      "response_id": "13367",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15149",
+      "response_id": "13376",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15158",
+      "response_id": "13429",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15160",
+      "response_id": "13442",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15164",
+      "response_id": "13464",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15168",
+      "response_id": "13488",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15175",
+      "response_id": "13532",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15180",
+      "response_id": "13564",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15206",
+      "response_id": "13716",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15210",
+      "response_id": "13741",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15238",
+      "response_id": "13910",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15239",
+      "response_id": "13915",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15243",
+      "response_id": "13938",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15269",
+      "response_id": "14097",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15275",
+      "response_id": "14131",
+      "split": "test",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15286",
+      "response_id": "14197",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15288",
+      "response_id": "14209",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15300",
+      "response_id": "14283",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15301",
+      "response_id": "14290",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15302",
+      "response_id": "14293",
+      "split": "test",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15308",
+      "response_id": "14323",
+      "split": "test",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15313",
+      "response_id": "14356",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15315",
+      "response_id": "14364",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15317",
+      "response_id": "14381",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15320",
+      "response_id": "14396",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15332",
+      "response_id": "14469",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15338",
+      "response_id": "14507",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15339",
+      "response_id": "14508",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15369",
+      "response_id": "14692",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15371",
+      "response_id": "14702",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15373",
+      "response_id": "14717",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15378",
+      "response_id": "14742",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15379",
+      "response_id": "14753",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15381",
+      "response_id": "14764",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15383",
+      "response_id": "14774",
+      "split": "test",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15388",
+      "response_id": "14806",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15390",
+      "response_id": "14815",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15395",
+      "response_id": "14846",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15397",
+      "response_id": "14860",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15402",
+      "response_id": "14887",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15420",
+      "response_id": "14998",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15422",
+      "response_id": "15010",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15438",
+      "response_id": "15104",
+      "split": "test",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15442",
+      "response_id": "15129",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15450",
+      "response_id": "15178",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15453",
+      "response_id": "15197",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15454",
+      "response_id": "15199",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15455",
+      "response_id": "15207",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15466",
+      "response_id": "15271",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15478",
+      "response_id": "15345",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15497",
+      "response_id": "15458",
+      "split": "test",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15498",
+      "response_id": "15465",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15501",
+      "response_id": "15482",
+      "split": "test",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15513",
+      "response_id": "15556",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15525",
+      "response_id": "15626",
+      "split": "test",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15529",
+      "response_id": "15648",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15533",
+      "response_id": "15677",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15535",
+      "response_id": "15685",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15539",
+      "response_id": "15713",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15542",
+      "response_id": "15731",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15543",
+      "response_id": "15735",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15546",
+      "response_id": "15755",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15550",
+      "response_id": "15774",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15551",
+      "response_id": "15781",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15552",
+      "response_id": "15786",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15572",
+      "response_id": "15903",
+      "split": "test",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15576",
+      "response_id": "15929",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15577",
+      "response_id": "15931",
+      "split": "test",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15583",
+      "response_id": "15971",
+      "split": "test",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12174",
+      "response_id": "16100",
+      "split": "train",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "12175",
+      "response_id": "16107",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "12190",
+      "response_id": "16192",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "12192",
+      "response_id": "16201",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12238",
+      "response_id": "16477",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12240",
+      "response_id": "16491",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "12247",
+      "response_id": "16531",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12304",
+      "response_id": "16872",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "12322",
+      "response_id": "16981",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12323",
+      "response_id": "16990",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "12333",
+      "response_id": "17051",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12361",
+      "response_id": "17214",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "12378",
+      "response_id": "17316",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "12379",
+      "response_id": "17327",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12382",
+      "response_id": "17341",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "12392",
+      "response_id": "17404",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "12401",
+      "response_id": "17453",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12426",
+      "response_id": "17585",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "12439",
+      "response_id": "17659",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "14294",
+      "response_id": "11873",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "14297",
+      "response_id": "11891",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "14303",
+      "response_id": "11927",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "14312",
+      "response_id": "11978",
+      "split": "train",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "14321",
+      "response_id": "12033",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14335",
+      "response_id": "12112",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "14351",
+      "response_id": "12206",
+      "split": "train",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "14361",
+      "response_id": "12267",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14368",
+      "response_id": "12307",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "14397",
+      "response_id": "12474",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "14400",
+      "response_id": "12495",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14408",
+      "response_id": "12540",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "14428",
+      "response_id": "12664",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "14459",
+      "response_id": "12847",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "14460",
+      "response_id": "12854",
+      "split": "train",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "14462",
+      "response_id": "12866",
+      "split": "train",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "14467",
+      "response_id": "12897",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "14490",
+      "response_id": "13029",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15106",
+      "response_id": "13127",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15125",
+      "response_id": "13240",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15151",
+      "response_id": "13391",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15161",
+      "response_id": "13447",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15178",
+      "response_id": "13549",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15192",
+      "response_id": "13632",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15205",
+      "response_id": "13711",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15208",
+      "response_id": "13731",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15213",
+      "response_id": "13760",
+      "split": "train",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15219",
+      "response_id": "13796",
+      "split": "train",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15221",
+      "response_id": "13809",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15222",
+      "response_id": "13812",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15231",
+      "response_id": "13870",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15265",
+      "response_id": "14073",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15279",
+      "response_id": "14156",
+      "split": "train",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15284",
+      "response_id": "14185",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15289",
+      "response_id": "14219",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15316",
+      "response_id": "14370",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15331",
+      "response_id": "14464",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15344",
+      "response_id": "14539",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15354",
+      "response_id": "14599",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15356",
+      "response_id": "14615",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15399",
+      "response_id": "14870",
+      "split": "train",
+      "y": 0,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15404",
+      "response_id": "14898",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15406",
+      "response_id": "14915",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15415",
+      "response_id": "14965",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15429",
+      "response_id": "15051",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15432",
+      "response_id": "15067",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15439",
+      "response_id": "15108",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15448",
+      "response_id": "15163",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15459",
+      "response_id": "15233",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15462",
+      "response_id": "15249",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15464",
+      "response_id": "15262",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15476",
+      "response_id": "15335",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15490",
+      "response_id": "15415",
+      "split": "train",
+      "y": 0,
+      "gen_model": "gpt-3.5-turbo-0613"
+    },
+    {
+      "source_id": "15502",
+      "response_id": "15488",
+      "split": "train",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    },
+    {
+      "source_id": "15518",
+      "response_id": "15585",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-7b-chat"
+    },
+    {
+      "source_id": "15524",
+      "response_id": "15618",
+      "split": "train",
+      "y": 1,
+      "gen_model": "gpt-4-0613"
+    },
+    {
+      "source_id": "15558",
+      "response_id": "15827",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15569",
+      "response_id": "15887",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-70b-chat"
+    },
+    {
+      "source_id": "15578",
+      "response_id": "15940",
+      "split": "train",
+      "y": 0,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15579",
+      "response_id": "15946",
+      "split": "train",
+      "y": 1,
+      "gen_model": "llama-2-13b-chat"
+    },
+    {
+      "source_id": "15590",
+      "response_id": "16010",
+      "split": "train",
+      "y": 1,
+      "gen_model": "mistral-7B-instruct"
+    }
+  ],
+  "derivation": {
+    "protocol": "support-critical-r12-cache-complete-fixed-test-learning-curve-v1",
+    "parent_manifest_sha256": "208dfc9e96c03039b5f8adeffe3e5174b6d51a835677ddc79ae4d2c40006f39c",
+    "parent_qa_total": 750,
+    "selection": "v1 stable SHA-256 ranking within original split/label buckets after cache-only eligibility filter",
+    "fixed_test": {
+      "sources": 146,
+      "ids_sha256": "9ae5d22a5abb104901d615163dbf4b3818c96f68dc12586d238e717f2a9f2f05",
+      "original_split": "test",
+      "labels": {
+        "0": 73,
+        "1": 73
+      }
+    },
+    "nested_train": {
+      "sources": 80,
+      "ids_sha256": "9547736cd3d1042f1a93b5afa8420ac570659d7a06b35060160179c3f5b9d0d7",
+      "labels": {
+        "0": 40,
+        "1": 40
+      },
+      "all_larger_train_points_include_this_point": true
+    },
+    "cache_eligibility": {
+      "criterion": "no missing support-critical cache-only preflight artifacts",
+      "preflight_report_sha256": "7b8dd96eea74541a11d98d3539ebccac615f65130d9388423e224b17095104ec",
+      "ineligible_source_count": 26,
+      "ineligible_source_ids_sha256": "e9cc51dc84a95e3d4ac25d0e45ae711283ca0ad45956b9ebcf9640316dc22e9c"
+    },
+    "source_12448": "excluded from every curve manifest by the explicit R12 quarantine",
+    "curve_train_sizes": [
+      80,
+      240,
+      400,
+      564
+    ],
+    "total_sources": 226
+  }
+}
