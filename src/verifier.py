@@ -31,6 +31,7 @@ from .dspy_adapter import (
     json_schema_response_format,
     strict_json_loads,
     structured_output_settings,
+    validate_gateway_identity,
     validate_json_document,
 )
 from .matching import normalize
@@ -416,6 +417,7 @@ class RelationVerifier:
             # vLLM 0.6 runtime.  New research Jobs use response_format.
             kwargs["extra_body"] = {"guided_json": VERDICT_SCHEMA}
         response = completion(**kwargs)
+        validate_gateway_identity(response, label="relation verifier completion")
         choices = _response_field(response, "choices")
         if not isinstance(choices, (list, tuple)) or len(choices) != 1:
             raise StructuredOutputParseError(

@@ -25,6 +25,11 @@ from src.config import load_config
 from src.data import Instance, load_instances, unique_sources
 from src.evaluate import run_evaluation
 from src.extract import FakeKGGen, Graph, KGExtractor, UsageLogger
+from src.llama31_eval import (
+    QUARANTINED_SOURCE_ID,
+    load_frozen_reference_graphs,
+    load_llama31_manifest_instances_with_historical_manifest,
+)
 from src.matching import DictEmbedder, Embedder, RefGraph, SBERTEmbedder
 from src.metrics import ScoreResult, score_response
 from src.sampling import (
@@ -162,6 +167,7 @@ def extract_all(
     out_dir: Path,
     *,
     excluded_source_ids: set[str] | None = None,
+    frozen_reference_graphs: dict[str, tuple[Graph, Graph]] | None = None,
 ) -> tuple[dict[str, tuple[Graph, Graph]], dict[str, Graph], list[dict[str, Any]]]:
     """Return reference and answer graphs; references are built once per source.
 
@@ -210,15 +216,28 @@ def extract_all(
             print(f"[extract] reference:error source_id={source_id} error={exc!r}", flush=True)
             return source_id, None, {"stage": "reference", "source_id": source_id, "error": repr(exc)}
 
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        for completed, (source_id, graphs, error) in enumerate(tqdm(
-            pool.map(do_ref, active_sources.items()), total=len(active_sources), desc="extract G_c/G_q"
-        ), start=1):
-            if error:
-                failures.append(error)
-            else:
-                ref_graphs[source_id] = graphs
-            _emit_progress("kg_reference", completed, len(active_sources), progress_usage)
+    if frozen_reference_graphs is not None:
+        frozen_sources = set(frozen_reference_graphs)
+        expected_sources = set(active_sources)
+        if frozen_sources != expected_sources:
+            missing = sorted(expected_sources - frozen_sources)
+            extra = sorted(frozen_sources - expected_sources)
+            raise ValueError(
+                "frozen reference artifact does not cover the active manifest sources; "
+                f"missing={missing[:5]} extra={extra[:5]}"
+            )
+        ref_graphs = dict(frozen_reference_graphs)
+        _emit_progress("kg_reference_frozen", len(active_sources), len(active_sources), progress_usage, force=True)
+    else:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            for completed, (source_id, graphs, error) in enumerate(tqdm(
+                pool.map(do_ref, active_sources.items()), total=len(active_sources), desc="extract G_c/G_q"
+            ), start=1):
+                if error:
+                    failures.append(error)
+                else:
+                    ref_graphs[source_id] = graphs
+                _emit_progress("kg_reference", completed, len(active_sources), progress_usage)
 
     def do_response(inst: Instance):
         if inst.source_id not in ref_graphs:
@@ -302,6 +321,7 @@ def write_extraction_summary(
     out_dir: Path,
     *,
     excluded_source_ids: set[str] | None = None,
+    frozen_reference_provenance: dict[str, Any] | None = None,
 ) -> Path:
     """Write a machine-checkable proof of every selected reference/answer pair."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -376,8 +396,14 @@ def write_extraction_summary(
             "query": _graph_summary(query_graph),
             "answer": _graph_summary(answer),
             "cache": {
-                "context": cache_record(inst.context, "context"),
-                "query": cache_record(inst.query, "query"),
+                "context": (
+                    None if frozen_reference_provenance is not None
+                    else cache_record(inst.context, "context")
+                ),
+                "query": (
+                    None if frozen_reference_provenance is not None
+                    else cache_record(inst.query, "query")
+                ),
                 "answer": cache_record(inst.response, "response"),
             },
         })
@@ -411,6 +437,8 @@ def write_extraction_summary(
         "expected_cache_keys": sorted(cache_records),
         "cache_records": [cache_records[key] for key in sorted(cache_records)],
     }
+    if frozen_reference_provenance is not None:
+        summary["reference_graph_provenance"] = frozen_reference_provenance
     path = out_dir / "extraction_summary.json"
     path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -805,6 +833,22 @@ def _apply_cli_overrides(cfg, args) -> None:
 
 
 def _select_instances(args, cfg, out_dir: Path) -> list[Instance]:
+    if args.llama31_csv:
+        if args.qa_sample or args.qa_sample_limit is not None or args.limit is not None:
+            raise SystemExit("controlled Llama-3.1 evaluation cannot use sample or limit options")
+        if not args.qa_manifest or not args.llama31_historical_manifest:
+            raise SystemExit(
+                "controlled Llama-3.1 evaluation requires --qa-manifest and "
+                "--llama31-historical-manifest"
+            )
+        selected = load_llama31_manifest_instances_with_historical_manifest(
+            args.qa_manifest,
+            args.llama31_csv,
+            cfg.data.dir,
+            args.llama31_historical_manifest,
+        )
+        print(f"[llama31] loaded {len(selected)} frozen CSV rows from {args.qa_manifest}")
+        return selected
     all_instances = load_instances(
         cfg.data.dir, exclude_implicit_true=bool(cfg.data.exclude_implicit_true)
     )
@@ -891,6 +935,24 @@ def main() -> None:
         help="reuse an existing deterministic QA manifest",
     )
     parser.add_argument(
+        "--llama31-csv",
+        default=None,
+        help=(
+            "annotated controlled Llama-3.1-8B CSV; requires the immutable "
+            "controlled --qa-manifest and --llama31-historical-manifest"
+        ),
+    )
+    parser.add_argument(
+        "--llama31-historical-manifest",
+        default=None,
+        help="verified historical 750-QA manifest supplying frozen source split membership",
+    )
+    parser.add_argument(
+        "--frozen-reference-artifact",
+        default=None,
+        help="private versioned historical C/Q graph artifact; never a cache read-through root",
+    )
+    parser.add_argument(
         "--qa-manifest-out", "--qa-pilot-manifest-out", dest="qa_manifest_out", default=None,
         help="where a newly selected QA manifest is written",
     )
@@ -934,6 +996,10 @@ def main() -> None:
     if not args.fake_extractor and "PLACEHOLDER" in str(cfg.llm.model):
         print("[!] llm.model is PLACEHOLDER; configure it before a live run.")
 
+    if args.llama31_csv and not args.frozen_reference_artifact:
+        raise SystemExit("controlled Llama-3.1 evaluation requires --frozen-reference-artifact")
+    if args.frozen_reference_artifact and not args.llama31_csv:
+        raise SystemExit("--frozen-reference-artifact is reserved for controlled Llama-3.1 evaluation")
     instances = _select_instances(args, cfg, out_dir)
     excluded_source_ids = {str(source_id) for source_id in args.exclude_source_id}
     known_source_ids = {inst.source_id for inst in instances}
@@ -948,6 +1014,10 @@ def main() -> None:
             "[quarantine] source-level analysis exclusions="
             + ",".join(sorted(excluded_source_ids)),
             flush=True,
+        )
+    if args.llama31_csv and excluded_source_ids != {QUARANTINED_SOURCE_ID}:
+        raise SystemExit(
+            "controlled Llama-3.1 evaluation requires exactly --exclude-source-id 12448"
         )
     n_train = sum(inst.split == "train" for inst in instances)
     n_test = sum(inst.split == "test" for inst in instances)
@@ -974,6 +1044,18 @@ def main() -> None:
     resp_graphs: dict[str, Graph] = {}
     failures: list[dict[str, Any]] = []
     results: dict[str, ScoreResult] = {}
+    frozen_reference_provenance: dict[str, Any] | None = None
+    frozen_reference_graphs: dict[str, tuple[Graph, Graph]] | None = None
+    if args.frozen_reference_artifact:
+        frozen_reference_graphs, frozen_reference_provenance = load_frozen_reference_graphs(
+            args.frozen_reference_artifact,
+            instances,
+            excluded_source_ids=excluded_source_ids,
+        )
+        print(
+            "[frozen-reference] loaded "
+            f"{len(frozen_reference_graphs)} historical C/Q graph pairs; current cache read-through is disabled"
+        )
 
     if args.stage in {"extract", "score", "tune", "all"}:
         ref_graphs, resp_graphs, failures = extract_all(
@@ -982,6 +1064,7 @@ def main() -> None:
             extractor,
             out_dir,
             excluded_source_ids=excluded_source_ids,
+            frozen_reference_graphs=frozen_reference_graphs,
         )
         extraction_summary = write_extraction_summary(
             instances,
@@ -991,6 +1074,7 @@ def main() -> None:
             extractor,
             out_dir,
             excluded_source_ids=excluded_source_ids,
+            frozen_reference_provenance=frozen_reference_provenance,
         )
         print(f"[extract] refs={len(ref_graphs)} responses={len(resp_graphs)} failures={len(failures)}")
         print(f"[extract] summary={extraction_summary}")

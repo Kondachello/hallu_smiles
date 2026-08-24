@@ -13,6 +13,7 @@ remote-provider users do not acquire a DSPy/vLLM dependency.
 from __future__ import annotations
 
 import json
+import os
 import re
 import warnings
 from functools import wraps
@@ -46,14 +47,39 @@ class StructuredOutputTruncatedError(StructuredOutputParseError):
     """The provider stopped a strict response at its output-token limit."""
 
 
+class GatewayIdentityDriftError(RuntimeError):
+    """A completion was served by a gateway other than the pinned manifest."""
+
+
 def _response_field(value: Any, name: str) -> Any:
     if isinstance(value, Mapping):
         return value.get(name)
     return getattr(value, name, None)
 
 
+def validate_gateway_identity(response: Any, *, label: str = "completion") -> None:
+    """Check the gateway fingerprint when a runner pins a manifest hash.
+
+    ``EXPECTED_GATEWAY_MANIFEST_SHA256`` is deliberately optional for local
+    offline tests and legacy artifacts.  Live controlled runs set it before
+    the first request.  The gateway returns ``<manifest-hash-prefix>:<model
+    revision>`` as the OpenAI-compatible ``system_fingerprint`` field.
+    """
+    expected = os.environ.get("EXPECTED_GATEWAY_MANIFEST_SHA256", "").strip().lower()
+    if not expected:
+        return
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise GatewayIdentityDriftError("EXPECTED_GATEWAY_MANIFEST_SHA256 is malformed")
+    actual = _response_field(response, "system_fingerprint")
+    if not isinstance(actual, str) or actual.split(":", 1)[0].lower() != expected[:16]:
+        raise GatewayIdentityDriftError(
+            f"{label} gateway fingerprint differs from the manifest pinned before the run"
+        )
+
+
 def validate_completion_envelope(response: Any, *, label: str = "DSPy completion") -> None:
     """Require one complete choice before DSPy discards transport metadata."""
+    validate_gateway_identity(response, label=label)
     choices = _response_field(response, "choices")
     if not isinstance(choices, (list, tuple)) or len(choices) != 1:
         raise StructuredOutputParseError(f"{label} must contain exactly one choice")

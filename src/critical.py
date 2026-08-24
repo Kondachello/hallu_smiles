@@ -30,6 +30,7 @@ from .dspy_adapter import (
     json_schema_response_format,
     strict_json_loads,
     structured_output_settings,
+    validate_gateway_identity,
     validate_json_document,
 )
 from .matching import Embedder, normalize
@@ -525,6 +526,7 @@ class _CachedComponent:
             kwargs["extra_body"] = {"guided_json": schema}
         self.request_pacer.wait_for_turn()
         response = completion(**kwargs)
+        validate_gateway_identity(response, label=f"{self.component} completion")
         choices = _response_field(response, "choices")
         if not isinstance(choices, (list, tuple)) or len(choices) != 1:
             raise StructuredOutputParseError(f"{self.component} completion must contain one choice")

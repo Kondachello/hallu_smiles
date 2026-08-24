@@ -1,0 +1,15 @@
+# Cloud Build context for the runner image. Historical outputs and user data
+# must never be uploaded as part of the container source context.
+.git
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+data/
+outputs/
+output/
+tmp/
+results/
+*.tar.gz
+*.pdf
+docs/
