@@ -617,7 +617,41 @@ class KGExtractor:
         """Persist and emit a complete, source-text-free clustering trail."""
         self.last_cluster_audit = record
         line = json.dumps(record, ensure_ascii=False, sort_keys=True)
-        print(f"[kg] cluster:audit {line}", flush=True)
+        # ``record`` is deliberately detailed enough to diagnose a bad native
+        # KGGen remap, so it contains graph members and the content-addressed
+        # cache key.  Keep that local persistent-cache audit off stdout: the
+        # controlled GCP runner retains stdout as its redacted terminal log.
+        # Counts and structural status are sufficient progress diagnostics.
+        raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+        clustered = (
+            record.get("clustered")
+            if isinstance(record.get("clustered"), dict)
+            else {}
+        )
+        failures = record.get("failures")
+        progress = {
+            "protocol": "hallu-kg-cluster-progress-v1",
+            "kind": record.get("kind"),
+            "context_mode": record.get("context_mode"),
+            "status": record.get("status"),
+            "source_text_chars": record.get("source_text_chars"),
+            "failure_count": len(failures) if isinstance(failures, list) else 0,
+            "raw_counts": {
+                "entities": len(raw.get("entities", [])),
+                "predicates": len(raw.get("predicates", [])),
+                "relations": len(raw.get("relations", [])),
+            },
+            "clustered_counts": {
+                "entities": len(clustered.get("entities", [])),
+                "predicates": len(clustered.get("predicates", [])),
+                "relations": len(clustered.get("relations", [])),
+            },
+        }
+        print(
+            "[kg] cluster:audit "
+            + json.dumps(progress, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
         path = self.cache_dir.parent / "cluster-audit.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._cluster_audit_lock:

@@ -553,6 +553,11 @@ def test_clustering_retention_gate_reports_and_rejects_collapse(tmp_path, capsys
     output = capsys.readouterr().out
     assert "cluster:start entities=6 predicates=6 relations=6" in output
     assert "cluster:retention entities=1/6 (0.166667)" in output
+    assert '"raw_counts"' in output
+    # The detailed audit is persisted with the cache for local diagnosis, but
+    # stdout becomes the controlled-run redacted terminal log.
+    assert "entity-0" not in output
+    assert "cache_key" not in output
 
 
 def test_extractor_fails_fast_on_schema_error_but_retries_timeout(tmp_path):
