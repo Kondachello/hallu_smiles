@@ -13,6 +13,10 @@ metadata() {
 image="$(metadata runner-image)"
 work_root="$(metadata work-root)"
 mkdir -p "$work_root"
+# The runner image intentionally drops to UID 1000. COS executes startup
+# scripts as root, so make only this dedicated persistent work root writable
+# before bind-mounting it into the unprivileged container.
+chmod 0777 "$work_root"
 export DOCKER_CONFIG="$work_root/docker-config"
 mkdir -p "$DOCKER_CONFIG"
 docker-credential-gcr configure-docker --registries=europe-west4-docker.pkg.dev
