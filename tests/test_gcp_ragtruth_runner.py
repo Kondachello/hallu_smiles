@@ -85,11 +85,14 @@ def test_gcp_archive_excludes_raw_graphs_cache_keys_and_scored_rows(tmp_path):
 def test_gcp_scripts_are_cpu_serial_and_do_not_grant_vertex_access():
     provision = (ROOT / "scripts/provision_gcp_ragtruth_llama31_eval.sh").read_text()
     launch = (ROOT / "scripts/launch_gcp_ragtruth_llama31_eval.sh").read_text()
+    startup = (ROOT / "gcp/start_ragtruth_llama31_vm.sh").read_text()
     runner = (ROOT / "scripts/run_gcp_ragtruth_llama31_eval.sh").read_text()
     assert "--machine-type=e2-medium" in launch
     assert "--boot-disk-size=30GB" in launch and "--boot-disk-type=pd-ssd" in launch
     assert "--no-boot-disk-auto-delete" in launch
-    assert "--container-restart-policy=never" in launch
+    assert "--image-family=cos-stable" in launch
+    assert "gcloud compute instances create-with-container" not in launch
+    assert "docker-credential-gcr configure-docker" in startup
     assert "aiplatform" not in provision.lower()
     assert "--relation-mode support --" not in runner
     assert "--relation-mode strict" in runner and "--relation-mode support-critical" in runner

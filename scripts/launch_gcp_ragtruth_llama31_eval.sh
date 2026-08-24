@@ -8,6 +8,7 @@ ZONE="${GCP_ZONE:-europe-west4-a}"
 VM_NAME="${GCP_RAGTRUTH_VM_NAME:-hallu-ragtruth-llama31-eval}"
 SERVICE_ACCOUNT_NAME="${GCP_RAGTRUTH_SERVICE_ACCOUNT:-hallu-ragtruth-runner}"
 REPOSITORY="${GCP_RAGTRUTH_ARTIFACT_REPOSITORY:-hallu-ragtruth-runner}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   echo "Usage: bash scripts/launch_gcp_ragtruth_llama31_eval.sh --staging-manifest PATH --image IMAGE@sha256:... [--run-id ID]" >&2
@@ -49,11 +50,15 @@ if [[ "$state" == "RUNNING" ]]; then
   exit 2
 fi
 if [[ -z "$state" ]]; then
-  gcloud compute instances create-with-container "$VM_NAME" --project "$PROJECT_ID" --zone "$ZONE" \
-    --machine-type=e2-medium --boot-disk-size=30GB --boot-disk-type=pd-ssd --no-boot-disk-auto-delete \
-    --service-account="$SERVICE_ACCOUNT" --scopes=cloud-platform --container-image="$IMAGE" --container-restart-policy=never \
-    --container-mount-host-path=mount-path=/work,host-path=/var/lib/hallu-ragtruth-llama31,mode=rw \
-    --container-env="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,GCP_RAGTRUTH_BUCKET=$BUCKET,GCP_RAGTRUTH_INPUT_PREFIX=$INPUT_PREFIX,GCP_RAGTRUTH_INPUT_PROVENANCE_SHA256=$INPUT_SHA,GCP_RAGTRUTH_DATA_PROVENANCE_SHA256=$DATA_SHA,GCP_RAGTRUTH_FROZEN_REFERENCE_OBJECT=$FROZEN_OBJECT,GCP_RAGTRUTH_FROZEN_REFERENCE_SHA256=$FROZEN_SHA,GCP_RAGTRUTH_RUN_ID=$RUN_ID"
+  # ``create-with-container`` used a discontinued startup agent. COS retains
+  # the same direct Compute Engine / persistent-disk design while this startup
+  # script runs the immutable Docker digest through the VM service account.
+  gcloud compute instances create "$VM_NAME" --project "$PROJECT_ID" --zone "$ZONE" \
+    --machine-type=e2-medium --image-family=cos-stable --image-project=cos-cloud \
+    --boot-disk-size=30GB --boot-disk-type=pd-ssd --no-boot-disk-auto-delete \
+    --service-account="$SERVICE_ACCOUNT" --scopes=cloud-platform \
+    --metadata="runner-image=$IMAGE,work-root=/var/lib/hallu-ragtruth-llama31,project-id=$PROJECT_ID,region=$REGION,bucket=$BUCKET,input-prefix=$INPUT_PREFIX,input-provenance-sha256=$INPUT_SHA,data-provenance-sha256=$DATA_SHA,frozen-reference-object=$FROZEN_OBJECT,frozen-reference-sha256=$FROZEN_SHA,run-id=$RUN_ID" \
+    --metadata-from-file="startup-script=$ROOT/gcp/start_ragtruth_llama31_vm.sh"
 else
   [[ "$RUN_ID_WAS_EXPLICIT" -eq 1 ]] || {
     echo "a stopped VM may be resumed only with its original explicit --run-id" >&2
