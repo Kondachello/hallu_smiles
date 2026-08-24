@@ -2,6 +2,8 @@
 # COS startup script: run the pinned research container from VM metadata.
 set -Eeuo pipefail
 
+trap 'status=$?; echo "RUN_FAILED startup bootstrap failed before inference" >&2; exit "$status"' ERR
+
 metadata() {
   curl --fail --silent --show-error \
     -H 'Metadata-Flavor: Google' \
@@ -11,6 +13,8 @@ metadata() {
 image="$(metadata runner-image)"
 work_root="$(metadata work-root)"
 mkdir -p "$work_root"
+export DOCKER_CONFIG="$work_root/docker-config"
+mkdir -p "$DOCKER_CONFIG"
 docker-credential-gcr configure-docker --registries=europe-west4-docker.pkg.dev
 docker pull "$image"
 docker run --rm --name hallu-ragtruth-llama31 \
