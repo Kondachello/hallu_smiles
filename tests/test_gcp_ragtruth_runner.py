@@ -95,6 +95,8 @@ def test_gcp_scripts_are_cpu_serial_and_do_not_grant_vertex_access():
     assert "docker-credential-gcr configure-docker" in startup
     assert "DOCKER_CONFIG" in startup and "RUN_FAILED startup bootstrap" in startup
     assert "chmod 0777" in startup
+    assert "refusing incompatible resume: stored runner image differs" in launch
+    assert "refusing incompatible resume: stored run ID differs" in launch
     assert "aiplatform" not in provision.lower()
     assert "--relation-mode support --" not in runner
     assert "--relation-mode strict" in runner and "--relation-mode support-critical" in runner

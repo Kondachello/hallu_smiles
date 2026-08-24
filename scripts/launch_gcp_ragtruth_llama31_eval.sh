@@ -36,6 +36,18 @@ import json, sys
 print(json.load(open(sys.argv[1], encoding='utf-8'))[sys.argv[2]])
 PY
 }
+
+instance_metadata_value() {
+  gcloud compute instances describe "$VM_NAME" --project "$PROJECT_ID" --zone "$ZONE" --format=json \
+    | python3 -c '
+import json
+import sys
+key = sys.argv[1]
+items = json.load(sys.stdin).get("metadata", {}).get("items", [])
+values = {str(item.get("key")): str(item.get("value", "")) for item in items}
+print(values.get(key, ""))
+' "$1"
+}
 BUCKET="$(manifest_value bucket)"
 INPUT_PREFIX="$(manifest_value input_prefix)"
 INPUT_SHA="$(manifest_value input_provenance_sha256)"
@@ -65,7 +77,18 @@ else
     exit 2
   }
   # A stopped VM can resume only with its original immutable container/input
-  # configuration. Use the same run ID; a different one requires a new VM name.
+  # configuration. Validate that condition before starting it: ``gcloud
+  # compute instances start`` ignores the image supplied to this launcher.
+  existing_image="$(instance_metadata_value runner-image)"
+  existing_run_id="$(instance_metadata_value run-id)"
+  [[ "$existing_image" == "$IMAGE" ]] || {
+    echo "refusing incompatible resume: stored runner image differs; use a new GCP_RAGTRUTH_VM_NAME" >&2
+    exit 2
+  }
+  [[ "$existing_run_id" == "$RUN_ID" ]] || {
+    echo "refusing incompatible resume: stored run ID differs; use a new GCP_RAGTRUTH_VM_NAME" >&2
+    exit 2
+  }
   gcloud compute instances start "$VM_NAME" --project "$PROJECT_ID" --zone "$ZONE"
 fi
 
