@@ -95,6 +95,13 @@ def test_graph_cache_key_fingerprints_runtime_revision_and_clustering(tmp_path):
     changed_retry_budget.extraction.max_protocol_retries = 3
     assert KGExtractor(changed_retry_budget, backend=FakeKGGen())._cache_key("same text") == original
 
+    # A larger ceiling is invoked only after a provider-confirmed truncation;
+    # it must not invalidate graph entries that already completed at the
+    # original normal request budget during a compatible resume.
+    changed_ceiling = copy.deepcopy(cfg)
+    changed_ceiling.extraction.max_tokens_ceiling = 32768
+    assert KGExtractor(changed_ceiling, backend=FakeKGGen())._cache_key("same text") == original
+
 
 def test_cache_only_extractor_reads_warm_cache_and_fails_before_backend(tmp_path):
     cfg = _cfg(tmp_path)

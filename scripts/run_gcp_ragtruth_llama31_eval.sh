@@ -21,7 +21,18 @@ INPUT_ROOT="$WORK_ROOT/inputs/$INPUT_PREFIX"
 ARCHIVE_OBJECT="terminal-archives/gcp-ragtruth-llama31-$RUN_ID.tar.gz"
 ARCHIVE_LOCAL="$WORK_ROOT/archives/gcp-ragtruth-llama31-$RUN_ID.tar.gz"
 STATUS="started"
+EXTRACTION_MAX_TOKENS_CEILING="${HALLU_GCP_EXTRACTION_MAX_TOKENS_CEILING:-32768}"
+RUNNER_SOURCE_COMMIT="${HALLU_RUNNER_SOURCE_COMMIT:-}"
 export HALLU_GATEWAY_URL="$GATEWAY_URL"
+
+[[ "$EXTRACTION_MAX_TOKENS_CEILING" =~ ^[0-9]+$ ]] || {
+  echo "[gcp-runner] extraction token ceiling must be an integer" >&2
+  exit 2
+}
+(( EXTRACTION_MAX_TOKENS_CEILING >= 4096 && EXTRACTION_MAX_TOKENS_CEILING <= 32768 )) || {
+  echo "[gcp-runner] extraction token ceiling must be within 4096..32768" >&2
+  exit 2
+}
 
 require_file() {
   [[ -f "$1" ]] || { echo "[gcp-runner] required file is missing" >&2; exit 2; }
@@ -45,13 +56,13 @@ archive_and_upload() {
 }
 
 write_terminal_metadata() {
-  "$PYTHON" - "$RUN_ROOT/run_metadata.json" "$STATUS" "$PROJECT_ID" "$REGION" "$RUN_ID" <<'PY'
+  "$PYTHON" - "$RUN_ROOT/run_metadata.json" "$STATUS" "$PROJECT_ID" "$REGION" "$RUN_ID" "$EXTRACTION_MAX_TOKENS_CEILING" "$RUNNER_SOURCE_COMMIT" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
-path, status, project, region, run_id = map(str, sys.argv[1:])
+path, status, project, region, run_id, extraction_ceiling, runner_source_commit = map(str, sys.argv[1:])
 payload = {
     "protocol": "hallu-gcp-ragtruth-llama31-run-v1",
     "status": status,
@@ -66,6 +77,12 @@ payload = {
     "reference_graph_mode": "frozen_historical_artifact",
     "relation_modes": ["strict", "support-critical"],
     "concurrency": 1,
+    "extraction_recovery": {
+        "normal_max_tokens": 4096,
+        "max_tokens_ceiling": int(extraction_ceiling),
+        "protocol": "provider-length-only-adaptive-retry-v1",
+    },
+    "runner_source_commit": runner_source_commit or None,
 }
 Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -149,13 +166,15 @@ PY
 )"
 export EXPECTED_GATEWAY_MANIFEST_SHA256
 
+# Preserve the 4096-token normal request and cache namespace. Only a
+# provider-confirmed finish_reason=length may use this bounded recovery headroom.
 "$PYTHON" "$ROOT/scripts/make_gcp_vertex_config.py" \
   --base-config "$ROOT/config.yaml" --gateway-manifest "$RUN_ROOT/gateway_manifest.json" \
   --gateway-url "$GATEWAY_URL" --gcp-runtime-manifest /opt/hallu/runtime-manifest.json \
   --embedding-model-path /opt/hallu/models/all-MiniLM-L6-v2 \
   --output "$RUN_ROOT/runtime-config.yaml" --identity-output "$RUN_ROOT/config_identity.json" \
   --data-dir "$INPUT_ROOT" --work-dir "$RUN_ROOT" --cache-root "$WORK_ROOT/cache" \
-  --max-tokens 4096 --extraction-max-tokens-ceiling 8192 --concurrency 1 > "$RUN_ROOT/runtime_identity.json"
+  --max-tokens 4096 --extraction-max-tokens-ceiling "$EXTRACTION_MAX_TOKENS_CEILING" --concurrency 1 > "$RUN_ROOT/runtime_identity.json"
 
 "$PYTHON" - "$WORK_ROOT/cache/checkpoint_identity.json" "$RUN_ROOT/config_identity.json" "$INPUT_ROOT/input_provenance.json" "$INPUT_ROOT/frozen_reference_graphs.json" <<'PY'
 import hashlib

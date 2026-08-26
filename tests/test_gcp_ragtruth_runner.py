@@ -101,3 +101,23 @@ def test_gcp_scripts_are_cpu_serial_and_do_not_grant_vertex_access():
     assert "--relation-mode support --" not in runner
     assert "--relation-mode strict" in runner and "--relation-mode support-critical" in runner
     assert "--kg-cache-only" in runner and "--cache-only" in runner
+    # A real controlled answer graph reached the 8192-token adaptive ceiling.
+    # The runner must retain the protocol's bounded 32768-token recovery headroom
+    # so a single outlier does not invalidate an otherwise cached 749-source run.
+    assert "HALLU_GCP_EXTRACTION_MAX_TOKENS_CEILING:-32768" in runner
+    assert "--extraction-max-tokens-ceiling \"$EXTRACTION_MAX_TOKENS_CEILING\"" in runner
+    assert "provider-length-only-adaptive-retry-v1" in runner
+
+
+def test_gcp_runner_build_can_only_reuse_a_client_runtime_for_outer_runner_changes():
+    build = (ROOT / "scripts/build_gcp_ragtruth_llama31_runner.sh").read_text()
+    dockerfile = (ROOT / "gcp/Dockerfile.ragtruth-cpu").read_text()
+    cloudbuild = (ROOT / "gcp/cloudbuild.ragtruth-runner.yaml").read_text()
+
+    assert "--cache-compatible-runtime-source-commit" in build
+    assert "git -C \"$ROOT\" diff --name-only \"$RUNTIME_SOURCE_COMMIT\" \"$SOURCE_COMMIT\"" in build
+    assert "merge-base --is-ancestor \"$RUNTIME_SOURCE_COMMIT\" \"$SOURCE_COMMIT\"" in build
+    assert "refusing cache-compatible image: changed runtime-relevant path" in build
+    assert "ARG RUNNER_SOURCE_COMMIT" in dockerfile
+    assert "HALLU_RUNNER_SOURCE_COMMIT=$RUNNER_SOURCE_COMMIT" in dockerfile
+    assert "--build-arg=RUNNER_SOURCE_COMMIT=${_RUNNER_SOURCE_COMMIT}" in cloudbuild
